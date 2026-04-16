@@ -1,0 +1,371 @@
+/* Tailwind v4: keep import stable across dev/build. */
+@import "tailwindcss";
+@source "../app/**/*.{js,ts,jsx,tsx,mdx}";
+@source "../components/**/*.{js,ts,jsx,tsx,mdx}";
+
+/* 2. 主站的 CSS 变量 */
+:root {
+  --neon-blue: #2de2e6;
+  --deep-blue: #035aa6;
+  --dark-bg: #050508;
+  --scroll-track: #050508;
+  --scroll-thumb: #2de2e6;
+  --scroll-thumb-hover: #ffffff;
+}
+
+/* 3. 全局 Body 样式 */
+body {
+  background-color: var(--dark-bg);
+  color: #fff;
+  font-family: "Noto Sans SC", sans-serif;
+  overflow-x: hidden;
+  margin: 0;
+}
+
+/* 4. 赛博朋克自定义滚动条 (霓虹呼吸版) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 4px;
+  background-color: rgba(45, 226, 230, 0.6);
+  box-shadow:
+    0 0 5px rgba(45, 226, 230, 0.5),
+    0 0 10px rgba(45, 226, 230, 0.3),
+    inset 0 0 5px rgba(255, 255, 255, 0.2);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: all 0.4s ease-in-out;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scroll-thumb);
+  box-shadow:
+    0 0 10px var(--neon-blue),
+    0 0 20px var(--neon-blue),
+    inset 0 0 2px rgba(255, 255, 255, 0.5);
+  border: 0;
+}
+::-webkit-scrollbar-corner {
+  background: var(--dark-bg);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--neon-blue) var(--dark-bg);
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+/* 5. 字体与特效 */
+.font-cyber {
+  font-family: "Syncopate", sans-serif;
+}
+.font-tech {
+  font-family: "Orbitron", sans-serif;
+}
+
+/* Glitch 故障文字效果 */
+.glitch-wrapper {
+  position: relative;
+  display: inline-block;
+  overflow: visible;
+}
+.glitch {
+  position: relative;
+  color: #fff;
+  z-index: 1;
+  letter-spacing: 0.1em;
+  text-shadow: 0 0 10px rgba(45, 226, 230, 0.5);
+}
+.glitch::before,
+.glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--dark-bg);
+}
+.glitch::before {
+  left: 2px;
+  text-shadow: -2px 0 #00fff9;
+  clip: rect(44px, 9999px, 56px, 0);
+  animation: glitch-anim-1 5s infinite linear alternate-reverse;
+}
+.glitch::after {
+  left: -2px;
+  text-shadow: -2px 0 #ff00c1;
+  clip: rect(44px, 9999px, 56px, 0);
+  animation: glitch-anim-2 4s infinite linear alternate-reverse;
+}
+
+@keyframes glitch-anim-1 {
+  0%,
+  100% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  5% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  6% {
+    clip: rect(20px, 9999px, 30px, 0);
+    transform: skew(0.5deg);
+  }
+  7% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  40% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  41% {
+    clip: rect(10px, 9999px, 50px, 0);
+    transform: skew(-0.5deg);
+  }
+  42% {
+    clip: rect(80px, 9999px, 90px, 0);
+    transform: skew(0.2deg);
+  }
+  43% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  60% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  61% {
+    clip: rect(40px, 9999px, 60px, 0);
+    transform: skew(0.8deg);
+  }
+  62% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+}
+@keyframes glitch-anim-2 {
+  0%,
+  100% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  20% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  21% {
+    clip: rect(60px, 9999px, 70px, 0);
+    transform: skew(-0.5deg);
+  }
+  22% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  50% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  51% {
+    clip: rect(20px, 9999px, 40px, 0);
+    transform: skew(0.3deg);
+  }
+  52% {
+    clip: rect(90px, 9999px, 100px, 0);
+    transform: skew(-0.2deg);
+  }
+  53% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  80% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+  81% {
+    clip: rect(30px, 9999px, 35px, 0);
+    transform: skew(0.6deg);
+  }
+  82% {
+    clip: rect(0, 0, 0, 0);
+    transform: skew(0deg);
+  }
+}
+
+/* ========== ADMIN DASHBOARD STYLES ========== */
+
+/* 标签页样式 */
+.tab-active {
+  background-color: #2de2e6;
+  color: black;
+  box-shadow: 0 0 15px rgba(45, 226, 230, 0.4);
+}
+
+.tab-inactive {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #94a3b8;
+}
+
+.tab-inactive:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* 输入框样式 */
+.input-dark {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: white;
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  width: 100%;
+  min-width: 6rem;
+  min-height: 2.25rem;
+  line-height: 1.25rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.input-dark:focus {
+  border-color: #2de2e6;
+  box-shadow: 0 0 0 2px rgba(45, 226, 230, 0.2);
+}
+
+/* 卡片样式 */
+.card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+/* 分段标题 */
+.section-title {
+  color: #2de2e6;
+  font-weight: bold;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* 删除按钮 */
+.delete-btn {
+  color: #ef4444;
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.delete-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* 动作按钮 */
+.action-btn {
+  color: #94a3b8;
+  padding: 0.25rem;
+  transition: color 0.2s;
+  cursor: pointer;
+  background: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-btn:hover {
+  color: white;
+}
+
+/* 资源管理器网格 */
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 1rem;
+}
+
+/* 资源项目 */
+.asset-item {
+  background: #000;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.asset-item:hover {
+  border-color: #2de2e6;
+  transform: translateY(-2px);
+}
+
+/* 资源图片框 */
+.asset-img-box {
+  height: 100px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111;
+  overflow: hidden;
+}
+
+.asset-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 资源信息 */
+.asset-info {
+  padding: 0.5rem;
+  font-size: 0.7rem;
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+/* 资源动作按钮组 */
+.asset-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0.25rem;
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.2s;
+  background: rgba(0, 0, 0, 0.8);
+  border-bottom-left-radius: 0.5rem;
+}
+
+.asset-item:hover .asset-actions {
+  opacity: 1;
+}
+
+/* 加载遮罩 */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: #0f172a;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.5s;
+}
+
+.loading-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}

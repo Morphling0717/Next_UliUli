@@ -1,0 +1,17 @@
+services:
+  website:
+    build: .
+    container_name: uliuli-website
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - ADMIN_PASSWORD=uliuli2025
+      - DEV_UNLOCK_PASSWORD=Morphling0717
+      - DATABASE_PATH=/app/data/codes.db
+      - NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
+    volumes:
+      - ./data:/app/data
+      - ./public/memes:/app/public/memes
+      - ./public/pic:/app/public/pic
