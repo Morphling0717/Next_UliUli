@@ -16,6 +16,7 @@ import { SongSystem } from '../components/SongSystem';
 import { GameModal } from '../components/GameModal';
 import { ToastContainer, GoldenLuckModal } from '../components/UI';
 import { MailSpeedDial } from '../components/mail/MailSpeedDial';
+import { GlobalMailBanner } from '../components/mail/GlobalMailBanner';
 
 // --- Types ---
 interface NotificationItem {
@@ -293,6 +294,7 @@ export default function HomePage() {
         <ToastContainer notifications={notifications} />
 
         <main className="relative z-10 w-full block">
+          <GlobalMailBanner />
           <Dashboard
             stats={stats}
             liveStatus={liveStatus}
