@@ -90,23 +90,27 @@ export function GlobalMailBanner() {
     <div
       role="region"
       aria-label="活动公告"
-      className="relative z-30 border-b border-cyan-400/30 bg-linear-to-r from-cyan-500/15 via-fuchsia-500/10 to-cyan-500/15 backdrop-blur-md"
+      className="fixed top-0 right-0 left-0 z-40 border-b border-cyan-400/30 bg-linear-to-r from-cyan-500/15 via-fuchsia-500/10 to-cyan-500/15 backdrop-blur-md"
     >
       <div className="mx-auto flex w-full max-w-6xl items-center gap-2 px-4 py-2 sm:gap-3 sm:py-2.5">
-        <Sparkles
-          className="h-4 w-4 shrink-0 text-cyan-300 drop-shadow-[0_0_6px_rgba(45,226,230,0.6)]"
-          strokeWidth={2}
-          aria-hidden
-        />
+        {/* 左侧占位：和右侧 × 按钮同宽，保证中间 Link 内容真正居中 */}
+        <div className="h-7 w-7 shrink-0" aria-hidden />
+
         <Link
           href={href}
-          className="flex-1 truncate font-mono text-[12px] text-cyan-100 transition hover:text-white sm:text-sm"
+          className="flex min-w-0 flex-1 items-center justify-center gap-2 font-mono text-[12px] text-cyan-100 transition hover:text-white sm:text-sm"
         >
-          <span className="tracking-wide">{label}</span>
-          <span className="ml-2 text-cyan-300" aria-hidden>
+          <Sparkles
+            className="h-4 w-4 shrink-0 text-cyan-300 drop-shadow-[0_0_6px_rgba(45,226,230,0.6)]"
+            strokeWidth={2}
+            aria-hidden
+          />
+          <span className="truncate tracking-wide">{label}</span>
+          <span className="shrink-0 text-cyan-300" aria-hidden>
             →
           </span>
         </Link>
+
         <button
           type="button"
           onClick={onDismiss}
