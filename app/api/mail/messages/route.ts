@@ -1,19 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import {
-  MAIL_ENABLED_KEY,
   all,
   computeMailSenderIdentity,
   get,
   getClientIp,
   getMailBlockedTerms,
-  getMailBoolSetting,
   matchBlockedTerm,
   run,
 } from '@/lib/db';
 import { verifyMailAdmin } from '@/lib/mail-auth';
 import { rateLimit } from '@/lib/mail-rate-limit';
 import { verifyTurnstile } from '@/lib/mail-turnstile';
+import { getTopicBySlug, getTopicById } from '@/lib/mail-topics';
 
 const MAX_TEXT = 1000;
 const MAX_NICK = 32;
@@ -83,15 +82,47 @@ function rowToApi(r: Row) {
   };
 }
 
-/** 列出留言（管理端）。支持 ?filter=all|unread|favorited|replied */
+/**
+ * 列出留言（管理端）。
+ *
+ * 查询参数：
+ * - `filter=all|unread|favorited|replied` 既有的筛选
+ * - `topicId=xxx` 主题筛选；**不传默认 `'default'`**（方案 §5.3 的设计预期：
+ *   "左下角按钮 → 常规信箱 / 活动链接 → 活动主题"两条管道互不串）
+ * - `topicId=all` 跨主题汇总（仅 v2 可能用到，但 API 先留好）
+ *
+ * counts 始终按**当前主题**统计（topicId=all 时不统计 counts，返回 0）。
+ */
 export async function GET(req: Request) {
   const auth = await verifyMailAdmin(req);
   if (auth) return auth;
   try {
     const url = new URL(req.url);
     const filter = url.searchParams.get('filter') ?? 'all';
+    const topicIdParam = url.searchParams.get('topicId');
+    const topicScope = topicIdParam ?? 'default';
+    const isAllScope = topicScope === 'all';
+
+    // 非 all 的 topicId 必须是一个存在的主题（id 或 slug 都接受）
+    let resolvedTopicId: string | null = null;
+    if (!isAllScope) {
+      const byId = await getTopicById(topicScope);
+      const topic = byId ?? (await getTopicBySlug(topicScope));
+      if (!topic) {
+        return NextResponse.json(
+          { error: '主题不存在', code: 'TOPIC_NOT_FOUND' },
+          { status: 404 },
+        );
+      }
+      resolvedTopicId = topic.id;
+    }
 
     const where: string[] = ['deleted_at IS NULL'];
+    const params: unknown[] = [];
+    if (resolvedTopicId !== null) {
+      where.push('topic_id = ?');
+      params.push(resolvedTopicId);
+    }
     if (filter === 'unread') where.push('is_read = 0');
     else if (filter === 'favorited') where.push('is_favorited = 1');
     else if (filter === 'replied') where.push('is_replied = 1');
@@ -103,24 +134,30 @@ export async function GET(req: Request) {
        FROM mail_messages
        WHERE ${where.join(' AND ')}
        ORDER BY datetime(created_at) DESC`,
+      params,
     )) as Row[];
 
-    const counts = (await get(
-      `SELECT
-         COUNT(*) AS all_cnt,
-         COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) AS unread_cnt,
-         COALESCE(SUM(is_favorited), 0) AS favorited_cnt,
-         COALESCE(SUM(is_replied), 0) AS replied_cnt,
-         COALESCE(SUM(is_flagged), 0) AS flagged_cnt
-       FROM mail_messages
-       WHERE deleted_at IS NULL`,
-    )) as {
-      all_cnt: number;
-      unread_cnt: number;
-      favorited_cnt: number;
-      replied_cnt: number;
-      flagged_cnt: number;
+    // counts：按当前主题统计（topicId=all 时直接返回零，避免全表扫描）
+    let counts = {
+      all_cnt: 0,
+      unread_cnt: 0,
+      favorited_cnt: 0,
+      replied_cnt: 0,
+      flagged_cnt: 0,
     };
+    if (resolvedTopicId !== null) {
+      counts = (await get(
+        `SELECT
+           COUNT(*) AS all_cnt,
+           COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) AS unread_cnt,
+           COALESCE(SUM(is_favorited), 0) AS favorited_cnt,
+           COALESCE(SUM(is_replied), 0) AS replied_cnt,
+           COALESCE(SUM(is_flagged), 0) AS flagged_cnt
+         FROM mail_messages
+         WHERE topic_id = ? AND deleted_at IS NULL`,
+        [resolvedTopicId],
+      )) as typeof counts;
+    }
 
     return NextResponse.json({
       items: rows.map(rowToApi),
@@ -138,16 +175,17 @@ export async function GET(req: Request) {
   }
 }
 
-/** 公开：新增一条留言。关闭时返回 423。 */
+/**
+ * 公开：新增一条留言。
+ *
+ * 主题归属由 URL / props 决定：
+ * - 不传 `topicSlug` 或传 `'default'` → 落到常规信箱
+ * - 传活动主题 slug → 落到对应主题
+ *
+ * 关闭 / 归档 / 时间窗外返回 423，带具体文案；每个主题独立开关，没有全局总闸。
+ */
 export async function POST(req: Request) {
   try {
-    if (!(await getMailBoolSetting(MAIL_ENABLED_KEY, true))) {
-      return NextResponse.json(
-        { error: '发信箱暂时关闭，稍后再来投递吧 ~' },
-        { status: 423 },
-      );
-    }
-
     // IP 维度限流（在解析 body 之前就拒绝，节省处理成本）
     const ip = getClientIp(req);
     const ipMin = rateLimit({ key: `mail:ip:min:${ip}`, ...RL_IP_PER_MIN });
@@ -161,7 +199,54 @@ export async function POST(req: Request) {
       linkUrl?: string | null;
       senderFingerprint?: string | null;
       turnstileToken?: string | null;
+      topicSlug?: string | null;
     };
+
+    // 解析目标主题；不传视为 'default'（兼容旧前端）
+    const slugInput =
+      typeof body.topicSlug === 'string' && body.topicSlug.trim()
+        ? body.topicSlug.trim()
+        : 'default';
+    const topic = await getTopicBySlug(slugInput);
+    if (!topic) {
+      return NextResponse.json(
+        { error: '主题不存在', code: 'TOPIC_NOT_FOUND' },
+        { status: 400 },
+      );
+    }
+    // 归档 → 活动已结束
+    if (topic.archivedAt) {
+      return NextResponse.json(
+        { error: '活动已结束，期待下次相遇', code: 'TOPIC_ARCHIVED' },
+        { status: 423 },
+      );
+    }
+    // 开关：default 和活动主题文案略有区别
+    if (!topic.isEnabled) {
+      return NextResponse.json(
+        {
+          error: topic.isDefault
+            ? '发信箱暂时关闭，稍后再来投递吧 ~'
+            : '活动暂停中，稍后再来投递吧 ~',
+          code: 'TOPIC_DISABLED',
+        },
+        { status: 423 },
+      );
+    }
+    // 时间窗（starts_at / ends_at 缺省视为无限）
+    const now = Date.now();
+    if (topic.startsAt && now < Date.parse(topic.startsAt)) {
+      return NextResponse.json(
+        { error: '活动还未开始，敬请期待 ~', code: 'TOPIC_NOT_STARTED' },
+        { status: 423 },
+      );
+    }
+    if (topic.endsAt && now > Date.parse(topic.endsAt)) {
+      return NextResponse.json(
+        { error: '活动已结束，期待下次相遇', code: 'TOPIC_ENDED' },
+        { status: 423 },
+      );
+    }
 
     // fingerprint 维度限流（防换 IP 绕开）
     const fp = (body.senderFingerprint ?? '').trim();
@@ -238,9 +323,20 @@ export async function POST(req: Request) {
 
     await run(
       `INSERT INTO mail_messages
-         (id, created_at, text, nickname, link_url, is_flagged, sender_hash, sender_label)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, createdAt, text, nickname, linkUrl, isFlagged ? 1 : 0, hash, label],
+         (id, created_at, text, nickname, link_url, is_flagged,
+          sender_hash, sender_label, topic_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        createdAt,
+        text,
+        nickname,
+        linkUrl,
+        isFlagged ? 1 : 0,
+        hash,
+        label,
+        topic.id,
+      ],
     );
 
     return NextResponse.json(

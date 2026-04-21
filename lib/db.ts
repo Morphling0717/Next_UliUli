@@ -122,6 +122,52 @@ db.serialize(() => {
       updated_at TEXT NOT NULL
     )
   `);
+
+  // ===== MAIL TOPICS（主题收件箱） =====
+  // 每条留言归属某个收件组；默认有且仅有一个"常规收件组"，历史留言通过
+  // topic_id 默认值自动归属到它 → 零破坏。主播可按需创建 N 个主题。
+  db.run(`
+    CREATE TABLE IF NOT EXISTS mail_topics (
+      id          TEXT PRIMARY KEY NOT NULL,
+      slug        TEXT UNIQUE NOT NULL,
+      title       TEXT NOT NULL,
+      description TEXT,
+      note        TEXT,
+      is_default  INTEGER NOT NULL DEFAULT 0,
+      is_enabled  INTEGER NOT NULL DEFAULT 1,
+      starts_at   TEXT,
+      ends_at     TEXT,
+      archived_at TEXT,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    )
+  `);
+  // 约束：全表最多只能有一行 is_default=1
+  db.run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_topics_one_default
+       ON mail_topics (is_default) WHERE is_default = 1`,
+  );
+
+  // mail_messages 增加 topic_id 列（幂等：重复 ALTER 会报 duplicate column name，吞掉）
+  db.run(
+    `ALTER TABLE mail_messages ADD COLUMN topic_id TEXT NOT NULL DEFAULT 'default'`,
+    (err) => {
+      if (err && !/duplicate column name/i.test(err.message)) {
+        console.warn('[mail_messages] ADD COLUMN topic_id:', err.message);
+      }
+    },
+  );
+  // 列表 / 分页（按主题 + 未删除 + 时间倒序）
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_mail_messages_topic_created
+       ON mail_messages (topic_id, deleted_at, created_at)`,
+  );
+  // 未读数 badge 专用（切 tab 性能关键，主 tab 栏会高频查这个 count）
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_mail_messages_topic_unread
+       ON mail_messages (topic_id, is_read) WHERE deleted_at IS NULL`,
+  );
 });
 
 // 封装 Promise 版本的常用方法，替代原先的回调地狱
@@ -323,3 +369,48 @@ export function matchBlockedTerm(
   }
   return null;
 }
+
+// ==============================================================
+// 默认主题自举 + 老 mail.enabled 一次性迁移
+// ==============================================================
+//
+// 启动时（module 首次加载）异步执行：若 default 主题不存在则创建它，
+// 并把 `mail_settings.mail.enabled` 的现有值作为它 is_enabled 的初值。
+// 迁移后该 key 保留做历史归档，业务代码不再读写。
+//
+// 幂等：通过检查 default 主题是否已存在判断。第二次启动后跳过。
+//
+// 注意：这个 IIFE 必须放在 get/run 定义之后，否则会触发 const TDZ。
+(async () => {
+  try {
+    const existing = (await get(
+      `SELECT id FROM mail_topics WHERE id = 'default'`,
+    )) as { id: string } | undefined;
+    if (existing) return;
+
+    // 读老 mail.enabled；缺省视为开启
+    const row = (await get(
+      `SELECT value FROM mail_settings WHERE key = ?`,
+      ['mail.enabled'],
+    )) as { value: string } | undefined;
+    const initialEnabled =
+      row && (row.value === '1' || row.value === 'true') ? 1 :
+      row && (row.value === '0' || row.value === 'false') ? 0 :
+      1;
+
+    const now = new Date().toISOString();
+    await run(
+      `INSERT OR IGNORE INTO mail_topics
+         (id, slug, title, description, note, is_default, is_enabled,
+          starts_at, ends_at, archived_at, sort_order, created_at, updated_at)
+       VALUES ('default', 'default', '常规信箱', NULL, NULL, 1, ?,
+               NULL, NULL, NULL, 0, ?, ?)`,
+      [initialEnabled, now, now],
+    );
+    console.info(
+      `[mail_topics] default topic bootstrapped, migrated is_enabled=${initialEnabled} from mail_settings.mail.enabled`,
+    );
+  } catch (e) {
+    console.warn('[mail_topics] bootstrap failed:', e);
+  }
+})();

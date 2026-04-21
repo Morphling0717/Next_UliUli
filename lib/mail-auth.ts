@@ -101,3 +101,20 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
 
   return NextResponse.json({ error: '密码错误或未授权' }, { status: 401 });
 }
+
+/**
+ * 静默判断是否带有管理员密码 header，**不记失败、不锁 IP**。
+ *
+ * 用途：公开接口想顺便检查"如果是管理员就多返回点字段"时，不应该
+ * 把没带密码的公开请求当作爆破。
+ *
+ * 仅读 `X-Mail-Password` header；不接受 body 里的 password，避免意外消费
+ * 请求体。
+ */
+export function isMailAdminHeader(req: Request): boolean {
+  const expected = process.env.ADMIN_PASSWORD;
+  if (!expected) return false;
+  const header = req.headers.get('x-mail-password');
+  if (!header) return false;
+  return safeEqual(header, expected);
+}

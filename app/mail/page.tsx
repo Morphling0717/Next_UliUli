@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Power } from "lucide-react";
+import {
+  AlertTriangle,
+  Archive,
+  Copy as CopyIcon,
+  Power,
+} from "lucide-react";
 import {
   DEFAULT_POSTER_CONFIG,
   WindChimeAdminPanel,
@@ -26,6 +31,12 @@ import {
   FlaggedMailPanel,
   type FlaggableRecord,
 } from "@/components/mail/FlaggedMailPanel";
+import { MailTopicTabs } from "@/components/mail/MailTopicTabs";
+import { NewTopicModal } from "@/components/mail/NewTopicModal";
+import { ArchivedTopicsDrawer } from "@/components/mail/ArchivedTopicsDrawer";
+import { ArchiveConfirmModal } from "@/components/mail/ArchiveConfirmModal";
+import type { Topic } from "@/components/mail/mail-topic-types";
+import { formatBeijing } from "@/components/mail/mail-time";
 
 const PWD_STORAGE_KEY = "uliuli:mail:pwd";
 
@@ -198,6 +209,12 @@ function MailContent({
   password: string;
   onUnauthorized: () => void;
 }) {
+  // ===== 主题 state =====
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [activeTopicId, setActiveTopicId] = useState<string>("default");
+  const [topicsError, setTopicsError] = useState<string | null>(null);
+
+  // ===== 留言列表 state（跟随 activeTopicId） =====
   const [items, setItems] = useState<FlaggableRecord[]>([]);
   const [counts, setCounts] = useState<Record<WindChimeInboxFilter, number>>({
     all: 0,
@@ -208,13 +225,23 @@ function MailContent({
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
+  // ===== 全局黑名单 state（跨主题共享） =====
   const [blocklist, setBlocklist] = useState<WindChimeBlockedSender[]>([]);
   const [blLoading, setBlLoading] = useState(false);
   const [blError, setBlError] = useState<string | null>(null);
 
-  const [enabled, setEnabled] = useState<boolean | null>(null);
+  // ===== 主题开关 state（操作当前 activeTopic 的 isEnabled） =====
   const [enabledSaving, setEnabledSaving] = useState(false);
   const [enabledError, setEnabledError] = useState<string | null>(null);
+
+  // ===== 模态 / 抽屉 state =====
+  const [showNewTopicModal, setShowNewTopicModal] = useState(false);
+  const [showArchivedDrawer, setShowArchivedDrawer] = useState(false);
+  const [archiveConfirmTopic, setArchiveConfirmTopic] = useState<Topic | null>(
+    null,
+  );
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [copiedToast, setCopiedToast] = useState(false);
 
   const authHeader = useMemo(
     () => ({ "x-mail-password": password }),
@@ -232,14 +259,41 @@ function MailContent({
     [onUnauthorized],
   );
 
+  const activeTopic = useMemo(
+    () => topics.find((t) => t.id === activeTopicId) ?? null,
+    [topics, activeTopicId],
+  );
+
+  // ===== 拉主题列表（管理端带 unreadCount / flaggedCount） =====
+  const reloadTopics = useCallback(async () => {
+    setTopicsError(null);
+    try {
+      const r = await fetch("/api/mail/topics", {
+        headers: authHeader,
+        cache: "no-store",
+      });
+      if (handleAuthError(r)) return;
+      if (!r.ok) throw new Error(await readError(r));
+      const j = (await r.json()) as { items: Topic[] };
+      setTopics(j.items);
+      // 如果当前选中的 tab 已经被归档或被删，退回 default
+      if (!j.items.some((t) => t.id === activeTopicId)) {
+        setActiveTopicId("default");
+      }
+    } catch (e) {
+      setTopicsError(e instanceof Error ? e.message : "主题列表加载失败");
+    }
+  }, [authHeader, handleAuthError, activeTopicId]);
+
+  // ===== 拉当前主题的留言列表 =====
   const reload = useCallback(async () => {
     setLoading(true);
     setListError(null);
     try {
-      const r = await fetch("/api/mail/messages", {
-        headers: authHeader,
-        cache: "no-store",
-      });
+      const r = await fetch(
+        `/api/mail/messages?topicId=${encodeURIComponent(activeTopicId)}`,
+        { headers: authHeader, cache: "no-store" },
+      );
       if (handleAuthError(r)) return;
       if (!r.ok) throw new Error(await readError(r));
       const j = (await r.json()) as ListResponse;
@@ -250,7 +304,7 @@ function MailContent({
     } finally {
       setLoading(false);
     }
-  }, [authHeader, handleAuthError]);
+  }, [authHeader, activeTopicId, handleAuthError]);
 
   const reloadBlocklist = useCallback(async () => {
     setBlLoading(true);
@@ -271,75 +325,86 @@ function MailContent({
     }
   }, [authHeader, handleAuthError]);
 
-  const reloadSettings = useCallback(async () => {
-    setEnabledError(null);
-    try {
-      const r = await fetch("/api/mail/settings", { cache: "no-store" });
-      if (!r.ok) throw new Error(await readError(r));
-      const j = (await r.json()) as { enabled?: boolean };
-      if (typeof j.enabled === "boolean") setEnabled(j.enabled);
-    } catch (e) {
-      setEnabledError(e instanceof Error ? e.message : "读取失败");
-    }
-  }, []);
-
-  const toggleEnabled = useCallback(
+  // ===== 切换当前主题的开关 =====
+  const toggleCurrentTopicEnabled = useCallback(
     async (next: boolean) => {
+      if (!activeTopic) return;
       setEnabledSaving(true);
       setEnabledError(null);
-      const prev = enabled;
-      setEnabled(next);
+      // 乐观更新（失败时回滚）
+      setTopics((xs) =>
+        xs.map((t) => (t.id === activeTopic.id ? { ...t, isEnabled: next } : t)),
+      );
       try {
-        const r = await fetch("/api/mail/settings", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify({ enabled: next }),
-        });
+        const r = await fetch(
+          `/api/mail/topics/${encodeURIComponent(activeTopic.id)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", ...authHeader },
+            body: JSON.stringify({ isEnabled: next }),
+          },
+        );
         if (handleAuthError(r)) return;
         if (!r.ok) throw new Error(await readError(r));
-        const j = (await r.json()) as { enabled?: boolean };
-        if (typeof j.enabled === "boolean") setEnabled(j.enabled);
+        const updated = (await r.json()) as Topic;
+        setTopics((xs) =>
+          xs.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)),
+        );
       } catch (e) {
-        setEnabled(prev);
+        // 回滚
+        setTopics((xs) =>
+          xs.map((t) =>
+            t.id === activeTopic.id ? { ...t, isEnabled: !next } : t,
+          ),
+        );
         setEnabledError(e instanceof Error ? e.message : "保存失败");
       } finally {
         setEnabledSaving(false);
       }
     },
-    [authHeader, enabled, handleAuthError],
+    [authHeader, activeTopic, handleAuthError],
   );
 
+  // 挂载：拉主题 + 黑名单
+  useEffect(() => {
+    void reloadTopics();
+    void reloadBlocklist();
+  }, [reloadTopics, reloadBlocklist]);
+
+  // activeTopicId 变化时重新拉留言列表（也适用于首次挂载）
   useEffect(() => {
     void reload();
-    void reloadBlocklist();
-    void reloadSettings();
-  }, [reload, reloadBlocklist, reloadSettings]);
+  }, [reload]);
 
+  // ===== 留言级操作：全部带 ?topicId= 做跨主题防呆 =====
   const patch = useCallback(
     async (id: string, body: { isRead?: boolean; isFavorited?: boolean }) => {
-      const r = await fetch(`/api/mail/messages/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify(body),
-      });
+      const r = await fetch(
+        `/api/mail/messages/${encodeURIComponent(id)}?topicId=${encodeURIComponent(activeTopicId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify(body),
+        },
+      );
       if (handleAuthError(r)) return;
       if (!r.ok) throw new Error(await readError(r));
-      await reload();
+      await Promise.all([reload(), reloadTopics()]);
     },
-    [authHeader, handleAuthError, reload],
+    [authHeader, activeTopicId, handleAuthError, reload, reloadTopics],
   );
 
   const onDelete = useCallback(
     async (id: string) => {
-      const r = await fetch(`/api/mail/messages/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: authHeader,
-      });
+      const r = await fetch(
+        `/api/mail/messages/${encodeURIComponent(id)}?topicId=${encodeURIComponent(activeTopicId)}`,
+        { method: "DELETE", headers: authHeader },
+      );
       if (handleAuthError(r)) return;
       if (!r.ok) throw new Error(await readError(r));
-      await reload();
+      await Promise.all([reload(), reloadTopics()]);
     },
-    [authHeader, handleAuthError, reload],
+    [authHeader, activeTopicId, handleAuthError, reload, reloadTopics],
   );
 
   const onToggleRead = useCallback(
@@ -354,28 +419,39 @@ function MailContent({
   const onBlockSender = useCallback(
     async (id: string) => {
       const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(id)}/block`,
+        `/api/mail/messages/${encodeURIComponent(id)}/block?topicId=${encodeURIComponent(activeTopicId)}`,
         { method: "POST", headers: authHeader },
       );
       if (handleAuthError(r)) return;
       if (!r.ok) throw new Error(await readError(r));
-      await Promise.all([reload(), reloadBlocklist()]);
+      // 拉黑会跨主题软删该 sender 所有留言 → 刷新所有相关列表
+      await Promise.all([reload(), reloadBlocklist(), reloadTopics()]);
     },
-    [authHeader, handleAuthError, reload, reloadBlocklist],
+    [
+      authHeader,
+      activeTopicId,
+      handleAuthError,
+      reload,
+      reloadBlocklist,
+      reloadTopics,
+    ],
   );
 
   const batchOp = useCallback(
     async (op: "delete" | "markRead", ids: string[]) => {
-      const r = await fetch("/api/mail/messages/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify({ action: op, ids }),
-      });
+      const r = await fetch(
+        `/api/mail/messages/batch?topicId=${encodeURIComponent(activeTopicId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({ action: op, ids }),
+        },
+      );
       if (handleAuthError(r)) return;
       if (!r.ok) throw new Error(await readError(r));
-      await reload();
+      await Promise.all([reload(), reloadTopics()]);
     },
-    [authHeader, handleAuthError, reload],
+    [authHeader, activeTopicId, handleAuthError, reload, reloadTopics],
   );
 
   const onBatchDelete = useCallback(
@@ -400,10 +476,102 @@ function MailContent({
     [authHeader, handleAuthError, reloadBlocklist],
   );
 
+  // ===== 主题管理：新建 / 归档 / 恢复 / 复制分享链接 =====
+  const onCreatedTopic = useCallback((topic: Topic) => {
+    setTopics((xs) => [...xs, topic]);
+    setActiveTopicId(topic.id);
+  }, []);
+
+  const onRestoredTopic = useCallback((topic: Topic) => {
+    setTopics((xs) => {
+      const without = xs.filter((x) => x.id !== topic.id);
+      return [...without, topic];
+    });
+    setActiveTopicId(topic.id);
+    setShowArchivedDrawer(false);
+  }, []);
+
+  // 真正归档（DELETE），不问二次确认
+  const performArchive = useCallback(
+    async (topic: Topic, markReadFirst: boolean) => {
+      setArchiveBusy(true);
+      try {
+        if (markReadFirst) {
+          // 先把未读批量 markRead
+          const unreadIds = items
+            .filter((m) => !m.isRead && !m.isFlagged)
+            .map((m) => m.id);
+          if (unreadIds.length > 0) {
+            await fetch(
+              `/api/mail/messages/batch?topicId=${encodeURIComponent(topic.id)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...authHeader },
+                body: JSON.stringify({ action: "markRead", ids: unreadIds }),
+              },
+            );
+          }
+        }
+        const r = await fetch(
+          `/api/mail/topics/${encodeURIComponent(topic.id)}`,
+          { method: "DELETE", headers: authHeader },
+        );
+        if (handleAuthError(r)) return;
+        if (!r.ok) throw new Error(await readError(r));
+        // 归档成功：切回 default，刷新
+        setActiveTopicId("default");
+        await reloadTopics();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : "归档失败");
+      } finally {
+        setArchiveBusy(false);
+        setArchiveConfirmTopic(null);
+      }
+    },
+    [authHeader, handleAuthError, items, reloadTopics],
+  );
+
+  // 点"归档"按钮（主内容区 或 tab 上的小图标）
+  const handleArchiveIntent = useCallback(
+    (topic: Topic) => {
+      if (topic.isDefault) return; // 默认主题不可归档（按钮本来就会隐藏）
+      const hasBlockers =
+        (topic.unreadCount ?? 0) + (topic.flaggedCount ?? 0) > 0;
+      if (hasBlockers) {
+        setArchiveConfirmTopic(topic);
+      } else {
+        void performArchive(topic, false);
+      }
+    },
+    [performArchive],
+  );
+
+  const onCopyShareLink = useCallback(async () => {
+    if (!activeTopic) return;
+    const origin = window.location.origin;
+    const url = activeTopic.isDefault
+      ? origin
+      : `${origin}/m/${activeTopic.slug}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedToast(true);
+      window.setTimeout(() => setCopiedToast(false), 1500);
+    } catch {
+      alert(`请手动复制：${url}`);
+    }
+  }, [activeTopic]);
+
   const [shareUrl, setShareUrl] = useState("");
   useEffect(() => {
-    setShareUrl(window.location.origin);
-  }, []);
+    if (!activeTopic) {
+      setShareUrl("");
+      return;
+    }
+    const origin = window.location.origin;
+    setShareUrl(
+      activeTopic.isDefault ? origin : `${origin}/m/${activeTopic.slug}`,
+    );
+  }, [activeTopic]);
 
   const [poster, setPoster] = useState<WindChimeQrPosterConfig>(() => ({
     ...DEFAULT_POSTER_CONFIG,
@@ -452,57 +620,126 @@ function MailContent({
     };
   }, []);
 
+  const inboxTitle = activeTopic
+    ? `INBOX · ${activeTopic.title}`
+    : "INBOX · 收件箱";
+  const statusCaption = !activeTopic
+    ? "加载中…"
+    : activeTopic.isDefault
+      ? activeTopic.isEnabled
+        ? "常规信箱已开启，访客可正常投递。"
+        : "常规信箱已关闭，主站入口变灰并禁止发送。"
+      : activeTopic.isEnabled
+        ? `「${activeTopic.title}」已开启，访客可通过 /m/${activeTopic.slug} 投信。`
+        : `「${activeTopic.title}」暂停中，访客看到"活动暂停"提示。`;
+
   return (
     <div className="flex flex-col gap-10">
-      {/* 开关 */}
+      {/* 主题 Tab 栏（方案 §6.1） */}
       <section>
-        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-cyan-400/40 bg-black/60 p-5 shadow-[0_0_30px_rgba(45,226,230,0.12)] backdrop-blur-xl sm:p-6">
-          <div className="flex items-center gap-3">
-            <Power
-              className="h-6 w-6 text-cyan-300 drop-shadow-[0_0_8px_rgba(45,226,230,0.6)]"
-              strokeWidth={2.2}
-              aria-hidden
-            />
-            <div>
-              <div className="font-['Orbitron',sans-serif] text-sm font-bold tracking-[0.12em] text-white">
-                MAIL_BOX · STATUS
-              </div>
-              <div className="mt-1 font-mono text-xs text-gray-400">
-                {enabled === null
-                  ? "读取中…"
-                  : enabled
-                    ? "发信箱已开启，访客可正常投递。"
-                    : "发信箱已关闭，主站入口变灰并禁止发送。"}
-              </div>
-              {enabledError && (
-                <div className="mt-1 font-mono text-xs text-rose-300">
-                  {enabledError}
+        <MailTopicTabs
+          topics={topics}
+          activeTopicId={activeTopicId}
+          onSwitch={setActiveTopicId}
+          onOpenNewTopic={() => setShowNewTopicModal(true)}
+          onOpenArchivedDrawer={() => setShowArchivedDrawer(true)}
+          onScrollToGlobalSettings={() => {
+            document
+              .getElementById("global-settings")
+              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+          onQuickArchive={(topicId) => {
+            const t = topics.find((x) => x.id === topicId);
+            if (t) handleArchiveIntent(t);
+          }}
+        />
+        {topicsError && (
+          <div className="mt-2 font-mono text-[11px] text-rose-300">
+            {topicsError}
+          </div>
+        )}
+      </section>
+
+      {/* 当前主题 · 开关 / 归档 / 分享链接 */}
+      {activeTopic && (
+        <section>
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-cyan-400/40 bg-black/60 p-5 shadow-[0_0_30px_rgba(45,226,230,0.12)] backdrop-blur-xl sm:p-6">
+            <div className="flex items-center gap-3">
+              <Power
+                className="h-6 w-6 text-cyan-300 drop-shadow-[0_0_8px_rgba(45,226,230,0.6)]"
+                strokeWidth={2.2}
+                aria-hidden
+              />
+              <div>
+                <div className="font-['Orbitron',sans-serif] text-sm font-bold tracking-[0.12em] text-white">
+                  {activeTopic.title} · STATUS
                 </div>
+                <div className="mt-1 font-mono text-xs text-gray-400">
+                  {statusCaption}
+                </div>
+                {!activeTopic.isDefault && activeTopic.startsAt && activeTopic.endsAt && (
+                  <div className="mt-0.5 font-mono text-[11px] text-gray-500">
+                    活动期: {formatBeijing(activeTopic.startsAt)} ~{" "}
+                    {formatBeijing(activeTopic.endsAt)}
+                  </div>
+                )}
+                {enabledError && (
+                  <div className="mt-1 font-mono text-xs text-rose-300">
+                    {enabledError}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={onCopyShareLink}
+                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-black/60 px-3 py-1.5 font-mono text-xs text-cyan-200 transition hover:bg-cyan-400/10"
+                title={
+                  activeTopic.isDefault
+                    ? "复制主站链接"
+                    : `复制 /m/${activeTopic.slug} 分享链接`
+                }
+              >
+                <CopyIcon className="h-3.5 w-3.5" />
+                {copiedToast ? "已复制 ✓" : "复制分享链接"}
+              </button>
+
+              {!activeTopic.isDefault && (
+                <button
+                  type="button"
+                  onClick={() => handleArchiveIntent(activeTopic)}
+                  className="flex items-center gap-1.5 rounded-lg border border-amber-400/50 bg-black/60 px-3 py-1.5 font-mono text-xs text-amber-200 transition hover:bg-amber-500/20"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                  归档主题
+                </button>
               )}
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={activeTopic.isEnabled}
+                disabled={enabledSaving}
+                onClick={() => toggleCurrentTopicEnabled(!activeTopic.isEnabled)}
+                className={
+                  "relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60 " +
+                  (activeTopic.isEnabled
+                    ? "border-cyan-400 bg-cyan-400 shadow-[0_0_18px_rgba(45,226,230,0.6)]"
+                    : "border-gray-600 bg-gray-700")
+                }
+              >
+                <span
+                  className={
+                    "inline-block h-6 w-6 transform rounded-full bg-black shadow transition " +
+                    (activeTopic.isEnabled ? "translate-x-7" : "translate-x-1")
+                  }
+                />
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={!!enabled}
-            disabled={enabled === null || enabledSaving}
-            onClick={() => toggleEnabled(!enabled)}
-            className={
-              "relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60 " +
-              (enabled
-                ? "border-cyan-400 bg-cyan-400 shadow-[0_0_18px_rgba(45,226,230,0.6)]"
-                : "border-gray-600 bg-gray-700")
-            }
-          >
-            <span
-              className={
-                "inline-block h-6 w-6 transform rounded-full bg-black shadow transition " +
-                (enabled ? "translate-x-7" : "translate-x-1")
-              }
-            />
-          </button>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* 外链安全提示（匿名访客可填链接，提醒主播谨防钓鱼） */}
       <section className="rounded-xl border border-amber-400/30 bg-amber-500/5 px-4 py-3 backdrop-blur">
@@ -527,11 +764,15 @@ function MailContent({
         </div>
       </section>
 
-      {/* 收件箱 */}
+      {/* 收件箱（跟随当前主题） */}
       <section>
         <WindChimeAdminPanel
-          title="INBOX · 收件箱"
-          emptyText="暂无来信。"
+          title={inboxTitle}
+          emptyText={
+            activeTopic?.isDefault
+              ? "暂无来信。"
+              : "该主题暂无来信。"
+          }
           items={items}
           counts={counts}
           filter={filter}
@@ -555,15 +796,19 @@ function MailContent({
         <FlaggedMailPanel
           items={items}
           authHeader={authHeader}
+          topicId={activeTopicId}
           onUnauthorized={onUnauthorized}
-          onAfterAction={() => void reload()}
+          onAfterAction={() => {
+            void reload();
+            void reloadTopics();
+          }}
         />
       </section>
 
-      {/* 黑名单 */}
+      {/* 黑名单（全局，跨主题共享） */}
       <section>
         <WindChimeBlocklistPanel
-          title="BLOCKLIST · 黑名单"
+          title="BLOCKLIST · 黑名单（全局）"
           emptyText="尚未拉黑任何发送者。"
           items={blocklist}
           isLoading={blLoading}
@@ -574,17 +819,25 @@ function MailContent({
         />
       </section>
 
-      {/* 分享二维码 + 海报编辑 */}
+      {/* 分享二维码 + 海报编辑（URL 跟随当前主题） */}
       {shareUrl && (
         <section className="flex flex-col gap-6">
           <WindChimeQrCard
             url={shareUrl}
-            title="SHARE · MAIL_BOX"
+            title={
+              activeTopic?.isDefault
+                ? "SHARE · MAIL_BOX"
+                : `SHARE · ${activeTopic?.title ?? "TOPIC"}`
+            }
             subtitle={`扫码前往 ${shareUrl.replace(/^https?:\/\//, "")} 给 Uli 投信`}
             size={260}
             foreground="#2de2e6"
             background="#050508"
-            downloadName="uliuli-mail-qr"
+            downloadName={
+              activeTopic?.isDefault
+                ? "uliuli-mail-qr"
+                : `uliuli-topic-${activeTopic?.slug ?? "topic"}-qr`
+            }
             theme={mailQrTheme}
             poster={{
               enabled: true,
@@ -612,13 +865,39 @@ function MailContent({
         </section>
       )}
 
-      {/* 敏感词管理（低频配置，放页尾） */}
-      <section>
+      {/* 全局设置：敏感词（跨主题共享，低频配置） */}
+      <section id="global-settings">
         <BlockedTermsPanel
           authHeader={authHeader}
           onUnauthorized={onUnauthorized}
         />
       </section>
+
+      {/* ===== 模态 / 抽屉 ===== */}
+      <NewTopicModal
+        open={showNewTopicModal}
+        onClose={() => setShowNewTopicModal(false)}
+        authHeader={authHeader}
+        onCreated={onCreatedTopic}
+      />
+      <ArchivedTopicsDrawer
+        open={showArchivedDrawer}
+        onClose={() => setShowArchivedDrawer(false)}
+        authHeader={authHeader}
+        onRestored={onRestoredTopic}
+      />
+      <ArchiveConfirmModal
+        open={!!archiveConfirmTopic}
+        topic={archiveConfirmTopic}
+        busy={archiveBusy}
+        onCancel={() => !archiveBusy && setArchiveConfirmTopic(null)}
+        onMarkReadThenArchive={() =>
+          archiveConfirmTopic && performArchive(archiveConfirmTopic, true)
+        }
+        onArchiveAnyway={() =>
+          archiveConfirmTopic && performArchive(archiveConfirmTopic, false)
+        }
+      />
     </div>
   );
 }

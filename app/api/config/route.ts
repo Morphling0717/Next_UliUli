@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { get, all } from '@/lib/db';
+import { getDefaultTopic, listTopics } from '@/lib/mail-topics';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -38,6 +39,31 @@ export async function GET(request: NextRequest) {
           },
           mail: {},
         };
+
+    // -------------------------------------------------------------
+    // Mail 派生字段（方案 §6.3）
+    //
+    // 把"当前有效活动主题列表"和"default 主题开关"注入 siteConfig，
+    // 横幅组件和 MailSpeedDial 从这里读，不再各自独立轮询 /api/mail/*。
+    // 派生逻辑不写进 site_config 表，每次 GET 都是实时查；失败时静默
+    // 兜底（空数组 + true），绝不阻塞整个 /api/config 响应。
+    // -------------------------------------------------------------
+    try {
+      const activeTopics = await listTopics({ onlyPublicActive: true });
+      siteConfig.activeTopics = activeTopics.map((t) => ({
+        slug: t.slug,
+        title: t.title,
+        description: t.description,
+        startsAt: t.startsAt,
+        endsAt: t.endsAt,
+      }));
+      const defaultTopic = await getDefaultTopic();
+      siteConfig.mailEnabled = defaultTopic ? defaultTopic.isEnabled : true;
+    } catch (e) {
+      console.warn('[api/config] activeTopics/mailEnabled 派生失败:', e);
+      siteConfig.activeTopics = [];
+      siteConfig.mailEnabled = true;
+    }
 
     // 从数据库获取所有歌曲
     const songs = await all('SELECT category, name, artist FROM songs ORDER BY id ASC');

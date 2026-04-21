@@ -11,6 +11,11 @@ export type FlaggableRecord = WindChimeMessageRecord & { isFlagged?: boolean };
 type Props = {
   items: FlaggableRecord[];
   authHeader: Record<string, string>;
+  /**
+   * 当前主题 id（给下面所有 fetch 调用带上 `?topicId=`做跨主题防呆。
+   * 不传时默认 `'default'`（安全兜底）。
+   */
+  topicId?: string;
   onUnauthorized: () => void;
   onAfterAction?: () => void;
 };
@@ -54,10 +59,12 @@ function safeHost(raw: string | null | undefined): string {
 export function FlaggedMailPanel({
   items,
   authHeader,
+  topicId = "default",
   onUnauthorized,
   onAfterAction,
 }: Props) {
   const flagged = items.filter((m) => m.isFlagged);
+  const topicQuery = `topicId=${encodeURIComponent(topicId)}`;
   const [openId, setOpenId] = useState<string | null>(null);
   const [openData, setOpenData] = useState<FullMessage | null>(null);
   const [openLoading, setOpenLoading] = useState(false);
@@ -91,7 +98,7 @@ export function FlaggedMailPanel({
     (async () => {
       try {
         const r = await fetch(
-          `/api/mail/messages/${encodeURIComponent(openId)}`,
+          `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
           { headers: authHeader, cache: "no-store" },
         );
         if (handleAuthError(r)) return;
@@ -109,7 +116,7 @@ export function FlaggedMailPanel({
     return () => {
       cancelled = true;
     };
-  }, [openId, authHeader, handleAuthError]);
+  }, [openId, authHeader, handleAuthError, topicQuery]);
 
   // ESC 关闭
   useEffect(() => {
@@ -125,11 +132,14 @@ export function FlaggedMailPanel({
     if (!openId) return;
     setActing(true);
     try {
-      const r = await fetch(`/api/mail/messages/${encodeURIComponent(openId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify({ isRead: true }),
-      });
+      const r = await fetch(
+        `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({ isRead: true }),
+        },
+      );
       if (handleAuthError(r)) return;
       if (!r.ok) throw new Error(await readError(r));
       onAfterAction?.();
@@ -139,7 +149,7 @@ export function FlaggedMailPanel({
     } finally {
       setActing(false);
     }
-  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal]);
+  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
 
   const deleteItem = useCallback(async () => {
     if (!openId) return;
@@ -148,10 +158,13 @@ export function FlaggedMailPanel({
     }
     setActing(true);
     try {
-      const r = await fetch(`/api/mail/messages/${encodeURIComponent(openId)}`, {
-        method: "DELETE",
-        headers: authHeader,
-      });
+      const r = await fetch(
+        `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
+        {
+          method: "DELETE",
+          headers: authHeader,
+        },
+      );
       if (handleAuthError(r)) return;
       if (!r.ok) throw new Error(await readError(r));
       onAfterAction?.();
@@ -161,17 +174,21 @@ export function FlaggedMailPanel({
     } finally {
       setActing(false);
     }
-  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal]);
+  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
 
   const blockSender = useCallback(async () => {
     if (!openId) return;
-    if (!window.confirm("拉黑这名发信人？ TA 之后的所有来信都会被静默丢弃。")) {
+    if (
+      !window.confirm(
+        "拉黑这名发信人？TA 以后给**常规信箱 + 所有活动主题**投信都会被静默丢弃（跨主题黑名单）。",
+      )
+    ) {
       return;
     }
     setActing(true);
     try {
       const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(openId)}/block`,
+        `/api/mail/messages/${encodeURIComponent(openId)}/block?${topicQuery}`,
         { method: "POST", headers: authHeader },
       );
       if (handleAuthError(r)) return;
@@ -183,7 +200,7 @@ export function FlaggedMailPanel({
     } finally {
       setActing(false);
     }
-  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal]);
+  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
 
   return (
     <div className="rounded-2xl border border-rose-400/40 bg-black/60 p-5 shadow-[0_0_30px_rgba(244,63,94,0.12)] backdrop-blur-xl sm:p-6">
