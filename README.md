@@ -20,7 +20,8 @@
 - 🛠 **Admin 后台**：`/admin` 登录后可编辑 SITE_CONFIG、歌单、上传图片到 `/public/memes`、`/public/pic`。
 - ⚔️ **Name Arena**：`lib/namearena/` 下的文字战斗引擎（battleEngine / skills / jobs / data，独立子系统）。
 - 👥 **用户系统**：注册 / 登录（PBKDF2 + salt）、token 保存抽卡进度到 SQLite。
-- 🐳 **一键 Docker**：内置 `Dockerfile` + `docker-compose.yml`，含原生模块 `sqlite3` 的 `npm rebuild --build-from-source`。
+- � **匿名发信箱 MAIL_BOX**：基于 `@windchime/embed` 包集成的匿名留言系统。访客从主页左下 SpeedDial 投信，经 **Cloudflare Turnstile** 人机校验 + 前后端双层限流（fingerprint / IP）+ 敏感词过滤，进入后台 `/mail` 管理。所有访客可见文案可在 Admin `/admin · 发信箱` tab 自由编辑。
+- � **一键 Docker**：内置 `Dockerfile` + `docker-compose.yml`，含原生模块 `sqlite3` 的 `npm rebuild --build-from-source`。
 
 ---
 
@@ -32,6 +33,7 @@
 | 样式      | **Tailwind CSS 4** (`@tailwindcss/postcss`) · 自定义 CSS 变量霓虹色板         |
 | 动画 / 3D | **Framer Motion 11** · **GSAP 3** · **Three.js 0.183**                        |
 | 图标 / UI | **lucide-react** · **sweetalert2**（弹窗）                                    |
+| 邮箱组件 | **@windchime/embed 0.3.1**（本地 tgz）· **Cloudflare Turnstile**（可选）            |
 | 数据库    | **sqlite3**（原生模块，文件型）                                               |
 | 部署      | **Docker**（node:20-bookworm-slim 多阶段构建）+ **1Panel** 友好               |
 
@@ -88,6 +90,17 @@ DATABASE_PATH=./codes.db
 
 # 必填：公开站点地址（用于 Open Graph 分享卡片）
 NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
+
+# ============== 发信箱 MAIL_BOX 相关 ==============
+# 必填：后台 /mail 管理页口令（与 ADMIN_PASSWORD 独立，主播专用）
+MAIL_AUTH_PASSWORD=change_me_to_a_mail_admin_password
+
+# 必填：Signed Cookie 盐值（10位+ 随机字符），用于后台登录态完整性校验
+MAIL_TOKEN_SALT=please_generate_a_long_random_salt_here
+
+# 可选：Cloudflare Turnstile（人机校验）——留空则跳过校验，发布到公网强烈建议启用
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=
+TURNSTILE_SECRET_KEY=
 ```
 
 > ⚠️ 生产环境务必修改两个密码;请勿把 `.env.local` 提交到仓库。
@@ -104,6 +117,10 @@ NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
 | `site_config`   | 网站配置 JSON（首页 / 档案 / 直播 / 抽卡参数等）         |
 | `songs`         | 普通歌单（分类 / 歌名 / 歌手）                           |
 | `hidden_songs`  | 隐藏歌单（解锁后可见）                                   |
+| `mail_messages` | 匿名来信（text / nickname / linkUrl / senderFingerprint / isRead / isFavorited） |
+| `mail_blocked_senders` | 拉黑的 senderFingerprint / IP 黑名单（后台可维护）             |
+| `mail_blocked_terms`   | 敏感词列表（命中后来信 API 直接 422，不写库）                       |
+| `mail_settings`        | 发信箱开关状态 KV（后台 `/mail` 页面的 `ONLINE/OFFLINE` 切换）      |
 
 首次启动时若表不存在会自动创建。**旧版 `public/data.js` 的数据已迁移至 SQLite**,详见 [`MIGRATION_GUIDE.md`](./MIGRATION_GUIDE.md)。
 
@@ -138,6 +155,31 @@ NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
 | `POST /api/admin/save`   | 保存 site_config / songs / hidden_songs（事务） |
 | `POST /api/admin/upload` | 上传图片到 `/public/memes` 或 `/public/pic`     |
 | `POST /api/admin/unlock` | 隐藏内容解锁密码校验                            |
+
+### 邮箱接口（`app/api/mail/*`）
+
+公开（访客可用）：
+
+| 方法   | 路径                  | 说明                                                                      |
+| ------ | --------------------- | ------------------------------------------------------------------------- |
+| `GET`  | `/api/mail/settings`  | 读取开关状态（`enabled: boolean`）；前端关闭态按灰 SpeedDial                 |
+| `POST` | `/api/mail/messages`  | 投信（text + 可选 nickname / linkUrl），Turnstile + 限流 + 敏感词校验后入库 |
+
+后台（需 `MAIL_AUTH_PASSWORD` 登录后的 signed cookie）：
+
+| 方法     | 路径                                   | 说明                            |
+| -------- | ---------------------------------------- | ------------------------------ |
+| `POST`   | `/api/mail/auth/login`                   | 用 `MAIL_AUTH_PASSWORD` 登录    |
+| `POST`   | `/api/mail/auth/logout`                  | 登出                            |
+| `GET`    | `/api/mail/messages`                     | 列序列表（分页）             |
+| `PATCH`  | `/api/mail/messages/[id]`                | 标已读 / 收藏               |
+| `DELETE` | `/api/mail/messages/[id]`                | 删除                            |
+| `POST`   | `/api/mail/messages/batch`               | 批量删除 / 批量已读          |
+| `GET`    | `/api/mail/blocklist`                    | 黑名单列表                      |
+| `DELETE` | `/api/mail/blocklist/[senderFingerprint]`| 移除黑名单条目                  |
+| `GET`    | `/api/mail/blocked-terms`                | 敏感词列表                      |
+| `PUT`    | `/api/mail/blocked-terms`                | 全量替换敏感词库                |
+| `PATCH`  | `/api/mail/settings`                     | 切换 ONLINE/OFFLINE            |
 
 ---
 
@@ -196,6 +238,27 @@ Next_UliUli/
 ├─ postcss.config.mjs
 ├─ eslint.config.mjs
 └─ tsconfig.json
+```
+
+### 📬 发信箱子系统追加路径
+
+```
+├─ components/mail/                  # 访客侧发信箱组件
+│  ├─ MailSpeedDial.tsx              # 主页左下浮动入口
+│  ├─ MailSendModal.tsx              # 投信弹窗（包裹 WindChimeSender）
+│  ├─ MailAuthGate.tsx               # /mail 后台密码门
+│  ├─ BlockedTermsPanel.tsx          # 敏感词管理面板
+│  ├─ FlaggedMailPanel.tsx           # 被标记可疑来信
+│  └─ mail-theme.ts                  # WindChime 组件赛博朋克主题映射
+├─ app/mail/page.tsx                 # 后台管理页（主播登录后用）
+├─ app/api/mail/                     # 邮箱 REST 接口（见上方表）
+├─ lib/mail-auth.ts                  # signed cookie 签发 / 校验
+├─ lib/mail-rate-limit.ts            # IP + fingerprint 双重限流
+├─ lib/mail-turnstile.ts             # Cloudflare Turnstile 服务端校验
+├─ lib/mail-sfx.ts                   # Web Audio 合成的 SIGNAL SENT 音效
+├─ vendor/windchime-embed-0.3.1.tgz  # 本地 tarball，不发布到 npm
+├─ bin/upgrade.sh                    # VPS 升级脚本（备份 DB + 生成 salt）
+└─ middleware.ts                     # /mail 路由密码保护
 ```
 
 ---
@@ -276,6 +339,69 @@ UPDATE global_config SET value = '0' WHERE key = 'pityCount';
 ```bash
 cp codes.db codes.db.$(date +%F).bak
 ```
+
+**修改发信箱访客文案:**
+
+进 `/admin · 发信箱 (Mail)` tab，13 个字段分 4 组（入口按钮 / 弹窗主体 / 占位符 / 关闭态）。留空走代码内 fallback 默认值。改完 `Save` 直接写入 `site_config.mail`，前端 15 秒轮询自动拉新。
+
+**切换发信箱开关 / 读信:**
+
+访问 `/mail`（密码 = `MAIL_AUTH_PASSWORD`）。页面顶部开关控制 `ONLINE/OFFLINE`，卡片格列表展示来信、收藏、拉黑、删除、敏感词维护。内嵌分享海报编辑器（WindChime QR Poster）生成二维码卡片。
+
+---
+
+## 📬 匿名发信箱（Mail 子系统）
+
+### 架构
+
+```
+ 访客浏览器                                     主播
+─────────                                    ────
+  app/page.tsx                                  /admin · Mail tab
+    └─ <MailSpeedDial                                 │
+         texts={siteConfig?.mail} />                   │ (编辑 13 个文案)
+            └─ <MailSendModal                             ▼
+                 texts={...}                   POST /api/admin/save
+                 onSubmit→POST /api/mail/messages            │
+                 (Turnstile + 限流 + 敏感词)                 ▼
+                   └─ 写库 mail_messages              site_config.mail (SQLite)
+                                                              │
+ 主播打开 /mail (MAIL_AUTH_PASSWORD)                           │
+   └─ <WindChimeAdminPanel />                           GET /api/config
+        └─ GET /api/mail/messages                              ▲
+             PATCH 标已读/收藏                         前端 15s 轮询
+             DELETE / POST batch
+```
+
+### 关键组件
+
+- **`MailSpeedDial`**（`components/mail/MailSpeedDial.tsx`）：主站左下收纳式 Speed Dial。轮询 `/api/mail/settings` 得知开关状态，关闭时子按钮置灰。
+- **`MailSendModal`**（`components/mail/MailSendModal.tsx`）：包裹 `WindChimeSender`。投信后调 `/api/mail/messages`、播放 Web Audio 合成音效、`AUTO_CLOSE_MS=1800` 后自动关窗。
+- **`WindChimeAdminPanel`**（来自 `@windchime/embed` 包）：后台卡片列表。包内部写死的 `🎐 风铃来信` 等字样在 `app/globals.css` 中被 **宿主侧 CSS `mask-image` + lucide SVG data URI** 重绘成 `TRANSMISSION · 来信` + lucide Inbox/Heart/Mail——详见 `──去风铃化` 那一大块注释。
+- **Admin Mail Tab**（`/admin`）：在 `SiteConfig.mail` 下维护 13 个访客可见文案（按钮标题 / tooltip / 卡片标题 / placeholder / success / paused 等）。后台 `/mail` 页面的字样（INBOX、BLOCKLIST、SECURITY 等）**未**接入可编辑配置（只有主播自己看、无必要）。
+
+### —— 去风铃化
+
+`@windchime/embed` 包内硬编码了 `🎐`、`风铃`、`WindChime`、`★/☆`、`挂上风铃` 等字样和 emoji，props/theme 都盖不到。UliUli 在 `app/globals.css` 末尾书写一大块规则：
+
+- 作用域限定 `[data-widget="windchime-sender"]` / `[data-widget="windchime-admin"]`，海报 canvas 不受影响
+- 用 CSS 变量存放 inline 的 lucide SVG（`--lucide-mail` / `--lucide-heart-fill` / `--lucide-send` 等 10 个）
+- 用 `mask-image` + `background-color: currentColor` 打包成可着色的单色图标
+- 用 `font-size: 0` + `::before { content: "..." }` 抖掉文字再覆盖
+- 满網 lucide：Mail / Inbox / Heart（空/实心）/ Send / Link / CheckCheck / Ban / Trash
+
+### 主播后台 `/mail` 开关和操作
+
+- 打开 `/mail` 页面，密码 = `MAIL_AUTH_PASSWORD`
+- 顶部开关控制访客端是否能看见 SpeedDial 发信入口
+- 卡片列表：收藏·拉黑·标已读·删除 4 种操作，底部按钮已換成赛博朋克风格 + lucide 图标
+- 侧边面板：黑名单·敏感词·被标记的可疑来信
+- 底部分享区：`WindChimeQrCard` + `WindChimeQrPosterEditor` 自行生成海报（海报按用户需求保留 WindChime 风铃装饰）
+
+### 扩展程序
+
+- 想换 `@windchime/embed` 版本：更新 `vendor/windchime-embed-0.x.y.tgz`，同步改 `package.json` 的 `file:./vendor/...` 指向
+- 想扩展邮箱表或 API：函数入口都在 `app/api/mail/*`，数据库模型在 `lib/db.ts` 的 `initDb()` 部分（内嵌 `CREATE TABLE IF NOT EXISTS mail_*`）
 
 ---
 

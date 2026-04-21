@@ -16,6 +16,7 @@ import {
   Link,
   List,
   Lock as LockIcon,
+  Mail,
   Music,
   Pencil,
   Plus,
@@ -269,6 +270,90 @@ export function AdminTabContent(props: AdminTabContentProps) {
           <div className="section-title"><Type className="w-4 h-4" /> 底部版权</div>
           <input type="text" className="input-dark" value={config.footer?.text || ""} onChange={(e) => updateConfig("footer", "text", e.target.value)} />
         </div>
+      )}
+
+      {activeTab === "mail" && (
+        <>
+          <div className="card">
+            <div className="section-title"><Mail className="w-4 h-4" /> 主站访客入口（左下浮动菜单）</div>
+            <div className="text-xs text-gray-500 mb-4">这些文字显示在主页左下角的 Speed Dial 发信按钮上，访客打开主站就能看到。</div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="text-xs text-gray-400">按钮标题</label>
+                <input type="text" className="input-dark" placeholder="发信箱" value={config.mail?.entryLabel || ""} onChange={(e) => updateConfig("mail", "entryLabel", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">Tooltip（开启态）</label>
+                <input type="text" className="input-dark" placeholder="匿名投信给 Uli" value={config.mail?.entryHint || ""} onChange={(e) => updateConfig("mail", "entryHint", e.target.value)} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400">Tooltip（发信箱关闭时）</label>
+                <input type="text" className="input-dark" placeholder="发信箱暂时关闭" value={config.mail?.entryHintDisabled || ""} onChange={(e) => updateConfig("mail", "entryHintDisabled", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title"><Type className="w-4 h-4" /> 发信弹窗主体文案</div>
+            <div className="text-xs text-gray-500 mb-4">这些文字显示在访客点开发信弹窗后，看到的表单卡片上。</div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="text-xs text-gray-400">卡片标题</label>
+                <input type="text" className="input-dark" placeholder="MAIL_BOX" value={config.mail?.senderTitle || ""} onChange={(e) => updateConfig("mail", "senderTitle", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">副标题 / 招呼语</label>
+                <input type="text" className="input-dark" placeholder="把想对 Uli 说的话，匿名地投进这个信箱" value={config.mail?.senderTagline || ""} onChange={(e) => updateConfig("mail", "senderTagline", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">状态徽章（开启）</label>
+                <input type="text" className="input-dark" placeholder="ONLINE" value={config.mail?.statusOpen || ""} onChange={(e) => updateConfig("mail", "statusOpen", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">状态徽章（关闭）</label>
+                <input type="text" className="input-dark" placeholder="OFFLINE" value={config.mail?.statusPaused || ""} onChange={(e) => updateConfig("mail", "statusPaused", e.target.value)} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400">发送成功提示</label>
+                <input type="text" className="input-dark" placeholder="SIGNAL SENT · 信号已送达，Uli 会在直播时读到 ~" value={config.mail?.successMessage || ""} onChange={(e) => updateConfig("mail", "successMessage", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title"><Pencil className="w-4 h-4" /> 输入框占位符</div>
+            <div className="text-xs text-gray-500 mb-4">访客未填写内容时，输入框里的灰色提示文字。</div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400">正文输入框</label>
+                <input type="text" className="input-dark" placeholder="在这里写下你想说的话…" value={config.mail?.placeholderText || ""} onChange={(e) => updateConfig("mail", "placeholderText", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">称呼输入框</label>
+                <input type="text" className="input-dark" placeholder="称呼（可选）" value={config.mail?.placeholderNickname || ""} onChange={(e) => updateConfig("mail", "placeholderNickname", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">链接输入框</label>
+                <input type="text" className="input-dark" placeholder="B站 / X / 外站链接（可选）" value={config.mail?.placeholderLink || ""} onChange={(e) => updateConfig("mail", "placeholderLink", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title"><Radio className="w-4 h-4" /> 关闭态文案</div>
+            <div className="text-xs text-gray-500 mb-4">当后台 <code className="text-[#2de2e6]">/mail</code> 页面把发信箱开关关闭时，访客会看到的提示文字。</div>
+            <div className="grid gap-4">
+              <div>
+                <label className="text-xs text-gray-400">弹窗顶部禁用横幅</label>
+                <input type="text" className="input-dark" placeholder="发信箱暂时关闭，稍后再来投递吧 ~" value={config.mail?.disabledBanner || ""} onChange={(e) => updateConfig("mail", "disabledBanner", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">表单内说明文字</label>
+                <input type="text" className="input-dark" placeholder="OFFLINE · 发信箱暂时关闭，稍后再来投递吧 ~" value={config.mail?.pausedMessage || ""} onChange={(e) => updateConfig("mail", "pausedMessage", e.target.value)} />
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {activeTab === "songs" && (

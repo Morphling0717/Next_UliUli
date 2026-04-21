@@ -8,6 +8,9 @@ FROM base AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
+# vendor/ 里放的本地 tarball（如 @windchime/embed）也要在 deps 阶段就进来，
+# 否则 npm ci 读 package-lock 里的 `file:./vendor/...` 会 ENOENT。
+COPY vendor/ ./vendor/
 ENV npm_config_build_from_source=true
 RUN npm ci && npm rebuild sqlite3 --build-from-source
 

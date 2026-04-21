@@ -50,8 +50,27 @@ const GachaIcons = {
   Refresh: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>)
 };
 
-export const GachaSystem: React.FC = () => {
-  const [isOpen, setIsOpen] = useState(false);
+export interface GachaSystemProps {
+  /** 隐藏组件内部自带的左下角浮动按钮（供 MailSpeedDial 等外部触发器使用） */
+  hideLauncher?: boolean;
+  /** 受控打开状态（可选）。未传时组件自管 open 状态，保持向后兼容。 */
+  open?: boolean;
+  /** 受控打开状态的变更回调（可选） */
+  onOpenChange?: (open: boolean) => void;
+}
+
+export const GachaSystem: React.FC<GachaSystemProps> = ({
+  hideLauncher = false,
+  open: openProp,
+  onOpenChange,
+}) => {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = openProp !== undefined;
+  const isOpen = isControlled ? openProp! : internalOpen;
+  const setIsOpen = (next: boolean) => {
+    if (!isControlled) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const [mode, setMode] = useState("MACHINE"); 
   const [collection, setCollection] = useState<number[]>([]); 
   const [history, setHistory] = useState<HistoryItem[]>([]); 
@@ -415,13 +434,15 @@ const safeCollection = Array.isArray(collection) ? collection : [];
 
   return (
     <>
-      <motion.button
-        whileHover={{ scale: 1.1, rotate: 10 }} whileTap={{ scale: 0.9 }} onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 left-6 z-50 w-16 h-16 rounded-full bg-black/60 border-2 border-(--neon-blue) text-(--neon-blue) flex items-center justify-center backdrop-blur-md shadow-[0_0_20px_rgba(45,226,230,0.3)] hover:bg-(--neon-blue) hover:text-black transition-colors group"
-      >
-        <GachaIcons.Capsule />
-        {showDailyBonus && <span className="absolute top-0 right-0 w-4 h-4 bg-yellow-400 rounded-full animate-bounce border border-black"></span>}
-      </motion.button>
+      {!hideLauncher && (
+        <motion.button
+          whileHover={{ scale: 1.1, rotate: 10 }} whileTap={{ scale: 0.9 }} onClick={() => setIsOpen(true)}
+          className="fixed bottom-6 left-6 z-50 w-16 h-16 rounded-full bg-black/60 border-2 border-(--neon-blue) text-(--neon-blue) flex items-center justify-center backdrop-blur-md shadow-[0_0_20px_rgba(45,226,230,0.3)] hover:bg-(--neon-blue) hover:text-black transition-colors group"
+        >
+          <GachaIcons.Capsule />
+          {showDailyBonus && <span className="absolute top-0 right-0 w-4 h-4 bg-yellow-400 rounded-full animate-bounce border border-black"></span>}
+        </motion.button>
+      )}
 
       <AnimatePresence>
         {showDailyBonus && (

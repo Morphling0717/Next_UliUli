@@ -13,9 +13,9 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import { ThreeBackground, CustomCursor } from '../components/Effects';
 import { Dashboard, HorizontalVideoGallery } from '../components/Dashboard';
 import { SongSystem } from '../components/SongSystem';
-import { GachaSystem } from '../components/Gacha';
 import { GameModal } from '../components/GameModal';
 import { ToastContainer, GoldenLuckModal } from '../components/UI';
+import { MailSpeedDial } from '../components/mail/MailSpeedDial';
 
 // --- Types ---
 interface NotificationItem {
@@ -355,7 +355,7 @@ export default function HomePage() {
           </AnimatePresence>
         </div>
 
-        <GachaSystem />
+        <MailSpeedDial texts={siteConfig?.mail} />
       </div>
     </ErrorBoundary>
   );

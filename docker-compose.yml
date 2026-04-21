@@ -7,10 +7,24 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      # ========== 基础：Admin 与主站 ==========
       - ADMIN_PASSWORD=uliuli2025
       - DEV_UNLOCK_PASSWORD=Morphling0717
       - DATABASE_PATH=/app/data/codes.db
       - NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
+
+      # ========== 发信箱（MAIL_BOX）==========
+      # [必填] 发送者指纹 hash 的盐值；换服务器前务必自己改，
+      # 改了之后旧留言的 sender_hash 会与新留言对不上（相当于重置 senderLabel），
+      # 但不影响已有黑名单里对旧 hash 的匹配。建议用一段随机字符串。
+      - WINDCHIME_HASH_SALT=change_me_to_a_long_random_string
+      # [可选] 敏感词初始列表（逗号分隔）；写入 DB 后以 DB 里的值为准。
+      # 留空或省略则不预置。后台 /mail 页面底部可随时增删。
+      # - MAIL_BLOCKED_TERMS=政治,色情,赌博
+      # [可选] Cloudflare Turnstile 人机校验。两个都留空则不启用 Turnstile；
+      # 启用时要**同时**设置 NEXT_PUBLIC_ (前端) 与 TURNSTILE_SECRET (服务端)。
+      # - NEXT_PUBLIC_TURNSTILE_SITE_KEY=
+      # - TURNSTILE_SECRET=
     volumes:
       - ./data:/app/data
       - ./public/memes:/app/public/memes

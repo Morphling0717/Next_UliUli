@@ -142,6 +142,25 @@ export interface SiteConfig {
     baseRate?: number;
     maxRate?: number;
   };
+  /** 发信箱（主站访客侧）可编辑文案；后台 /mail 页面的文案仍硬编码。 */
+  mail?: {
+    // —— 左下 SpeedDial 入口按钮
+    entryLabel?: string;         // 子按钮标题，默认 "发信箱"
+    entryHint?: string;          // 子按钮 tooltip（开启态），默认 "匿名投信给 Uli"
+    entryHintDisabled?: string;  // 子按钮 tooltip（关闭态），默认 "发信箱暂时关闭"
+    // —— 弹窗顶部禁用横幅（isDisabled 时才显示）
+    disabledBanner?: string;     // 默认 "发信箱暂时关闭，稍后再来投递吧 ~"
+    // —— WindChimeSender 表单
+    senderTitle?: string;        // 默认 "MAIL_BOX"
+    senderTagline?: string;      // 默认 "把想对 Uli 说的话，匿名地投进这个信箱"
+    statusOpen?: string;         // 右上状态徽章（开启），默认 "ONLINE"
+    statusPaused?: string;       // 右上状态徽章（关闭），默认 "OFFLINE"
+    pausedMessage?: string;      // 关闭态下表单内的说明，默认 "OFFLINE · 发信箱暂时关闭，稍后再来投递吧 ~"
+    placeholderText?: string;    // textarea 占位，默认 "在这里写下你想说的话…"
+    placeholderNickname?: string; // 称呼输入占位，默认 "称呼（可选）"
+    placeholderLink?: string;    // 链接输入占位，默认 "B站 / X / 外站链接（可选）"
+    successMessage?: string;     // 发送成功横幅，默认 "SIGNAL SENT · 信号已送达，Uli 会在直播时读到 ~"
+  };
 }
 
 export interface AssetFile {
@@ -160,6 +179,7 @@ export type AdminTabId =
   | "notifications"
   | "videos"
   | "songs"
+  | "mail"
   | "hidden"
   | "gacha"
   | "assets";

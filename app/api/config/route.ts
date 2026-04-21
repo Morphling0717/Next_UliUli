@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
             baseRate: 1 / 10000,
             maxRate: 0.6,
           },
+          mail: {},
         };
 
     // 从数据库获取所有歌曲

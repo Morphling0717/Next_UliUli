@@ -18,6 +18,7 @@ const TABS: Array<{ id: AdminTabId; label: string; icon?: "lock" | "folder" }> =
   { id: "notifications", label: "通知 (Notifications)" },
   { id: "videos", label: "视频标题 (Titles)" },
   { id: "songs", label: "歌单 (Songs)" },
+  { id: "mail", label: "发信箱 (Mail)" },
   { id: "hidden", label: "隐藏 (Hidden)", icon: "lock" },
   { id: "gacha", label: "出金概率 (Gacha)", icon: "lock" },
   { id: "assets", label: "资源 (Assets)", icon: "folder" },
