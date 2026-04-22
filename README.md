@@ -20,8 +20,9 @@
 - 🛠 **Admin 后台**：`/admin` 登录后可编辑 SITE_CONFIG、歌单、上传图片到 `/public/memes`、`/public/pic`。
 - ⚔️ **Name Arena**：`lib/namearena/` 下的文字战斗引擎（battleEngine / skills / jobs / data，独立子系统）。
 - 👥 **用户系统**：注册 / 登录（PBKDF2 + salt）、token 保存抽卡进度到 SQLite。
-- � **匿名发信箱 MAIL_BOX**：基于 `@windchime/embed` 包集成的匿名留言系统。访客从主页左下 SpeedDial 投信，经 **Cloudflare Turnstile** 人机校验 + 前后端双层限流（fingerprint / IP）+ 敏感词过滤，进入后台 `/mail` 管理。所有访客可见文案可在 Admin `/admin · 发信箱` tab 自由编辑。
-- � **一键 Docker**：内置 `Dockerfile` + `docker-compose.yml`，含原生模块 `sqlite3` 的 `npm rebuild --build-from-source`。
+- 📬 **匿名发信箱 MAIL_BOX**：基于 `@windchime/embed` 包集成的匿名留言系统。访客从主页左下 SpeedDial 投信，经 **Cloudflare Turnstile** 人机校验 + 前后端双层限流（fingerprint / IP）+ 敏感词过滤，进入后台 `/mail` 管理。所有访客可见文案可在 Admin `/admin · 发信箱` tab 自由编辑。
+- 🎂 **主题收件箱（Mail Topics）**：主播为生日 / 周年 / 节日等活动开独立投信主题（公开路径 `/m/{slug}`），内置 5 种状态派生（常驻 / 进行中 / 未开始 / 已结束 / 已归档）、管理台主题 Tab 栏 + `📁 往期活动` 归档抽屉、全站顶部 `GlobalMailBanner` 活动横幅。详见 [主题收件箱](#-主题收件箱mail-topics-子系统) 章节。
+- 🐳 **一键 Docker**：内置 `Dockerfile` + `docker-compose.yml`，含原生模块 `sqlite3` 的 `npm rebuild --build-from-source`。
 
 ---
 
@@ -117,7 +118,8 @@ TURNSTILE_SECRET_KEY=
 | `site_config`   | 网站配置 JSON（首页 / 档案 / 直播 / 抽卡参数等）         |
 | `songs`         | 普通歌单（分类 / 歌名 / 歌手）                           |
 | `hidden_songs`  | 隐藏歌单（解锁后可见）                                   |
-| `mail_messages` | 匿名来信（text / nickname / linkUrl / senderFingerprint / isRead / isFavorited） |
+| `mail_messages` | 匿名来信（text / nickname / linkUrl / senderFingerprint / isRead / isFavorited / **topic_id**） |
+| `mail_topics`   | 活动主题（slug / title / description / note / is_default / is_enabled / starts_at / ends_at / archived_at / sort_order）|
 | `mail_blocked_senders` | 拉黑的 senderFingerprint / IP 黑名单（后台可维护）             |
 | `mail_blocked_terms`   | 敏感词列表（命中后来信 API 直接 422，不写库）                       |
 | `mail_settings`        | 发信箱开关状态 KV（后台 `/mail` 页面的 `ONLINE/OFFLINE` 切换）      |
@@ -160,10 +162,12 @@ TURNSTILE_SECRET_KEY=
 
 公开（访客可用）：
 
-| 方法   | 路径                  | 说明                                                                      |
-| ------ | --------------------- | ------------------------------------------------------------------------- |
-| `GET`  | `/api/mail/settings`  | 读取开关状态（`enabled: boolean`）；前端关闭态按灰 SpeedDial                 |
-| `POST` | `/api/mail/messages`  | 投信（text + 可选 nickname / linkUrl），Turnstile + 限流 + 敏感词校验后入库 |
+| 方法   | 路径                        | 说明                                                                      |
+| ------ | --------------------------- | ------------------------------------------------------------------------- |
+| `GET`  | `/api/mail/settings`        | 读取开关状态（`enabled: boolean`）；前端关闭态按灰 SpeedDial                 |
+| `POST` | `/api/mail/messages`        | 投信（text + 可选 nickname / linkUrl / **topicSlug**），Turnstile + 限流 + 敏感词 + 主题状态校验后入库 |
+| `GET`  | `/api/mail/topics`          | 当前可投信的活动主题列表（仅 `is_enabled=1` AND 非归档 AND 在时间窗内 AND `is_default=0`）              |
+| `GET`  | `/api/mail/topics/[idOrSlug]` | 单个主题的公开字段（`/m/{slug}` SSR 预取用；不返回 `note` 等内部字段）            |
 
 后台（需 `MAIL_AUTH_PASSWORD` 登录后的 signed cookie）：
 
@@ -171,7 +175,7 @@ TURNSTILE_SECRET_KEY=
 | -------- | ---------------------------------------- | ------------------------------ |
 | `POST`   | `/api/mail/auth/login`                   | 用 `MAIL_AUTH_PASSWORD` 登录    |
 | `POST`   | `/api/mail/auth/logout`                  | 登出                            |
-| `GET`    | `/api/mail/messages`                     | 列序列表（分页）             |
+| `GET`    | `/api/mail/messages`                     | 列序列表（分页 · 支持 `?topicId=` 按主题过滤） |
 | `PATCH`  | `/api/mail/messages/[id]`                | 标已读 / 收藏               |
 | `DELETE` | `/api/mail/messages/[id]`                | 删除                            |
 | `POST`   | `/api/mail/messages/batch`               | 批量删除 / 批量已读          |
@@ -180,6 +184,11 @@ TURNSTILE_SECRET_KEY=
 | `GET`    | `/api/mail/blocked-terms`                | 敏感词列表                      |
 | `PUT`    | `/api/mail/blocked-terms`                | 全量替换敏感词库                |
 | `PATCH`  | `/api/mail/settings`                     | 切换 ONLINE/OFFLINE            |
+| `GET`    | `/api/mail/topics`                       | 列全部主题（管理端附带 `unreadCount` / `flaggedCount` / 派生 `state`）；`?include=archived` 控制是否含归档 |
+| `POST`   | `/api/mail/topics`                       | 新建主题（slug 校验 `[a-z0-9-]` 唯一 + 时间窗合理性）                                                    |
+| `GET`    | `/api/mail/topics/[idOrSlug]`            | 主题详情（管理端返回含 `note` 等全字段）                                                                  |
+| `PATCH`  | `/api/mail/topics/[idOrSlug]`            | 更新主题字段 / 开关 / 时间窗；`archivedAt: null` 用于恢复归档                                             |
+| `DELETE` | `/api/mail/topics/[idOrSlug]`            | 归档主题（写入 `archived_at`；默认主题不可归档）                                                          |
 
 ---
 
@@ -243,19 +252,37 @@ Next_UliUli/
 ### 📬 发信箱子系统追加路径
 
 ```
-├─ components/mail/                  # 访客侧发信箱组件
+├─ components/mail/                  # 访客 / 管理台 / 主题子系统共享组件
 │  ├─ MailSpeedDial.tsx              # 主页左下浮动入口
-│  ├─ MailSendModal.tsx              # 投信弹窗（包裹 WindChimeSender）
+│  ├─ MailSendModal.tsx              # 常规信箱投信弹窗（包裹 WindChimeSender）
 │  ├─ MailAuthGate.tsx               # /mail 后台密码门
 │  ├─ BlockedTermsPanel.tsx          # 敏感词管理面板
 │  ├─ FlaggedMailPanel.tsx           # 被标记可疑来信
-│  └─ mail-theme.ts                  # WindChime 组件赛博朋克主题映射
+│  ├─ mail-theme.ts                  # WindChime 组件赛博朋克主题映射
+│  ├─ GlobalMailBanner.tsx           # 全站顶部活动公告条（有活动时自动挂载）
+│  ├─ MailTopicTabs.tsx              # /mail 管理台主题 Tab 栏（按状态染色 + badge）
+│  ├─ NewTopicModal.tsx              # 新建主题表单（slug / title / 时间窗）
+│  ├─ ArchivedTopicsDrawer.tsx       # 📁 往期活动抽屉（搜索 / 年份分组 / 恢复）
+│  ├─ ArchiveConfirmModal.tsx        # 归档二次确认弹窗
+│  ├─ TopicMailForm.tsx              # /m/{slug} active 状态投信页 UI
+│  ├─ TopicStatePage.tsx             # /m/{slug} ended / disabled / scheduled 状态页
+│  ├─ mail-time.ts                   # 北京时间格式化（跨客户端/SSR 一致）
+│  └─ mail-topic-types.ts            # Topic / state 前后端共享 TS 类型
 ├─ app/mail/page.tsx                 # 后台管理页（主播登录后用）
+├─ app/m/                            # 公开访客侧活动主题路由（force-dynamic）
+│  ├─ page.tsx                       # 活动聚合列表页（/m）
+│  └─ [slug]/page.tsx                # 单活动投信页 / 状态分发（/m/{slug}）
 ├─ app/api/mail/                     # 邮箱 REST 接口（见上方表）
+│  ├─ messages/                      # 投信 / 列表 / 批量 / 标记
+│  ├─ topics/                        # 主题 CRUD（route.ts + [id]/route.ts）
+│  ├─ blocklist/                     # 黑名单
+│  ├─ blocked-terms/                 # 敏感词
+│  └─ settings/                      # 发信箱总开关
 ├─ lib/mail-auth.ts                  # signed cookie 签发 / 校验
 ├─ lib/mail-rate-limit.ts            # IP + fingerprint 双重限流
 ├─ lib/mail-turnstile.ts             # Cloudflare Turnstile 服务端校验
 ├─ lib/mail-sfx.ts                   # Web Audio 合成的 SIGNAL SENT 音效
+├─ lib/mail-topics.ts                # 主题 CRUD + 状态派生 + 时间窗校验（Mail Topics 核心服务层）
 ├─ vendor/windchime-embed-0.3.1.tgz  # 本地 tarball，不发布到 npm
 ├─ bin/upgrade.sh                    # VPS 升级脚本（备份 DB + 生成 salt）
 └─ middleware.ts                     # /mail 路由密码保护
@@ -348,6 +375,10 @@ cp codes.db codes.db.$(date +%F).bak
 
 访问 `/mail`（密码 = `MAIL_AUTH_PASSWORD`）。页面顶部开关控制 `ONLINE/OFFLINE`，卡片格列表展示来信、收藏、拉黑、删除、敏感词维护。内嵌分享海报编辑器（WindChime QR Poster）生成二维码卡片。
 
+**新建活动主题 / 归档往期活动:**
+
+进 `/mail` → 主题 Tab 栏右侧 `+ 新建主题` → 填 slug（`[a-z0-9-]`）/ 标题 / 简介 / 时间窗 → 保存。需要结束活动时：该主题 Tab 右上角 `待归档` 图标一键归档；查看过往活动走右侧 `📁 往期活动` 抽屉（支持搜索 + 按年份分组 + 恢复）。
+
 ---
 
 ## 📬 匿名发信箱（Mail 子系统）
@@ -402,6 +433,99 @@ cp codes.db codes.db.$(date +%F).bak
 
 - 想换 `@windchime/embed` 版本：更新 `vendor/windchime-embed-0.x.y.tgz`，同步改 `package.json` 的 `file:./vendor/...` 指向
 - 想扩展邮箱表或 API：函数入口都在 `app/api/mail/*`，数据库模型在 `lib/db.ts` 的 `initDb()` 部分（内嵌 `CREATE TABLE IF NOT EXISTS mail_*`）
+
+---
+
+## 🎂 主题收件箱（Mail Topics 子系统）
+
+> 2026-04 版本加入，为活动式投信场景（生日 / 周年 / 节日）提供独立于常规信箱的完整子系统。常规信箱不受影响、老数据零迁移代价。
+
+### 三级 URL 层级
+
+```
+/               ← 主站（常规信箱走左下 SpeedDial，不走 /m）
+/m              ← 活动聚合页（列出所有当前可投信的活动卡片）
+/m/{slug}       ← 单活动页（投信 / 状态 / 归档均走此路径）
+```
+
+- **全站顶部横幅** `GlobalMailBanner`：有活动时自动挂到所有页面顶部，1 个活动直链 `/m/{slug}`，≥ 2 个活动跳 `/m` 聚合页
+- 横幅支持 × 关闭，localStorage 记录当前活动集合的 signature；新开活动导致 signature 变化时重新显示，避免永久屏蔽
+- 返回按钮层级：`/m/{slug}` →「返回活动列表」→ `/m` →「返回主站」→ `/`（不会从活动页一步跳回主站）
+
+### 主题的 5 种状态
+
+状态由现有字段在读取时**派生**，不占额外 DB 列：
+
+| 状态 | 条件 | 主 Tab 栏 | 📁 往期活动抽屉 |
+|---|---|---|---|
+| **常驻** | `is_default=1` | ✅ 永远最左，不可归档 | — |
+| **进行中** | `is_enabled=1` AND `now ∈ [starts_at, ends_at]` AND `archived_at IS NULL` | ✅ 高亮 | — |
+| **未开始** | `is_enabled=1` AND `now < starts_at` AND `archived_at IS NULL` | ✅ 冷色虚线 | — |
+| **已结束** | `now > ends_at` AND `archived_at IS NULL` | ✅ 灰底 + 待归档提示 | — |
+| **已归档** | `archived_at IS NOT NULL` | ❌ | ✅ |
+
+API 端：`GET /api/mail/topics` 返回时，列表中每个主题都会附加 `state` 字段供前端直接染色 / 分组 / 排序，避免前端自己算时间窗。
+
+### 管理台 UX（`/mail`）
+
+- **主题 Tab 栏**（`MailTopicTabs`）：参考 `AdminTabsNav.tsx` 的 `flex-wrap` 风格平铺，每个 tab 带标题 + 未读 badge + 状态着色
+- **`+ 新建主题`**（`NewTopicModal`）：slug 自动校验唯一 + `[a-z0-9-]`，时间窗合理性校验
+- **`📁 往期活动 (N)`**（`ArchivedTopicsDrawer`）：抽屉式归档列表，按年份分组，支持搜索 / 查看信件 / 恢复（清空 `archived_at`）
+- **已结束 tab 上 `待归档` 小图标**：`ArchiveConfirmModal` 二次确认后直接归档，不用进入主题内部
+- 多个已结束时顶部出现 `一键归档全部 →` 提示，防止 tab 栏堆积
+
+### 访客 UX（`/m/{slug}`）
+
+服务端按主题状态动态分发渲染组件（`app/m/[slug]/page.tsx:resolveVariant`）：
+
+- `active` → `<TopicMailForm>` 投信表单（带活动 banner + 截止时间；indexable）
+- `ended` / `disabled` / `scheduled` → `<TopicStatePage>` 友好提示页（HTTP 200 + noindex）
+- `isDefault=1` → `redirect('/')`（常规信箱走首页 SpeedDial，不给第二入口）
+- `slug` 不存在 → `notFound()` 走 Next 默认 404
+
+`<TopicStatePage>` 的 `scheduled` 状态自带倒计时组件；`ended` 时显示 `活动已于 XXX 结束` 文案。
+
+### 安全原则
+
+- **主题绑定 URL**：`topicSlug` 只从 URL 路径参数 → `WindChimeSender` props → API body 传递，**从不在表单里提供选择控件**，杜绝访客误发或篡改
+- **服务端二次校验**：`POST /api/mail/messages` 收到非 default 的 `topicSlug` 时，服务端再次查 DB 校验 `is_enabled` + 时间窗 + 未归档状态，避免前端缓存污染
+- **写入保护**：`POST /api/mail/topics` 剥离客户端传入的 `id` / `is_default` / `created_at`，服务端自己生成
+
+### Force Dynamic 防坑 ⚠
+
+`app/m/page.tsx` 和 `app/m/[slug]/page.tsx` 必须声明 `export const dynamic = 'force-dynamic'`。
+
+原因：这两页都是 **Server Component + 直接查 SQLite**，Next.js 默认会在 `next build` 时把静态路由预渲染一次。线上 Docker 镜像构建阶段 DB 为空，导致 `/m` 在生产环境永远返回「当前没有进行中的活动」。`GlobalMailBanner` 是 Client Component + runtime fetch，不受影响。
+
+改动新文件时请保留这一行，或同时设置 `revalidate = 0`。
+
+### 数据模型
+
+```sql
+CREATE TABLE IF NOT EXISTS mail_topics (
+  id           TEXT PRIMARY KEY,           -- UUID
+  slug         TEXT UNIQUE NOT NULL,       -- URL 片段，[a-z0-9-]，default 主题 slug='default'
+  title        TEXT NOT NULL,
+  description  TEXT,                       -- 访客可见
+  note         TEXT,                       -- 内部备注，仅管理端返回
+  is_default   INTEGER NOT NULL DEFAULT 0, -- 只有 1 行 is_default=1（启动时自举）
+  is_enabled   INTEGER NOT NULL DEFAULT 1,
+  starts_at    TEXT,                       -- ISO 8601，NULL = 立即生效
+  ends_at      TEXT,                       -- ISO 8601，NULL = 永久
+  archived_at  TEXT,                       -- NULL = 未归档
+  sort_order   INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+
+ALTER TABLE mail_messages ADD COLUMN topic_id TEXT REFERENCES mail_topics(id);
+```
+
+启动时 `lib/db.ts` 自动建表并写入一条 `is_default=1` 的 `default` 行，历史 `mail_messages` 的 `topic_id` 以迁移脚本回填为 default 主题的 id，保证旧数据可在新管理台「常规信箱」tab 里继续看到。
+
+### 设计文档
+
+完整设计 / 决策过程 / 8 个产品 Q&A 拍板记录见仓库根目录的 [`MAIL_TOPICS_PROPOSAL.md`](./MAIL_TOPICS_PROPOSAL.md)。新增 / 调整功能前建议先读该文档的 §6（UX）和 §9（已拍板问题）。
 
 ---
 
