@@ -89,11 +89,11 @@ export function TopicStatePage({
 
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <Link
-            href="/"
+            href="/m"
             className="flex items-center gap-2 rounded-lg border border-cyan-400/60 bg-black/60 px-5 py-2.5 font-mono text-sm text-cyan-200 transition hover:bg-cyan-400/10"
           >
             <ArrowLeft className="h-4 w-4" />
-            返回主站
+            返回活动列表
           </Link>
         </div>
 

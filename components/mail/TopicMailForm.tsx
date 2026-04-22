@@ -95,14 +95,16 @@ export function TopicMailForm({ topic, texts }: Props) {
       />
 
       <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-2xl flex-col px-4 py-8 sm:py-12">
-        {/* 顶部导航：回主站 */}
+        {/* 顶部导航：返回活动列表（/m），而非直接跳回主站。
+            在 /m 页面里还有一个「返回主站」按钮负责最后一跳，形成
+            /  ←  /m  ←  /m/{slug} 的三级层级。 */}
         <div className="mb-6">
           <Link
-            href="/"
+            href="/m"
             className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-black/40 px-3 py-1.5 font-mono text-[11px] text-cyan-200 transition hover:bg-cyan-400/10"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            返回主站
+            返回活动列表
           </Link>
         </div>
 
