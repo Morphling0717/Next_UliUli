@@ -2,8 +2,9 @@
 
  
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence, useMotionTemplate, useMotionValue } from 'framer-motion';
+import type { SiteConfig } from '@/app/admin/types';
 
 // --- Types ---
 export interface IconProps {
@@ -26,13 +27,13 @@ export interface GlassCardProps {
 export interface GoldenLuckModalProps {
   isOpen: boolean;
   onClose: () => void;
-  config?: any;
+  config?: SiteConfig;
 }
 
 // --- 1. 图标系统 ---
 const Icon: React.FC<IconProps> = ({ path, className = "", size = 20 }) => (
   <svg
-    xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)"
+    xmlns="http://www.w3.org/2000/svg"
     width={size}
     height={size}
     viewBox="0 0 24 24"
@@ -149,23 +150,16 @@ export const GlassCard: React.FC<GlassCardProps> = ({ children, className = "", 
   );
 };
 
+const formatGoldenLuckTime = () =>
+  new Date().toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+  });
+
 // --- 4. 欧皇弹窗组件 ---
 export const GoldenLuckModal: React.FC<GoldenLuckModalProps> = ({ isOpen, onClose, config }) => {
-  const [timeStr, setTimeStr] = useState("");
+  const [timeStr] = useState(formatGoldenLuckTime);
   const notifCfg = config?.notifications || {};
-
-  useEffect(() => {
-    if (isOpen) {
-      const now = new Date();
-       
-      setTimeStr(
-        now.toLocaleString("zh-CN", {
-          timeZone: "Asia/Shanghai",
-          hour12: false,
-        })
-      );
-    }
-  }, [isOpen]);
 
   return (
     <AnimatePresence>

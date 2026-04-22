@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { SiteConfig } from '@/app/admin/types';
 import { Icons } from './UI';
 
 const NameArenaGame = dynamic(
@@ -10,8 +11,20 @@ const NameArenaGame = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-full min-h-[200px] items-center justify-center bg-black font-mono text-sm text-slate-500">
+      <div className="flex h-full min-h-50 items-center justify-center bg-black font-mono text-sm text-slate-500">
         加载名字大乱斗…
+      </div>
+    ),
+  },
+);
+
+const DgpGame = dynamic(
+  () => import('@/components/dgp/DgpGame').then((m) => ({ default: m.DgpGame })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full min-h-50 items-center justify-center bg-black font-mono text-sm text-slate-500">
+        加载欲望大奖赛…
       </div>
     ),
   },
@@ -20,7 +33,7 @@ const NameArenaGame = dynamic(
 export interface GameModalProps {
   isOpen: boolean;
   onClose: () => void;
-  config?: any;
+  config?: SiteConfig;
 }
 
 export const GameModal: React.FC<GameModalProps> = ({ isOpen, onClose, config }) => {
@@ -105,7 +118,7 @@ export const GameModal: React.FC<GameModalProps> = ({ isOpen, onClose, config })
                         </p>
                       </div>
                       <div className="text-pink-400 font-mono text-xs flex items-center justify-between">
-                        <span>{gameCfg.dgpStatus || "STATUS: MIGRATING..."}</span>
+                        <span>{gameCfg.dgpStatus || "STATUS: ONLINE"}</span>
                         <Icons.Sparkles size={20} />
                       </div>
                     </div>
@@ -133,10 +146,8 @@ export const GameModal: React.FC<GameModalProps> = ({ isOpen, onClose, config })
                     )}
                     
                     {activeGame === 'dgp' && (
-                        <div className="h-full flex flex-col items-center justify-center text-center">
-                            <div className="text-6xl mb-4 animate-bounce">🚧</div>
-                            <h2 className="text-2xl text-(--neon-blue) font-bold mb-2">{gameCfg.migratingTitle || "MODULE MIGRATING"}</h2>
-                            <p className="text-gray-500 font-mono text-sm">{gameCfg.migratingDesc || "DGP 模块正在向 Vite 架构迁移中..."}</p>
+                        <div className="h-full w-full min-h-0">
+                            <DgpGame />
                         </div>
                     )}
                 </div>

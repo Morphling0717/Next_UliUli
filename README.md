@@ -1,6 +1,6 @@
 # UliUli · 虚拟主播站点 (new-website)
 
-> 虚拟主播 **UliUli** 的单页展示与互动站点 —— **Next.js 16** (App Router) + **React 18** + **TypeScript** + **SQLite**。集成 Three.js 赛博朋克背景、可视化 Admin 后台、抽卡系统（保底/软保底）、兑换码、歌单管理、本地视频解锁、以及 Name Arena 对战小游戏。线上：<https://www.uliuli.cc>
+> 虚拟主播 **UliUli** 的单页展示与互动站点 —— **Next.js 16** (App Router) + **React 18** + **TypeScript** + **SQLite**。集成 Three.js 赛博朋克背景、可视化 Admin 后台、抽卡系统（保底/软保底）、兑换码、歌单管理、本地视频解锁、匿名发信箱 / Mail Topics，以及 **Name Arena + DGP** 双游戏模块。线上：<https://www.uliuli.cc>
 
 > ⚠️ 为避免"本地能跑、1Panel 上翻车"，生产环境**强烈建议**统一用 Docker 部署并持久化挂载数据库与上传目录。
 
@@ -18,7 +18,9 @@
 - 🎁 **兑换码系统**：`POST /api/generate` 生成、`POST /api/redeem` 核销、`POST /api/check_status` 批量查询。
 - 🔓 **隐藏内容解锁**：`DEV_UNLOCK_PASSWORD` 解锁后切换到隐藏视频 (`/video/2.mp4`) 和隐藏歌单。
 - 🛠 **Admin 后台**：`/admin` 登录后可编辑 SITE_CONFIG、歌单、上传图片到 `/public/memes`、`/public/pic`。
+- 🕹 **双游戏大厅**：`GameModal` 内置 **Name Arena** 与 **欲望大奖赛（DGP）** 两个入口，游戏大厅文案可在 Admin 的 `games` 配置中调整。
 - ⚔️ **Name Arena**：`lib/namearena/` 下的文字战斗引擎（battleEngine / skills / jobs / data，独立子系统）。
+- 🏁 **DGP（欲望大奖赛）**：`components/dgp/` + `lib/dgp/` 下的生存战斗模拟器，支持可选 `SIMULATION_SEED`；相同 seed + 相同初始阵容可复现同一场对局日志 / 回放。
 - 👥 **用户系统**：注册 / 登录（PBKDF2 + salt）、token 保存抽卡进度到 SQLite。
 - 📬 **匿名发信箱 MAIL_BOX**：基于 `@windchime/embed` 包集成的匿名留言系统。访客从主页左下 SpeedDial 投信，经 **Cloudflare Turnstile** 人机校验 + 前后端双层限流（fingerprint / IP）+ 敏感词过滤，进入后台 `/mail` 管理。所有访客可见文案可在 Admin `/admin · 发信箱` tab 自由编辑。
 - 🎂 **主题收件箱（Mail Topics）**：主播为生日 / 周年 / 节日等活动开独立投信主题（公开路径 `/m/{slug}`），内置 5 种状态派生（常驻 / 进行中 / 未开始 / 已结束 / 已归档）、管理台主题 Tab 栏 + `📁 往期活动` 归档抽屉、全站顶部 `GlobalMailBanner` 活动横幅。详见 [主题收件箱](#-主题收件箱mail-topics-子系统) 章节。
@@ -34,7 +36,7 @@
 | 样式      | **Tailwind CSS 4** (`@tailwindcss/postcss`) · 自定义 CSS 变量霓虹色板         |
 | 动画 / 3D | **Framer Motion 11** · **GSAP 3** · **Three.js 0.183**                        |
 | 图标 / UI | **lucide-react** · **sweetalert2**（弹窗）                                    |
-| 邮箱组件 | **@windchime/embed 0.3.1**（本地 tgz）· **Cloudflare Turnstile**（可选）            |
+| 邮箱组件  | **@windchime/embed 0.3.1**（本地 tgz）· **Cloudflare Turnstile**（可选）      |
 | 数据库    | **sqlite3**（原生模块，文件型）                                               |
 | 部署      | **Docker**（node:20-bookworm-slim 多阶段构建）+ **1Panel** 友好               |
 
@@ -63,13 +65,14 @@ npm run dev
 
 ## 📜 npm scripts
 
-| 命令            | 说明                                            |
-| --------------- | ----------------------------------------------- |
-| `npm run dev`   | 启动开发服务器（Turbopack）                     |
-| `npm run build` | 生产构建                                        |
-| `npm run start` | 启动生产服务（需先 `npm run build`）            |
-| `npm run lint`  | ESLint 9 代码检查                               |
-| `npm run clean` | 清理 `.next` / `out` / `build` / `node_modules` |
+| 命令                 | 说明                                                    |
+| -------------------- | ------------------------------------------------------- |
+| `npm run dev`        | 启动开发服务器（Turbopack）                             |
+| `npm run dev:mobile` | 启动开发服务器并监听 `0.0.0.0`（便于手机 / 局域网调试） |
+| `npm run build`      | 生产构建                                                |
+| `npm run start`      | 启动生产服务（需先 `npm run build`）                    |
+| `npm run lint`       | ESLint 9 代码检查                                       |
+| `npm run clean`      | 清理 `.next` / `out` / `build` / `node_modules`         |
 
 ---
 
@@ -110,19 +113,19 @@ TURNSTILE_SECRET_KEY=
 
 ## 🗄 数据库结构（`lib/db.ts` 自动建表）
 
-| 表              | 作用                                                     |
-| --------------- | -------------------------------------------------------- |
-| `users`         | 用户注册 / 登录 / token / 抽卡进度 JSON（PBKDF2 + salt） |
-| `gift_codes`    | 兑换码（`code` 主键 / `item_id` / `status`）             |
-| `global_config` | 全局 KV（目前存 `pityCount` 抽卡保底计数）               |
-| `site_config`   | 网站配置 JSON（首页 / 档案 / 直播 / 抽卡参数等）         |
-| `songs`         | 普通歌单（分类 / 歌名 / 歌手）                           |
-| `hidden_songs`  | 隐藏歌单（解锁后可见）                                   |
-| `mail_messages` | 匿名来信（text / nickname / linkUrl / senderFingerprint / isRead / isFavorited / **topic_id**） |
-| `mail_topics`   | 活动主题（slug / title / description / note / is_default / is_enabled / starts_at / ends_at / archived_at / sort_order）|
-| `mail_blocked_senders` | 拉黑的 senderFingerprint / IP 黑名单（后台可维护）             |
-| `mail_blocked_terms`   | 敏感词列表（命中后来信 API 直接 422，不写库）                       |
-| `mail_settings`        | 发信箱开关状态 KV（后台 `/mail` 页面的 `ONLINE/OFFLINE` 切换）      |
+| 表                     | 作用                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `users`                | 用户注册 / 登录 / token / 抽卡进度 JSON（PBKDF2 + salt）                                                                 |
+| `gift_codes`           | 兑换码（`code` 主键 / `item_id` / `status`）                                                                             |
+| `global_config`        | 全局 KV（目前存 `pityCount` 抽卡保底计数）                                                                               |
+| `site_config`          | 网站配置 JSON（首页 / 档案 / 直播 / 抽卡参数等）                                                                         |
+| `songs`                | 普通歌单（分类 / 歌名 / 歌手）                                                                                           |
+| `hidden_songs`         | 隐藏歌单（解锁后可见）                                                                                                   |
+| `mail_messages`        | 匿名来信（text / nickname / linkUrl / senderFingerprint / isRead / isFavorited / **topic_id**）                          |
+| `mail_topics`          | 活动主题（slug / title / description / note / is_default / is_enabled / starts_at / ends_at / archived_at / sort_order） |
+| `mail_blocked_senders` | 拉黑的 senderFingerprint / IP 黑名单（后台可维护）                                                                       |
+| `mail_blocked_terms`   | 敏感词列表（命中后来信 API 直接 422，不写库）                                                                            |
+| `mail_settings`        | 发信箱开关状态 KV（后台 `/mail` 页面的 `ONLINE/OFFLINE` 切换）                                                           |
 
 首次启动时若表不存在会自动创建。**旧版 `public/data.js` 的数据已迁移至 SQLite**,详见 [`MIGRATION_GUIDE.md`](./MIGRATION_GUIDE.md)。
 
@@ -162,33 +165,33 @@ TURNSTILE_SECRET_KEY=
 
 公开（访客可用）：
 
-| 方法   | 路径                        | 说明                                                                      |
-| ------ | --------------------------- | ------------------------------------------------------------------------- |
-| `GET`  | `/api/mail/settings`        | 读取开关状态（`enabled: boolean`）；前端关闭态按灰 SpeedDial                 |
-| `POST` | `/api/mail/messages`        | 投信（text + 可选 nickname / linkUrl / **topicSlug**），Turnstile + 限流 + 敏感词 + 主题状态校验后入库 |
-| `GET`  | `/api/mail/topics`          | 当前可投信的活动主题列表（仅 `is_enabled=1` AND 非归档 AND 在时间窗内 AND `is_default=0`）              |
-| `GET`  | `/api/mail/topics/[idOrSlug]` | 单个主题的公开字段（`/m/{slug}` SSR 预取用；不返回 `note` 等内部字段）            |
+| 方法   | 路径                          | 说明                                                                                                   |
+| ------ | ----------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET`  | `/api/mail/settings`          | 读取开关状态（`enabled: boolean`）；前端关闭态按灰 SpeedDial                                           |
+| `POST` | `/api/mail/messages`          | 投信（text + 可选 nickname / linkUrl / **topicSlug**），Turnstile + 限流 + 敏感词 + 主题状态校验后入库 |
+| `GET`  | `/api/mail/topics`            | 当前可投信的活动主题列表（仅 `is_enabled=1` AND 非归档 AND 在时间窗内 AND `is_default=0`）             |
+| `GET`  | `/api/mail/topics/[idOrSlug]` | 单个主题的公开字段（`/m/{slug}` SSR 预取用；不返回 `note` 等内部字段）                                 |
 
 后台（需 `MAIL_AUTH_PASSWORD` 登录后的 signed cookie）：
 
-| 方法     | 路径                                   | 说明                            |
-| -------- | ---------------------------------------- | ------------------------------ |
-| `POST`   | `/api/mail/auth/login`                   | 用 `MAIL_AUTH_PASSWORD` 登录    |
-| `POST`   | `/api/mail/auth/logout`                  | 登出                            |
-| `GET`    | `/api/mail/messages`                     | 列序列表（分页 · 支持 `?topicId=` 按主题过滤） |
-| `PATCH`  | `/api/mail/messages/[id]`                | 标已读 / 收藏               |
-| `DELETE` | `/api/mail/messages/[id]`                | 删除                            |
-| `POST`   | `/api/mail/messages/batch`               | 批量删除 / 批量已读          |
-| `GET`    | `/api/mail/blocklist`                    | 黑名单列表                      |
-| `DELETE` | `/api/mail/blocklist/[senderFingerprint]`| 移除黑名单条目                  |
-| `GET`    | `/api/mail/blocked-terms`                | 敏感词列表                      |
-| `PUT`    | `/api/mail/blocked-terms`                | 全量替换敏感词库                |
-| `PATCH`  | `/api/mail/settings`                     | 切换 ONLINE/OFFLINE            |
-| `GET`    | `/api/mail/topics`                       | 列全部主题（管理端附带 `unreadCount` / `flaggedCount` / 派生 `state`）；`?include=archived` 控制是否含归档 |
-| `POST`   | `/api/mail/topics`                       | 新建主题（slug 校验 `[a-z0-9-]` 唯一 + 时间窗合理性）                                                    |
-| `GET`    | `/api/mail/topics/[idOrSlug]`            | 主题详情（管理端返回含 `note` 等全字段）                                                                  |
-| `PATCH`  | `/api/mail/topics/[idOrSlug]`            | 更新主题字段 / 开关 / 时间窗；`archivedAt: null` 用于恢复归档                                             |
-| `DELETE` | `/api/mail/topics/[idOrSlug]`            | 归档主题（写入 `archived_at`；默认主题不可归档）                                                          |
+| 方法     | 路径                                      | 说明                                                                                                       |
+| -------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/api/mail/auth/login`                    | 用 `MAIL_AUTH_PASSWORD` 登录                                                                               |
+| `POST`   | `/api/mail/auth/logout`                   | 登出                                                                                                       |
+| `GET`    | `/api/mail/messages`                      | 列序列表（分页 · 支持 `?topicId=` 按主题过滤）                                                             |
+| `PATCH`  | `/api/mail/messages/[id]`                 | 标已读 / 收藏                                                                                              |
+| `DELETE` | `/api/mail/messages/[id]`                 | 删除                                                                                                       |
+| `POST`   | `/api/mail/messages/batch`                | 批量删除 / 批量已读                                                                                        |
+| `GET`    | `/api/mail/blocklist`                     | 黑名单列表                                                                                                 |
+| `DELETE` | `/api/mail/blocklist/[senderFingerprint]` | 移除黑名单条目                                                                                             |
+| `GET`    | `/api/mail/blocked-terms`                 | 敏感词列表                                                                                                 |
+| `PUT`    | `/api/mail/blocked-terms`                 | 全量替换敏感词库                                                                                           |
+| `PATCH`  | `/api/mail/settings`                      | 切换 ONLINE/OFFLINE                                                                                        |
+| `GET`    | `/api/mail/topics`                        | 列全部主题（管理端附带 `unreadCount` / `flaggedCount` / 派生 `state`）；`?include=archived` 控制是否含归档 |
+| `POST`   | `/api/mail/topics`                        | 新建主题（slug 校验 `[a-z0-9-]` 唯一 + 时间窗合理性）                                                      |
+| `GET`    | `/api/mail/topics/[idOrSlug]`             | 主题详情（管理端返回含 `note` 等全字段）                                                                   |
+| `PATCH`  | `/api/mail/topics/[idOrSlug]`             | 更新主题字段 / 开关 / 时间窗；`archivedAt: null` 用于恢复归档                                              |
+| `DELETE` | `/api/mail/topics/[idOrSlug]`             | 归档主题（写入 `archived_at`；默认主题不可归档）                                                           |
 
 ---
 
@@ -217,12 +220,21 @@ Next_UliUli/
 │  ├─ Effects.tsx                 # ThreeBackground + CustomCursor
 │  ├─ ErrorBoundary.tsx
 │  ├─ Gacha.tsx                   # 抽卡系统 UI
-│  ├─ GameModal.tsx
+│  ├─ GameModal.tsx               # 游戏大厅 Modal（Name Arena + DGP）
 │  ├─ SongSystem.tsx              # 歌单搜索 / 展示
 │  ├─ UI.tsx                      # Toast / GoldenLuckModal 等
+│  ├─ dgp/                        # DGP setup / battle / replay UI
 │  └─ namearena/                  # Name Arena 战斗 UI
 ├─ lib/
 │  ├─ db.ts                       # sqlite3 初始化 + Promise 封装 + 哈希工具
+│  ├─ dgp/                        # DGP 引擎 / 数据 / RNG / 类型
+│  │  ├─ engine.ts
+│  │  ├─ data.ts
+│  │  ├─ logic.ts
+│  │  ├─ core.ts
+│  │  ├─ constants.ts
+│  │  ├─ rng.ts
+│  │  └─ types.ts
 │  └─ namearena/                  # 战斗引擎 / 技能 / 职业 / 数据
 │     ├─ battleEngine.ts
 │     ├─ skills.ts
@@ -288,8 +300,6 @@ Next_UliUli/
 └─ middleware.ts                     # /mail 路由密码保护
 ```
 
----
-
 ## 🏗 部署
 
 ### 方式 A：Docker Compose（推荐）
@@ -350,6 +360,10 @@ Node 必须是 20.x。需要挂载 / 备份 `codes.db` 与 `public/memes`、`pub
 
 在 Admin 内上传,文件落到 `public/memes/` 或 `public/pic/`,线上需挂载对应卷。
 
+**体验 DGP 可复现对局:**
+
+打开主站游戏大厅 → 进入 **DGP** → 添加至少 2 名骑士 → 选填 `SIMULATION_SEED` → Start。相同 seed + 相同初始阵容会生成一致的战斗流程，适合调试、分享与回放验证。
+
 **调整抽卡概率:**
 
 Admin 后台 → 抽卡配置 → 修改 `baseRate` / `maxRate` / `softPityStart` / `pityThreshold`。
@@ -367,10 +381,6 @@ UPDATE global_config SET value = '0' WHERE key = 'pityCount';
 cp codes.db codes.db.$(date +%F).bak
 ```
 
-**修改发信箱访客文案:**
-
-进 `/admin · 发信箱 (Mail)` tab，13 个字段分 4 组（入口按钮 / 弹窗主体 / 占位符 / 关闭态）。留空走代码内 fallback 默认值。改完 `Save` 直接写入 `site_config.mail`，前端 15 秒轮询自动拉新。
-
 **切换发信箱开关 / 读信:**
 
 访问 `/mail`（密码 = `MAIL_AUTH_PASSWORD`）。页面顶部开关控制 `ONLINE/OFFLINE`，卡片格列表展示来信、收藏、拉黑、删除、敏感词维护。内嵌分享海报编辑器（WindChime QR Poster）生成二维码卡片。
@@ -378,6 +388,37 @@ cp codes.db codes.db.$(date +%F).bak
 **新建活动主题 / 归档往期活动:**
 
 进 `/mail` → 主题 Tab 栏右侧 `+ 新建主题` → 填 slug（`[a-z0-9-]`）/ 标题 / 简介 / 时间窗 → 保存。需要结束活动时：该主题 Tab 右上角 `待归档` 图标一键归档；查看过往活动走右侧 `📁 往期活动` 抽屉（支持搜索 + 按年份分组 + 恢复）。
+
+---
+
+## 🏁 DGP（欲望大奖赛）子系统
+
+> 当前版本已接入 **deterministic seeded RNG**，DGP 不只是能玩，也更适合复盘、调试与后续测试。
+
+### 入口与 UI
+
+- **入口位置**：主页 `GameModal` 的 `DGP` 卡片。
+- **主要文件**：`components/dgp/DgpGame.tsx`
+- **玩法流程**：添加骑士 → 可选填写 `SIMULATION_SEED` → Start → 观看逐条播放的战斗日志与 HUD 回放。
+
+### 引擎结构
+
+- **核心引擎**：`lib/dgp/engine.ts`
+- **数据与规则**：`lib/dgp/data.ts`、`lib/dgp/logic.ts`、`lib/dgp/constants.ts`
+- **工具与类型**：`lib/dgp/core.ts`、`lib/dgp/rng.ts`、`lib/dgp/types.ts`
+
+### 当前版本的关键升级
+
+- **可选 seed 开局**：`DgpGame` 允许输入 `SIMULATION_SEED`，并在启动日志中显示 `REPLAY_SEED`。
+- **引擎级确定性**：`DgpEngine(initialPlayers, seed?)` 将战斗中的随机流程统一接到 `SeededRNG`。
+- **回放一致性提升**：引擎内原先依赖 `Math.random()` / `Date.now()` 的关键随机点与实体 ID 已改为实例 RNG 驱动，减少“同配置但不同结果”的漂移。
+- **适合调试与分享**：同一 seed + 同一初始阵容可以稳定复现同一场战斗过程，便于排查平衡性、复盘精彩对局、以及验证改动是否影响结果。
+
+### DGP 对开发者的价值
+
+- **调试更稳**：复现 battle log / stage event / buckle 掉落相关问题时，不再依赖“运气刚好再现一次”。
+- **测试更友好**：后续给纯逻辑函数补测试时，可以基于固定 seed 做 snapshot / regression 验证。
+- **文档更清晰**：`constants.ts` 与 `rng.ts` 把数值常量和随机策略从超大引擎文件里显式抽离出来，后续继续拆模块更容易。
 
 ---
 
@@ -456,13 +497,13 @@ cp codes.db codes.db.$(date +%F).bak
 
 状态由现有字段在读取时**派生**，不占额外 DB 列：
 
-| 状态 | 条件 | 主 Tab 栏 | 📁 往期活动抽屉 |
-|---|---|---|---|
-| **常驻** | `is_default=1` | ✅ 永远最左，不可归档 | — |
-| **进行中** | `is_enabled=1` AND `now ∈ [starts_at, ends_at]` AND `archived_at IS NULL` | ✅ 高亮 | — |
-| **未开始** | `is_enabled=1` AND `now < starts_at` AND `archived_at IS NULL` | ✅ 冷色虚线 | — |
-| **已结束** | `now > ends_at` AND `archived_at IS NULL` | ✅ 灰底 + 待归档提示 | — |
-| **已归档** | `archived_at IS NOT NULL` | ❌ | ✅ |
+| 状态       | 条件                                                                      | 主 Tab 栏             | 📁 往期活动抽屉 |
+| ---------- | ------------------------------------------------------------------------- | --------------------- | --------------- |
+| **常驻**   | `is_default=1`                                                            | ✅ 永远最左，不可归档 | —               |
+| **进行中** | `is_enabled=1` AND `now ∈ [starts_at, ends_at]` AND `archived_at IS NULL` | ✅ 高亮               | —               |
+| **未开始** | `is_enabled=1` AND `now < starts_at` AND `archived_at IS NULL`            | ✅ 冷色虚线           | —               |
+| **已结束** | `now > ends_at` AND `archived_at IS NULL`                                 | ✅ 灰底 + 待归档提示  | —               |
+| **已归档** | `archived_at IS NOT NULL`                                                 | ❌                    | ✅              |
 
 API 端：`GET /api/mail/topics` 返回时，列表中每个主题都会附加 `state` 字段供前端直接染色 / 分组 / 排序，避免前端自己算时间窗。
 
