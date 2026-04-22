@@ -4,6 +4,11 @@ import { getTopicBySlug, type Topic } from "@/lib/mail-topics";
 import { TopicMailForm } from "@/components/mail/TopicMailForm";
 import { TopicStatePage } from "@/components/mail/TopicStatePage";
 
+// 必须每次请求都重新读库，主题的开关 / 时间窗状态需要实时反映。
+// 即使是动态路由（[slug]），没有 generateStaticParams 时 Next 默认按需渲染，
+// 但在某些部署形态下数据仍可能被缓存，这里显式声明更稳妥。
+export const dynamic = "force-dynamic";
+
 type RouteProps = {
   params: Promise<{ slug: string }>;
 };

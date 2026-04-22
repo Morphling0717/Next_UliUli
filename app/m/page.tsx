@@ -4,6 +4,10 @@ import { ArrowLeft, CalendarClock, Sparkles } from "lucide-react";
 import { listTopics, type Topic } from "@/lib/mail-topics";
 import { formatBeijing } from "@/components/mail/mail-time";
 
+// 必须每次请求都重新执行 listTopics，否则 Next.js 会在 build 时静态预渲染一次，
+// 生产环境（Docker 镜像构建时 DB 可能为空或不可达）将永久返回空列表。
+export const dynamic = "force-dynamic";
+
 /**
  * 活动聚合页（方案 §6 / §8 PR3b）。
  *
