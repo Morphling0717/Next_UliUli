@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Archive, RotateCcw, X as CloseIcon } from "lucide-react";
+import { Archive, RotateCcw, Trash2, X as CloseIcon } from "lucide-react";
 import type { Topic } from "./mail-topic-types";
 import { formatBeijing } from "./mail-time";
 
@@ -39,7 +39,12 @@ export function ArchivedTopicsDrawer({
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<Topic[]>([]);
   const [search, setSearch] = useState("");
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{
+    id: string;
+    action: "restore" | "delete";
+  } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Topic | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,18 +67,30 @@ export function ArchivedTopicsDrawer({
   // 打开时拉；关闭时清搜索
   useEffect(() => {
     if (open) void load();
-    else setSearch("");
+    else {
+      setSearch("");
+      setDeleteTarget(null);
+      setDeleteError(null);
+    }
   }, [open, load]);
 
   // ESC 关闭
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (deleteTarget) {
+        if (busy?.action !== "delete") {
+          setDeleteTarget(null);
+          setDeleteError(null);
+        }
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [busy, deleteTarget, open, onClose]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -86,7 +103,7 @@ export function ArchivedTopicsDrawer({
 
   const onRestore = useCallback(
     async (topic: Topic) => {
-      setBusyId(topic.id);
+      setBusy({ id: topic.id, action: "restore" });
       try {
         const r = await fetch(
           `/api/mail/topics/${encodeURIComponent(topic.id)}`,
@@ -103,11 +120,53 @@ export function ArchivedTopicsDrawer({
       } catch (e) {
         alert(e instanceof Error ? e.message : "恢复失败");
       } finally {
-        setBusyId(null);
+        setBusy(null);
       }
     },
     [authHeader, onRestored],
   );
+
+  const openDeleteConfirm = useCallback((topic: Topic) => {
+    setDeleteError(null);
+    setDeleteTarget(topic);
+  }, []);
+
+  const closeDeleteConfirm = useCallback(() => {
+    if (busy?.action === "delete") return;
+    setDeleteTarget(null);
+    setDeleteError(null);
+  }, [busy]);
+
+  const onDelete = useCallback(
+    async () => {
+      if (!deleteTarget) return;
+
+      setBusy({ id: deleteTarget.id, action: "delete" });
+      setDeleteError(null);
+      try {
+        const r = await fetch(
+          `/api/mail/topics/${encodeURIComponent(deleteTarget.id)}/purge`,
+          {
+            method: "DELETE",
+            headers: authHeader,
+          },
+        );
+        if (!r.ok) throw new Error(await readError(r));
+        setItems((xs) => xs.filter((x) => x.id !== deleteTarget.id));
+        setDeleteTarget(null);
+      } catch (e) {
+        setDeleteError(e instanceof Error ? e.message : "删除失败");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [authHeader, deleteTarget],
+  );
+
+  const deleteBusy =
+    !!deleteTarget &&
+    busy?.id === deleteTarget.id &&
+    busy.action === "delete";
 
   if (typeof document === "undefined") return null;
 
@@ -115,6 +174,7 @@ export function ArchivedTopicsDrawer({
     <AnimatePresence>
       {open && (
         <motion.div
+          key="archived-topics-drawer"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -203,20 +263,115 @@ export function ArchivedTopicsDrawer({
                             </div>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          disabled={busyId === t.id}
-                          onClick={() => onRestore(t)}
-                          className="flex shrink-0 items-center gap-1 rounded-lg border border-cyan-400/60 bg-cyan-500/10 px-3 py-1.5 font-mono text-xs text-cyan-200 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" />
-                          {busyId === t.id ? "…" : "恢复"}
-                        </button>
+                        <div className="flex shrink-0 flex-col gap-2">
+                          <button
+                            type="button"
+                            disabled={busy?.id === t.id}
+                            onClick={() => onRestore(t)}
+                            className="flex items-center gap-1 rounded-lg border border-cyan-400/60 bg-cyan-500/10 px-3 py-1.5 font-mono text-xs text-cyan-200 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            {busy?.id === t.id && busy.action === "restore"
+                              ? "恢复中"
+                              : "恢复"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy?.id === t.id}
+                            onClick={() => openDeleteConfirm(t)}
+                            className="flex items-center gap-1 rounded-lg border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 font-mono text-xs text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            {busy?.id === t.id && busy.action === "delete"
+                              ? "删除中"
+                              : "永久删除"}
+                          </button>
+                        </div>
                       </div>
                     </li>
                   ))}
                 </ul>
               )}
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+      {open && deleteTarget && (
+        <motion.div
+          key={`archived-topic-delete-confirm-${deleteTarget.id}`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          className="fixed inset-0 z-[1150] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
+          onClick={closeDeleteConfirm}
+        >
+          <motion.div
+            initial={{ y: 24, opacity: 0, scale: 0.98 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 24, opacity: 0, scale: 0.98 }}
+            transition={{ type: "spring", damping: 22, stiffness: 260 }}
+            className="relative w-full max-w-md rounded-2xl border border-rose-500/60 bg-black/90 p-6 shadow-[0_0_40px_rgba(244,63,94,0.22)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={closeDeleteConfirm}
+              aria-label="关闭"
+              disabled={deleteBusy}
+              className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full border border-rose-500/60 bg-black/80 text-rose-300 transition hover:bg-rose-500 hover:text-black disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <CloseIcon className="h-4 w-4" />
+            </button>
+
+            <div className="mb-2 flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-rose-300" strokeWidth={2} />
+              <div className="font-['Orbitron',sans-serif] text-sm font-bold tracking-[0.12em] text-rose-200">
+                CONFIRM · 永久删除
+              </div>
+            </div>
+
+            <p className="mt-3 font-sans text-[14px] leading-relaxed text-rose-50">
+              你将永久删除主题
+              <span className="mx-1 font-bold text-rose-100">「{deleteTarget.title}」</span>
+              。这个操作会连同该主题下的所有留言一起清空，且无法恢复。
+            </p>
+
+            <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/[0.06] p-3 font-mono text-[11px] text-rose-100/90">
+              <div>
+                主题入口：<span className="text-rose-200">/m/{deleteTarget.slug}</span>
+              </div>
+              <div className="mt-1">
+                归档时间：<span className="text-rose-200">{formatBeijing(deleteTarget.archivedAt)}</span>
+              </div>
+              <div className="mt-2 text-rose-300/80">
+                建议仅用于清理测试主题或确认彻底废弃的旧活动。
+              </div>
+            </div>
+
+            {deleteError && (
+              <div className="mt-4 rounded-lg border border-rose-500/50 bg-rose-500/10 px-3 py-2 font-mono text-xs text-rose-300">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDeleteConfirm}
+                disabled={deleteBusy}
+                className="rounded-lg border border-gray-500/40 bg-black/60 px-4 py-2 font-mono text-xs text-gray-300 transition hover:bg-gray-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void onDelete()}
+                disabled={deleteBusy}
+                className="rounded-lg border border-rose-500/60 bg-rose-500/10 px-4 py-2 font-mono text-xs text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {deleteBusy ? "正在永久删除…" : "确认永久删除"}
+              </button>
             </div>
           </motion.div>
         </motion.div>

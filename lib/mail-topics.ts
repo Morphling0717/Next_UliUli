@@ -629,3 +629,29 @@ export async function archiveTopic(
 export async function restoreTopic(id: string): Promise<Topic> {
   return updateTopic(id, { archivedAt: null });
 }
+
+export async function deleteArchivedTopic(id: string): Promise<Topic> {
+  const current = await getTopicById(id);
+  if (!current) throw MailTopicErrors.notFound();
+  if (current.isDefault) {
+    throw new MailTopicError('DEFAULT_NOT_DELETABLE', 400, '默认主题不可删除');
+  }
+  if (!current.archivedAt) {
+    throw new MailTopicError('TOPIC_NOT_ARCHIVED', 409, '仅已归档主题可永久删除');
+  }
+
+  await run('BEGIN IMMEDIATE');
+  try {
+    await run('DELETE FROM mail_messages WHERE topic_id = ?', [id]);
+    await run('DELETE FROM mail_topics WHERE id = ?', [id]);
+    await run('COMMIT');
+  } catch (e) {
+    try {
+      await run('ROLLBACK');
+    } catch {
+    }
+    throw e;
+  }
+
+  return current;
+}
