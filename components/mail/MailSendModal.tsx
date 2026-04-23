@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Radio, X as CloseIcon } from "lucide-react";
@@ -32,6 +32,7 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   /** 从 /api/config 读到的 siteConfig.mail；传 undefined 则全部走默认。 */
   texts?: MailTexts;
+  enabled?: boolean;
 };
 
 /** 提交成功后，给用户看 success banner 的时长；到点自动关弹窗。 */
@@ -46,28 +47,8 @@ async function readError(res: Response): Promise<string> {
   return (await res.text().catch(() => "")) || res.statusText;
 }
 
-export function MailSendModal({ open, onOpenChange, texts }: Props) {
-  const [enabled, setEnabled] = useState<boolean | null>(null);
+export function MailSendModal({ open, onOpenChange, texts, enabled }: Props) {
   const closeTimerRef = useRef<number | null>(null);
-
-  // 打开时拉一次 settings
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch("/api/mail/settings", { cache: "no-store" });
-        if (!r.ok) return;
-        const j = (await r.json()) as { enabled?: boolean };
-        if (!cancelled && typeof j.enabled === "boolean") setEnabled(j.enabled);
-      } catch {
-        /* noop */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   // ESC 关闭 + 锁滚动
   useEffect(() => {

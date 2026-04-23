@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { run, get } from '@/lib/db';
 
+type UserProfileRow = {
+  username: string;
+  gacha_data: string | null;
+};
+
 export async function POST(request: NextRequest) {
   const action = request.nextUrl.pathname.split('/').pop();
   let body: any = {};
@@ -28,11 +33,11 @@ export async function POST(request: NextRequest) {
   if (action === 'me') {
     const { token } = body;
     try {
-      const user = await get('SELECT username, gacha_data FROM users WHERE token = ?', [token]);
+      const user = await get<UserProfileRow>('SELECT username, gacha_data FROM users WHERE token = ?', [token]);
       if (!user) return NextResponse.json({ error: "无效 Token" }, { status: 401 });
       
       let cloudData = {};
-      try { cloudData = JSON.parse(user.gacha_data); } catch(e) {}
+      try { cloudData = JSON.parse(user.gacha_data ?? '{}'); } catch(e) {}
       return NextResponse.json({ success: true, username: user.username, data: cloudData });
     } catch (err) {
       return NextResponse.json({ error: "数据库错误" }, { status: 500 });

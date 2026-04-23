@@ -2,9 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { run, get, all, getConfig, setConfig } from '@/lib/db';
 
+type GiftCodeRow = {
+  code: string;
+  status: string;
+  item_id: number;
+};
+
+type SiteConfigRow = {
+  value: string;
+};
+
 export async function POST(request: NextRequest) {
   const action = request.nextUrl.pathname.split('/').pop();
   let body: any = {};
+
   if (action !== 'increment') {
     try {
       body = await request.json();
@@ -29,7 +40,7 @@ export async function POST(request: NextRequest) {
     const { code } = body;
     if (!code) return NextResponse.json({ error: "Missing code" }, { status: 400 });
     try {
-      const row = await get('SELECT * FROM gift_codes WHERE code = ?', [code]);
+      const row = await get<GiftCodeRow>('SELECT * FROM gift_codes WHERE code = ?', [code]);
       if (!row) return NextResponse.json({ error: "无效的兑换码" }, { status: 404 });
       if (row.status === 'used') return NextResponse.json({ error: "该兑换码已被使用" }, { status: 400 });
       
@@ -45,7 +56,10 @@ export async function POST(request: NextRequest) {
     if (!Array.isArray(codes) || codes.length === 0) return NextResponse.json({ results: [] });
     const placeholders = codes.map(() => '?').join(',');
     try {
-      const rows = await all(`SELECT code, status, item_id FROM gift_codes WHERE code IN (${placeholders})`, codes);
+      const rows = await all<GiftCodeRow>(
+        `SELECT code, status, item_id FROM gift_codes WHERE code IN (${placeholders})`,
+        codes,
+      );
       return NextResponse.json({ results: rows });
     } catch (err) {
       return NextResponse.json({ error: "Database error" }, { status: 500 });
@@ -64,7 +78,10 @@ export async function POST(request: NextRequest) {
         const parsed = Number(val);
         return Number.isFinite(parsed) ? parsed : fallback;
       };
-      const configRow = await get('SELECT value FROM site_config WHERE key = ?', ['site_config']);
+      const configRow = await get<SiteConfigRow>(
+        'SELECT value FROM site_config WHERE key = ?',
+        ['site_config'],
+      );
       const parsedConfig = configRow?.value ? JSON.parse(configRow.value) : {};
       const gachaConfig = parsedConfig?.gacha || {};
 
@@ -74,7 +91,7 @@ export async function POST(request: NextRequest) {
       const MAX_RATE = Math.min(1, Math.max(BASE_RATE, toFiniteNumber(gachaConfig.maxRate, DEFAULT_GACHA.maxRate)));
 
       const currentCountStr = await getConfig('pityCount');
-      let currentCount = parseInt(currentCountStr) || 0;
+      let currentCount = parseInt(currentCountStr ?? '0', 10) || 0;
       currentCount++;
 
       const isPity = currentCount >= PITY_THRESHOLD;
@@ -113,7 +130,7 @@ export async function GET(request: NextRequest) {
   if (action === 'getCount') {
     try {
       const countStr = await getConfig('pityCount');
-      return NextResponse.json({ count: parseInt(countStr) || 0 });
+      return NextResponse.json({ count: parseInt(countStr ?? '0', 10) || 0 });
     } catch (e) {
       return NextResponse.json({ error: "Database Error" }, { status: 500 });
     }

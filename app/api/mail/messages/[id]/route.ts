@@ -11,9 +11,7 @@ type FullRow = {
   link_url: string | null;
   is_read: number;
   is_favorited: number;
-  is_replied: number;
   is_flagged: number;
-  reply_text: string | null;
   sender_hash: string | null;
   sender_label: string | null;
 };
@@ -60,7 +58,7 @@ export async function GET(
 
     const row = (await get(
       `SELECT id, created_at, text, nickname, link_url,
-              is_read, is_favorited, is_replied, is_flagged, reply_text,
+              is_read, is_favorited, is_flagged,
               sender_hash, sender_label
        FROM mail_messages
        WHERE id = ? AND topic_id = ? AND deleted_at IS NULL`,
@@ -77,9 +75,7 @@ export async function GET(
       linkUrl: row.link_url,
       isRead: !!row.is_read,
       isFavorited: !!row.is_favorited,
-      isReplied: !!row.is_replied,
       isFlagged: !!row.is_flagged,
-      replyText: row.reply_text,
       senderLabel: row.sender_label,
       senderHash: row.sender_hash,
     });
@@ -107,8 +103,7 @@ export async function PATCH(
     const body = (await req.json()) as {
       isRead?: boolean;
       isFavorited?: boolean;
-      isReplied?: boolean;
-      replyText?: string | null;
+      isFlagged?: boolean;
     };
 
     const sets: string[] = [];
@@ -121,13 +116,9 @@ export async function PATCH(
       sets.push('is_favorited = ?');
       params.push(body.isFavorited ? 1 : 0);
     }
-    if (typeof body.isReplied === 'boolean') {
-      sets.push('is_replied = ?');
-      params.push(body.isReplied ? 1 : 0);
-    }
-    if (body.replyText !== undefined) {
-      sets.push('reply_text = ?');
-      params.push(body.replyText);
+    if (typeof body.isFlagged === 'boolean') {
+      sets.push('is_flagged = ?');
+      params.push(body.isFlagged ? 1 : 0);
     }
     if (sets.length === 0) {
       return NextResponse.json({ error: '无更新字段' }, { status: 400 });

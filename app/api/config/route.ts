@@ -2,13 +2,28 @@ import { NextRequest, NextResponse } from 'next/server';
 import { get, all } from '@/lib/db';
 import { getDefaultTopic, listTopics } from '@/lib/mail-topics';
 
+type SiteConfigRow = {
+  value: string;
+  updated_at: string | null;
+};
+
+type SongRow = {
+  category: string;
+  name: string;
+  artist: string;
+};
+
+type HiddenSongRow = {
+  name: string;
+};
+
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   try {
     // 从数据库获取 site_config
-    const configRow = await get(
+    const configRow = await get<SiteConfigRow>(
       'SELECT value, updated_at FROM site_config WHERE key = ?',
       ['site_config']
     );
@@ -66,10 +81,10 @@ export async function GET(request: NextRequest) {
     }
 
     // 从数据库获取所有歌曲
-    const songs = await all('SELECT category, name, artist FROM songs ORDER BY id ASC');
+    const songs = await all<SongRow>('SELECT category, name, artist FROM songs ORDER BY id ASC');
 
     // 从数据库获取所有隐藏歌曲
-    const hiddenSongs = await all('SELECT name FROM hidden_songs ORDER BY id ASC');
+    const hiddenSongs = await all<HiddenSongRow>('SELECT name FROM hidden_songs ORDER BY id ASC');
 
     const configVersion = configRow?.updated_at
       ? new Date(configRow.updated_at).getTime()

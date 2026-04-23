@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Archive,
   Copy as CopyIcon,
+  PencilLine,
   Power,
 } from "lucide-react";
 import {
@@ -33,6 +34,7 @@ import {
 } from "@/components/mail/FlaggedMailPanel";
 import { MailTopicTabs } from "@/components/mail/MailTopicTabs";
 import { NewTopicModal } from "@/components/mail/NewTopicModal";
+import { EditTopicModal } from "@/components/mail/EditTopicModal";
 import { ArchivedTopicsDrawer } from "@/components/mail/ArchivedTopicsDrawer";
 import { ArchiveConfirmModal } from "@/components/mail/ArchiveConfirmModal";
 import type { Topic } from "@/components/mail/mail-topic-types";
@@ -221,7 +223,6 @@ function MailContent({
     unread: 0,
     favorited: 0,
   });
-  const [filter, setFilter] = useState<WindChimeInboxFilter>("all");
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
@@ -240,6 +241,7 @@ function MailContent({
   const [archiveConfirmTopic, setArchiveConfirmTopic] = useState<Topic | null>(
     null,
   );
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [copiedToast, setCopiedToast] = useState(false);
 
@@ -262,6 +264,10 @@ function MailContent({
   const activeTopic = useMemo(
     () => topics.find((t) => t.id === activeTopicId) ?? null,
     [topics, activeTopicId],
+  );
+  const editingTopic = useMemo(
+    () => topics.find((t) => t.id === editingTopicId) ?? null,
+    [topics, editingTopicId],
   );
 
   // ===== 拉主题列表（管理端带 unreadCount / flaggedCount） =====
@@ -476,10 +482,16 @@ function MailContent({
     [authHeader, handleAuthError, reloadBlocklist],
   );
 
-  // ===== 主题管理：新建 / 归档 / 恢复 / 复制分享链接 =====
+  // ===== 主题管理：新建 / 编辑 / 归档 / 恢复 / 复制分享链接 =====
   const onCreatedTopic = useCallback((topic: Topic) => {
     setTopics((xs) => [...xs, topic]);
     setActiveTopicId(topic.id);
+  }, []);
+
+  const onUpdatedTopic = useCallback((topic: Topic) => {
+    setTopics((xs) =>
+      xs.map((x) => (x.id === topic.id ? { ...x, ...topic } : x)),
+    );
   }, []);
 
   const onRestoredTopic = useCallback((topic: Topic) => {
@@ -576,7 +588,7 @@ function MailContent({
   const [poster, setPoster] = useState<WindChimeQrPosterConfig>(() => ({
     ...DEFAULT_POSTER_CONFIG,
     heading: "给 Uli 匿名投一封信",
-    body: "扫码发信，直播时 Uli 可能会回复哦 ~",
+    body: "扫码发信，你的留言可能会在直播里被读到哦 ~",
   }));
 
   // 首次挂载时从 B 站 API 拉头像作为默认值（PosterEditor 已有 storageKey，
@@ -693,6 +705,15 @@ function MailContent({
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
+                onClick={() => setEditingTopicId(activeTopic.id)}
+                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-black/60 px-3 py-1.5 font-mono text-xs text-cyan-200 transition hover:bg-cyan-400/10"
+              >
+                <PencilLine className="h-3.5 w-3.5" />
+                编辑主题
+              </button>
+
+              <button
+                type="button"
                 onClick={onCopyShareLink}
                 className="flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-black/60 px-3 py-1.5 font-mono text-xs text-cyan-200 transition hover:bg-cyan-400/10"
                 title={
@@ -775,8 +796,6 @@ function MailContent({
           }
           items={items}
           counts={counts}
-          filter={filter}
-          onFilterChange={setFilter}
           autoClientFilter
           isLoading={loading}
           error={listError}
@@ -879,6 +898,13 @@ function MailContent({
         onClose={() => setShowNewTopicModal(false)}
         authHeader={authHeader}
         onCreated={onCreatedTopic}
+      />
+      <EditTopicModal
+        open={!!editingTopicId && !!editingTopic}
+        topic={editingTopic}
+        authHeader={authHeader}
+        onClose={() => setEditingTopicId(null)}
+        onUpdated={onUpdatedTopic}
       />
       <ArchivedTopicsDrawer
         open={showArchivedDrawer}

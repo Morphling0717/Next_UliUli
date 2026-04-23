@@ -1,16 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { X as CloseIcon, Sparkles } from "lucide-react";
-import type { Topic } from "./mail-topic-types";
+import type { ActiveTopicSummary } from "./mail-topic-types";
 
 /**
  * 主站顶部的活动公告条（方案 §6 / §8 PR3b）。
  *
  * 行为：
- * - 首次挂载时拉一次 `GET /api/mail/topics`（不带 admin header，只返回当前
- *   可投信的活动主题）。
  * - 无活动 → 不渲染（不占位）。
  * - 1 个活动 → `🎂 {title} · 活动进行中 →` 点击跳 `/m/{slug}`。
  * - ≥2 个活动 → `🎉 N 个活动进行中 · 查看全部 →` 点击跳 `/m`。
@@ -21,60 +19,38 @@ import type { Topic } from "./mail-topic-types";
  *   屏蔽新活动。
  * - 不做 sticky：banner 只出现在页面顶部，滚下去就看不见，不打扰正常浏览。
  */
-
-type ActiveTopicListResponse = { items: Topic[] };
-
 const LS_KEY = "uliuli:mail:banner:dismissedSignature";
 
-function signatureOf(topics: Topic[]): string {
+function signatureOf(topics: ActiveTopicSummary[]): string {
   return topics
     .map((t) => t.slug)
     .sort()
     .join("|");
 }
 
-export function GlobalMailBanner() {
-  const [topics, setTopics] = useState<Topic[] | null>(null);
-  const [dismissed, setDismissed] = useState<boolean>(false);
+export function GlobalMailBanner({
+  topics: topicsProp,
+}: {
+  topics?: ActiveTopicSummary[];
+}) {
+  const [dismissedSignature, setDismissedSignature] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.localStorage.getItem(LS_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const topics = useMemo(() => topicsProp ?? [], [topicsProp]);
+  const signature = useMemo(() => signatureOf(topics), [topics]);
+  const dismissed = topics.length > 0 && dismissedSignature === signature;
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch("/api/mail/topics", { cache: "no-store" });
-        if (!r.ok) return;
-        const j = (await r.json()) as ActiveTopicListResponse;
-        if (cancelled) return;
-        const items = (j.items ?? []).filter(
-          // 二次保险：只展示未归档/已启用/在时间窗内的
-          (t) => !t.archivedAt && t.isEnabledNow,
-        );
-        setTopics(items);
-
-        // 和 localStorage 里的 signature 比对——变化就解除关闭状态
-        try {
-          const saved = window.localStorage.getItem(LS_KEY);
-          if (saved && saved === signatureOf(items) && items.length > 0) {
-            setDismissed(true);
-          }
-        } catch {
-          /* localStorage 不可用（隐私模式等）就忽略 */
-        }
-      } catch {
-        /* 接口失败就当没活动，banner 不显示 */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!topics || topics.length === 0 || dismissed) return null;
+  if (topics.length === 0 || dismissed) return null;
 
   const onDismiss = () => {
-    setDismissed(true);
+    setDismissedSignature(signature);
     try {
-      window.localStorage.setItem(LS_KEY, signatureOf(topics));
+      window.localStorage.setItem(LS_KEY, signature);
     } catch {
       /* noop */
     }

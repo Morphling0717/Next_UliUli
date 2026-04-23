@@ -51,9 +51,7 @@ type Row = {
   link_url: string | null;
   is_read: number;
   is_favorited: number;
-  is_replied: number;
   is_flagged: number;
-  reply_text: string | null;
   sender_hash: string | null;
   sender_label: string | null;
 };
@@ -74,9 +72,7 @@ function rowToApi(r: Row) {
     linkUrl: flagged ? null : r.link_url,
     isRead: !!r.is_read,
     isFavorited: !!r.is_favorited,
-    isReplied: !!r.is_replied,
     isFlagged: flagged,
-    replyText: r.reply_text,
     senderLabel: r.sender_label,
     senderHash: r.sender_hash,
   };
@@ -86,7 +82,7 @@ function rowToApi(r: Row) {
  * 列出留言（管理端）。
  *
  * 查询参数：
- * - `filter=all|unread|favorited|replied` 既有的筛选
+ * - `filter=all|unread|favorited` 既有的筛选
  * - `topicId=xxx` 主题筛选；**不传默认 `'default'`**（方案 §5.3 的设计预期：
  *   "左下角按钮 → 常规信箱 / 活动链接 → 活动主题"两条管道互不串）
  * - `topicId=all` 跨主题汇总（仅 v2 可能用到，但 API 先留好）
@@ -125,11 +121,10 @@ export async function GET(req: Request) {
     }
     if (filter === 'unread') where.push('is_read = 0');
     else if (filter === 'favorited') where.push('is_favorited = 1');
-    else if (filter === 'replied') where.push('is_replied = 1');
 
     const rows = (await all(
       `SELECT id, created_at, text, nickname, link_url,
-              is_read, is_favorited, is_replied, is_flagged, reply_text,
+              is_read, is_favorited, is_flagged,
               sender_hash, sender_label
        FROM mail_messages
        WHERE ${where.join(' AND ')}
@@ -142,7 +137,6 @@ export async function GET(req: Request) {
       all_cnt: 0,
       unread_cnt: 0,
       favorited_cnt: 0,
-      replied_cnt: 0,
       flagged_cnt: 0,
     };
     if (resolvedTopicId !== null) {
@@ -151,7 +145,6 @@ export async function GET(req: Request) {
            COUNT(*) AS all_cnt,
            COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) AS unread_cnt,
            COALESCE(SUM(is_favorited), 0) AS favorited_cnt,
-           COALESCE(SUM(is_replied), 0) AS replied_cnt,
            COALESCE(SUM(is_flagged), 0) AS flagged_cnt
          FROM mail_messages
          WHERE topic_id = ? AND deleted_at IS NULL`,
@@ -165,7 +158,6 @@ export async function GET(req: Request) {
         all: Number(counts.all_cnt),
         unread: Number(counts.unread_cnt),
         favorited: Number(counts.favorited_cnt),
-        replied: Number(counts.replied_cnt),
         flagged: Number(counts.flagged_cnt),
       },
     });
@@ -348,9 +340,7 @@ export async function POST(req: Request) {
         link_url: linkUrl,
         is_read: 0,
         is_favorited: 0,
-        is_replied: 0,
         is_flagged: isFlagged ? 1 : 0,
-        reply_text: null,
         sender_hash: hash,
         sender_label: label,
       }),

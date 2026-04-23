@@ -12,11 +12,13 @@ import { AnimatePresence } from 'framer-motion';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { ThreeBackground, CustomCursor } from '../components/Effects';
 import { Dashboard, HorizontalVideoGallery } from '../components/Dashboard';
-import { SongSystem } from '../components/SongSystem';
+import { SongSystem, type SongItem as SongSystemSongItem } from '../components/SongSystem';
 import { GameModal } from '../components/GameModal';
 import { ToastContainer, GoldenLuckModal } from '../components/UI';
-import { MailSpeedDial } from '../components/mail/MailSpeedDial';
+import { MailSpeedDial, type MailEntryTexts } from '../components/mail/MailSpeedDial';
 import { GlobalMailBanner } from '../components/mail/GlobalMailBanner';
+import type { MailTexts } from '../components/mail/MailSendModal';
+import type { ActiveTopicSummary } from '../components/mail/mail-topic-types';
 
 // --- Types ---
 interface NotificationItem {
@@ -24,14 +26,36 @@ interface NotificationItem {
   message: string;
 }
 
+type SiteConfig = {
+  notifications?: {
+    unlocked?: string;
+    alreadyUnlocked?: string;
+    clickWarning?: string;
+    modelClicked?: string;
+    systemInitializing?: string;
+  };
+  footer?: {
+    text?: string;
+  };
+  api?: {
+    bilibili?: string;
+  };
+  videos?: {
+    hiddenTitle?: string;
+    unlockedTitle?: string;
+  };
+  mail?: MailEntryTexts & MailTexts;
+  activeTopics?: ActiveTopicSummary[];
+  mailEnabled?: boolean;
+};
+
 // --- 本地背景视频播放器组件 (独立底部区块) ---
-const LocalVideoPlayer: React.FC<{ isUnlocked: boolean; config?: any; configVersion?: number }> = ({
+const LocalVideoPlayer: React.FC<{ isUnlocked: boolean; config?: SiteConfig; configVersion?: number }> = ({
   isUnlocked,
   config,
   configVersion,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isMuted, setIsMuted] = useState(!isUnlocked);
   const currentVideoBase = isUnlocked ? "/video/2.mp4" : "/video/1.mp4";
   const currentVideo = configVersion ? `${currentVideoBase}?v=${configVersion}` : currentVideoBase;
 
@@ -40,7 +64,6 @@ const LocalVideoPlayer: React.FC<{ isUnlocked: boolean; config?: any; configVers
       const v = videoRef.current;
       v.currentTime = 56;
       v.muted = false;
-      setIsMuted(false);
       v.play().catch(e => console.warn("Video play failed:", e));
     }
   }, [isUnlocked]);
@@ -68,7 +91,7 @@ const LocalVideoPlayer: React.FC<{ isUnlocked: boolean; config?: any; configVers
           controls
           autoPlay
           loop
-          muted={isMuted}
+          muted={!isUnlocked}
           playsInline
           className="w-full h-auto aspect-video object-cover relative z-0 opacity-80 group-hover:opacity-100 transition-opacity duration-500"
         />
@@ -92,10 +115,10 @@ export default function HomePage() {
 
   const clickCountRef = useRef(0);
   const configVersionRef = useRef<number>(0);
-  const [siteConfig, setSiteConfig] = useState<any>({});
+  const [siteConfig, setSiteConfig] = useState<SiteConfig>({});
   const [configVersion, setConfigVersion] = useState<number>(0);
-  const [songs, setSongs] = useState<any[]>([]);
-  const [hiddenSongs, setHiddenSongs] = useState<any[]>([]);
+  const [songs, setSongs] = useState<SongSystemSongItem[]>([]);
+  const [hiddenSongs, setHiddenSongs] = useState<SongSystemSongItem[]>([]);
 
   const notifs = siteConfig?.notifications || {};
   // 安全获取 siteConfig
@@ -120,7 +143,13 @@ export default function HomePage() {
 
           setSiteConfig(data.site_config);
           setSongs(data.songs || []);
-          setHiddenSongs(data.hidden_songs || []);
+          setHiddenSongs(
+            (data.hidden_songs || []).map((song: { name: string }) => ({
+              name: song.name,
+              artist: "",
+              category: "hidden",
+            })),
+          );
           setConfigVersion(nextVersion);
           configVersionRef.current = nextVersion;
 
@@ -238,7 +267,7 @@ export default function HomePage() {
       unlockHidden(false);
       clickCountRef.current = 0;
     } else if (count >= 7) {
-      const warningText = (notifs.clickWarning || "WARNING: {count} CLICKS TO OVERRIDE").replace('{count}', 10 - count);
+      const warningText = (notifs.clickWarning || "WARNING: {count} CLICKS TO OVERRIDE").replace('{count}', String(10 - count));
       addNotification(warningText);
     } else {
       addNotification(notifs.modelClicked || "MODEL CLICKED");
@@ -294,7 +323,7 @@ export default function HomePage() {
         <ToastContainer notifications={notifications} />
 
         <main className="relative z-10 w-full block">
-          <GlobalMailBanner />
+          <GlobalMailBanner topics={siteConfig?.activeTopics} />
           <Dashboard
             stats={stats}
             liveStatus={liveStatus}
@@ -357,7 +386,10 @@ export default function HomePage() {
           </AnimatePresence>
         </div>
 
-        <MailSpeedDial texts={siteConfig?.mail} />
+        <MailSpeedDial
+          texts={siteConfig?.mail}
+          mailEnabled={siteConfig?.mailEnabled}
+        />
       </div>
     </ErrorBoundary>
   );

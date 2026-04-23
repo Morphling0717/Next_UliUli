@@ -38,6 +38,14 @@ export type TopicListResponse = {
   items: Topic[];
 };
 
+export type ActiveTopicSummary = {
+  slug: string;
+  title: string;
+  description: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
+};
+
 /** 归档 (DELETE) 的响应 */
 export type TopicArchiveResponse = {
   topic: Topic;

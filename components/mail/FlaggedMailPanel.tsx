@@ -151,6 +151,29 @@ export function FlaggedMailPanel({
     }
   }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
 
+  const approveItem = useCallback(async () => {
+    if (!openId) return;
+    setActing(true);
+    try {
+      const r = await fetch(
+        `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({ isFlagged: false }),
+        },
+      );
+      if (handleAuthError(r)) return;
+      if (!r.ok) throw new Error(await readError(r));
+      onAfterAction?.();
+      closeModal();
+    } catch (e) {
+      setOpenError(e instanceof Error ? e.message : "操作失败");
+    } finally {
+      setActing(false);
+    }
+  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
+
   const deleteItem = useCallback(async () => {
     if (!openId) return;
     if (!window.confirm("确认删除这条留言？此操作会软删除，无法在当前界面恢复。")) {
@@ -346,6 +369,14 @@ export function FlaggedMailPanel({
                   </div>
 
                   <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={approveItem}
+                      disabled={!openData || acting}
+                      className="rounded-lg border border-emerald-400/60 bg-black/60 px-3 py-1.5 font-mono text-xs text-emerald-200 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      审核通过
+                    </button>
                     <button
                       type="button"
                       onClick={markRead}

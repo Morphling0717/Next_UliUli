@@ -89,9 +89,7 @@ db.serialize(() => {
       deleted_at TEXT,
       is_read INTEGER NOT NULL DEFAULT 0,
       is_favorited INTEGER NOT NULL DEFAULT 0,
-      is_replied INTEGER NOT NULL DEFAULT 0,
       is_flagged INTEGER NOT NULL DEFAULT 0,
-      reply_text TEXT,
       sender_hash TEXT,
       sender_label TEXT
     )
@@ -171,32 +169,41 @@ db.serialize(() => {
 });
 
 // 封装 Promise 版本的常用方法，替代原先的回调地狱
-export const get = (query: string, params: any[] = []): Promise<any> => {
+export const get = <T = Record<string, unknown>>(
+  query: string,
+  params: unknown[] = [],
+): Promise<T | undefined> => {
   return new Promise((resolve, reject) => {
     db.get(query, params, (err, row) => {
-      if (err) reject(err); else resolve(row);
+      if (err) reject(err); else resolve(row as T | undefined);
     });
   });
 };
 
-export const all = (query: string, params: any[] = []): Promise<any[]> => {
+export const all = <T = Record<string, unknown>>(
+  query: string,
+  params: unknown[] = [],
+): Promise<T[]> => {
   return new Promise((resolve, reject) => {
     db.all(query, params, (err, rows) => {
-      if (err) reject(err); else resolve(rows);
+      if (err) reject(err); else resolve(rows as T[]);
     });
   });
 };
 
-export const run = (query: string, params: any[] = []): Promise<any> => {
+export const run = <T = sqlite3.RunResult>(query: string, params: unknown[] = []): Promise<T> => {
   return new Promise((resolve, reject) => {
     db.run(query, params, function (err) {
-      if (err) reject(err); else resolve(this);
+      if (err) reject(err); else resolve(this as T);
     });
   });
 };
 
 export const getConfig = async (key: string) => {
-  const row = await get("SELECT value FROM global_config WHERE key = ?", [key]);
+  const row = await get<{ value: string }>(
+    "SELECT value FROM global_config WHERE key = ?",
+    [key],
+  );
   return row ? row.value : null;
 };
 
@@ -273,7 +280,10 @@ export async function getMailBoolSetting(
   key: string,
   defaultValue = true,
 ): Promise<boolean> {
-  const row = await get('SELECT value FROM mail_settings WHERE key = ?', [key]);
+  const row = await get<{ value: string }>(
+    'SELECT value FROM mail_settings WHERE key = ?',
+    [key],
+  );
   if (!row) return defaultValue;
   return row.value === '1' || row.value === 'true';
 }
@@ -306,9 +316,10 @@ export const MAIL_BLOCKED_TERMS_KEY = 'mail.blocked_terms';
  * 返回值已做 trim + 小写 + 去重。
  */
 export async function getMailBlockedTerms(): Promise<string[]> {
-  const row = await get('SELECT value FROM mail_settings WHERE key = ?', [
-    MAIL_BLOCKED_TERMS_KEY,
-  ]);
+  const row = await get<{ value: string }>(
+    'SELECT value FROM mail_settings WHERE key = ?',
+    [MAIL_BLOCKED_TERMS_KEY],
+  );
   let raw = '';
   if (row && typeof row.value === 'string') {
     try {

@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { run, get, hashPassword } from '@/lib/db';
 
+type UserAuthRow = {
+  id: number;
+  username: string;
+  password_hash: string;
+  salt: string;
+  gacha_data: string | null;
+  token: string;
+};
+
 export async function POST(request: NextRequest) {
   const action = request.nextUrl.pathname.split('/').pop();
   let body: any = {};
@@ -35,7 +44,7 @@ export async function POST(request: NextRequest) {
   if (action === 'login') {
     const { username, password } = body;
     try {
-      const user = await get('SELECT * FROM users WHERE username = ?', [username]);
+      const user = await get<UserAuthRow>('SELECT * FROM users WHERE username = ?', [username]);
       if (!user) return NextResponse.json({ error: "用户不存在" }, { status: 404 });
 
       const hash = hashPassword(password, user.salt);
@@ -45,7 +54,7 @@ export async function POST(request: NextRequest) {
       await run('UPDATE users SET token = ? WHERE id = ?', [newToken, user.id]);
 
       let cloudData = {};
-      try { cloudData = JSON.parse(user.gacha_data); } catch(e) {}
+      try { cloudData = JSON.parse(user.gacha_data ?? '{}'); } catch(e) {}
 
       return NextResponse.json({ success: true, token: newToken, username: user.username, data: cloudData });
     } catch (err) {

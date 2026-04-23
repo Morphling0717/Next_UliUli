@@ -17,6 +17,7 @@ export type MailEntryTexts = {
 
 type MailSpeedDialProps = {
   texts?: MailEntryTexts & MailTexts;
+  mailEnabled?: boolean;
 };
 
 /**
@@ -25,32 +26,10 @@ type MailSpeedDialProps = {
  * - 展开后竖直向上弹出两个子按钮：扭蛋机、发信箱
  * - 任意子按钮打开对应弹窗，关闭弹窗时 speed dial 自动收起
  */
-export function MailSpeedDial({ texts }: MailSpeedDialProps = {}) {
+export function MailSpeedDial({ texts, mailEnabled }: MailSpeedDialProps = {}) {
   const [expanded, setExpanded] = useState(false);
   const [mailOpen, setMailOpen] = useState(false);
   const [gachaOpen, setGachaOpen] = useState(false);
-  const [mailEnabled, setMailEnabled] = useState<boolean | null>(null);
-
-  // 轮询发信箱开关，用于子按钮禁用态
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const r = await fetch("/api/mail/settings", { cache: "no-store" });
-        if (!r.ok) return;
-        const j = (await r.json()) as { enabled?: boolean };
-        if (!cancelled && typeof j.enabled === "boolean") setMailEnabled(j.enabled);
-      } catch {
-        /* noop */
-      }
-    };
-    void refresh();
-    const id = window.setInterval(refresh, 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, []);
 
   // ESC 收起
   useEffect(() => {
@@ -183,7 +162,12 @@ export function MailSpeedDial({ texts }: MailSpeedDialProps = {}) {
       </AnimatePresence>
 
       {/* 实际弹窗 */}
-      <MailSendModal open={mailOpen} onOpenChange={setMailOpen} texts={texts} />
+      <MailSendModal
+        open={mailOpen}
+        onOpenChange={setMailOpen}
+        texts={texts}
+        enabled={mailEnabled}
+      />
       <GachaSystem hideLauncher open={gachaOpen} onOpenChange={setGachaOpen} />
     </>
   );
