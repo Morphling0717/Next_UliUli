@@ -22,23 +22,32 @@ function safeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb);
 }
 
+function getMailAdminPassword(): string | null {
+  const mailPassword = process.env.MAIL_AUTH_PASSWORD?.trim();
+  if (mailPassword) return mailPassword;
+  const adminPassword = process.env.ADMIN_PASSWORD?.trim();
+  if (adminPassword) return adminPassword;
+  return null;
+}
+
 /**
  * 检查请求是否带有正确的 mail 后台密码。
  *
  * 增强点：
  * 1. 用 `crypto.timingSafeEqual` 做密码比较（防时序攻击）。
  * 2. 基于客户端 IP 做失败次数累计，达到阈值后返回 429 + `Retry-After`，
- *    避免任何人裸跑字典爆破 `ADMIN_PASSWORD`。
+ *    避免任何人裸跑字典爆破 mail 后台口令。
  * 3. 密码正确后清掉该 IP 的失败计数。
  *
  * 优先读 `X-Mail-Password` header（便于 GET/DELETE 使用），兜底读 JSON body
- * 中的 `password` 字段。复用 `ADMIN_PASSWORD` 环境变量。
+ * 中的 `password` 字段。优先使用 `MAIL_AUTH_PASSWORD`，未配置时回退到
+ * `ADMIN_PASSWORD`。
  */
 export async function verifyMailAdmin(req: Request): Promise<NextResponse | null> {
-  const expected = process.env.ADMIN_PASSWORD;
+  const expected = getMailAdminPassword();
   if (!expected) {
     return NextResponse.json(
-      { error: '服务器未配置 ADMIN_PASSWORD 环境变量' },
+      { error: '服务器未配置 MAIL_AUTH_PASSWORD 或 ADMIN_PASSWORD 环境变量' },
       { status: 500 },
     );
   }
@@ -112,7 +121,7 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
  * 请求体。
  */
 export function isMailAdminHeader(req: Request): boolean {
-  const expected = process.env.ADMIN_PASSWORD;
+  const expected = getMailAdminPassword();
   if (!expected) return false;
   const header = req.headers.get('x-mail-password');
   if (!header) return false;

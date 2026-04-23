@@ -1,10 +1,12 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { get, all } from '@/lib/db';
 import { getDefaultTopic, listTopics } from '@/lib/mail-topics';
 
 type SiteConfigRow = {
   value: string;
   updated_at: string | null;
+  updated_by: string | null;
+  version: number | null;
 };
 
 type SongRow = {
@@ -17,14 +19,18 @@ type HiddenSongRow = {
   name: string;
 };
 
+type CountRow = {
+  count: number;
+};
+
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     // 从数据库获取 site_config
     const configRow = await get<SiteConfigRow>(
-      'SELECT value, updated_at FROM site_config WHERE key = ?',
+      'SELECT value, updated_at, updated_by, version FROM site_config WHERE key = ?',
       ['site_config']
     );
 
@@ -86,14 +92,20 @@ export async function GET(request: NextRequest) {
     // 从数据库获取所有隐藏歌曲
     const hiddenSongs = await all<HiddenSongRow>('SELECT name FROM hidden_songs ORDER BY id ASC');
 
-    const configVersion = configRow?.updated_at
-      ? new Date(configRow.updated_at).getTime()
+    const configVersion = configRow
+      ? Number(configRow.version ?? 1)
       : 0;
+    const historyCountRow = await get<CountRow>(
+      'SELECT COUNT(*) AS count FROM site_config_history'
+    );
 
     return NextResponse.json(
       {
         success: true,
         config_version: configVersion,
+        config_updated_at: configRow?.updated_at ?? null,
+        config_updated_by: configRow?.updated_by ?? null,
+        config_history_count: Number(historyCountRow?.count ?? 0),
         site_config: siteConfig,
         songs: songs.map(s => ({
           category: s.category,
@@ -109,11 +121,12 @@ export async function GET(request: NextRequest) {
       }
     );
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Config API Error:", error);
+    const message = error instanceof Error ? error.message : '未知错误';
     return NextResponse.json({
       success: false,
-      message: '服务器错误: ' + error.message
+      message: '服务器错误: ' + message
     }, { status: 500 });
   }
 }

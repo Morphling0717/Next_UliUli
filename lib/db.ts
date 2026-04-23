@@ -54,9 +54,43 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS site_config (
       key TEXT PRIMARY KEY,
       value TEXT,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_by TEXT
     )
   `);
+  db.run(
+    `ALTER TABLE site_config ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+    (err) => {
+      if (err && !/duplicate column name/i.test(err.message)) {
+        console.warn('[site_config] ADD COLUMN version:', err.message);
+      }
+    },
+  );
+  db.run(
+    `ALTER TABLE site_config ADD COLUMN updated_by TEXT`,
+    (err) => {
+      if (err && !/duplicate column name/i.test(err.message)) {
+        console.warn('[site_config] ADD COLUMN updated_by:', err.message);
+      }
+    },
+  );
+  db.run(`
+    CREATE TABLE IF NOT EXISTS site_config_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      snapshot_version INTEGER NOT NULL UNIQUE,
+      snapshot_updated_at TEXT,
+      snapshot_updated_by TEXT,
+      backed_up_at TEXT NOT NULL,
+      site_config_value TEXT NOT NULL,
+      songs_value TEXT NOT NULL,
+      hidden_songs_value TEXT NOT NULL
+    )
+  `);
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_site_config_history_backed_up_at
+       ON site_config_history (backed_up_at DESC)`
+  );
 
   // ===== SONGS TABLE =====
   db.run(`

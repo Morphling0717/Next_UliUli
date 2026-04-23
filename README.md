@@ -84,6 +84,9 @@ npm run dev
 # 必填：后台管理员密码（用于 /api/admin/save、/api/admin/upload）
 ADMIN_PASSWORD=change_me_to_a_strong_password
 
+# 可选：发信箱后台 /mail 独立密码；不填则回退到 ADMIN_PASSWORD
+MAIL_AUTH_PASSWORD=
+
 # 必填：隐藏内容解锁密码（用于 /api/admin/unlock，解锁隐藏视频/歌单）
 DEV_UNLOCK_PASSWORD=change_me_to_a_dev_unlock_password
 
@@ -96,18 +99,16 @@ DATABASE_PATH=./codes.db
 NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
 
 # ============== 发信箱 MAIL_BOX 相关 ==============
-# 必填：后台 /mail 管理页口令（与 ADMIN_PASSWORD 独立，主播专用）
-MAIL_AUTH_PASSWORD=change_me_to_a_mail_admin_password
-
-# 必填：Signed Cookie 盐值（10位+ 随机字符），用于后台登录态完整性校验
-MAIL_TOKEN_SALT=please_generate_a_long_random_salt_here
+# 必填：发送者指纹 hash 的盐值。改了之后老留言的 senderLabel/senderHash 会变，
+# 但不影响功能运行。换服务器或首次部署时请改成一段随机字符串。
+WINDCHIME_HASH_SALT=change_me_to_a_long_random_string
 
 # 可选：Cloudflare Turnstile（人机校验）——留空则跳过校验，发布到公网强烈建议启用
 NEXT_PUBLIC_TURNSTILE_SITE_KEY=
-TURNSTILE_SECRET_KEY=
+TURNSTILE_SECRET=
 ```
 
-> ⚠️ 生产环境务必修改两个密码;请勿把 `.env.local` 提交到仓库。
+> ⚠️ 生产环境务必修改 `ADMIN_PASSWORD` / `DEV_UNLOCK_PASSWORD`；若希望 `/mail` 独立口令，再额外设置 `MAIL_AUTH_PASSWORD`。请勿把 `.env.local` 提交到仓库。
 
 ---
 
@@ -118,7 +119,8 @@ TURNSTILE_SECRET_KEY=
 | `users`                | 用户注册 / 登录 / token / 抽卡进度 JSON（PBKDF2 + salt）                                                                 |
 | `gift_codes`           | 兑换码（`code` 主键 / `item_id` / `status`）                                                                             |
 | `global_config`        | 全局 KV（目前存 `pityCount` 抽卡保底计数）                                                                               |
-| `site_config`          | 网站配置 JSON（首页 / 档案 / 直播 / 抽卡参数等）                                                                         |
+| `site_config`          | 网站配置 JSON（首页 / 档案 / 直播 / 抽卡参数等，含 `version` / `updated_by` 审计字段）                                   |
+| `site_config_history`  | 每次保存前自动写入的旧版本快照（用于协作防误覆盖后的恢复）                                                               |
 | `songs`                | 普通歌单（分类 / 歌名 / 歌手）                                                                                           |
 | `hidden_songs`         | 隐藏歌单（解锁后可见）                                                                                                   |
 | `mail_messages`        | 匿名来信（text / nickname / linkUrl / senderFingerprint / isRead / isFavorited / **topic_id**）                          |
@@ -172,12 +174,10 @@ TURNSTILE_SECRET_KEY=
 | `GET`  | `/api/mail/topics`            | 当前可投信的活动主题列表（仅 `is_enabled=1` AND 非归档 AND 在时间窗内 AND `is_default=0`）             |
 | `GET`  | `/api/mail/topics/[idOrSlug]` | 单个主题的公开字段（`/m/{slug}` SSR 预取用；不返回 `note` 等内部字段）                                 |
 
-后台（需 `MAIL_AUTH_PASSWORD` 登录后的 signed cookie）：
+后台（请求头 `X-Mail-Password` = `MAIL_AUTH_PASSWORD`；未配置时回退到 `ADMIN_PASSWORD`）：
 
 | 方法     | 路径                                      | 说明                                                                                                       |
 | -------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/api/mail/auth/login`                    | 用 `MAIL_AUTH_PASSWORD` 登录                                                                               |
-| `POST`   | `/api/mail/auth/logout`                   | 登出                                                                                                       |
 | `GET`    | `/api/mail/messages`                      | 列序列表（分页 · 支持 `?topicId=` 按主题过滤）                                                             |
 | `PATCH`  | `/api/mail/messages/[id]`                 | 标已读 / 收藏                                                                                              |
 | `DELETE` | `/api/mail/messages/[id]`                 | 删除                                                                                                       |
@@ -290,7 +290,7 @@ Next_UliUli/
 │  ├─ blocklist/                     # 黑名单
 │  ├─ blocked-terms/                 # 敏感词
 │  └─ settings/                      # 发信箱总开关
-├─ lib/mail-auth.ts                  # signed cookie 签发 / 校验
+├─ lib/mail-auth.ts                  # mail 后台密码校验 + IP 锁定
 ├─ lib/mail-rate-limit.ts            # IP + fingerprint 双重限流
 ├─ lib/mail-turnstile.ts             # Cloudflare Turnstile 服务端校验
 ├─ lib/mail-sfx.ts                   # Web Audio 合成的 SIGNAL SENT 音效
@@ -314,7 +314,7 @@ docker compose up -d --build
 - `./public/memes` → `/app/public/memes`(上传表情)
 - `./public/pic` → `/app/public/pic`(上传图片)
 
-**生产前**请修改 `docker-compose.yml` 里的 `ADMIN_PASSWORD` / `DEV_UNLOCK_PASSWORD`(或改用 `.env` 文件)。
+**生产前**请修改 `docker-compose.yml` 里的 `ADMIN_PASSWORD` / `DEV_UNLOCK_PASSWORD`；若希望 `/mail` 单独口令，再额外设置 `MAIL_AUTH_PASSWORD`（或改用 `.env` 文件）。
 
 ### 方式 B：1Panel 中构建 Dockerfile
 
@@ -327,7 +327,7 @@ docker compose up -d --build
 
 在 1Panel 中:
 
-1. **环境变量**:至少设置 `ADMIN_PASSWORD`、`DEV_UNLOCK_PASSWORD`、`NEXT_PUBLIC_SITE_URL`
+1. **环境变量**:至少设置 `ADMIN_PASSWORD`、`DEV_UNLOCK_PASSWORD`、`NEXT_PUBLIC_SITE_URL`；如需单独保护 `/mail`，再设置 `MAIL_AUTH_PASSWORD`
 2. **端口映射**:容器 `3000` → 宿主机任意端口
 3. **持久化卷挂载**(强烈建议,避免重建容器丢数据):
    - 宿主机目录 → `/app/data`
@@ -383,7 +383,7 @@ cp codes.db codes.db.$(date +%F).bak
 
 **切换发信箱开关 / 读信:**
 
-访问 `/mail`（密码 = `MAIL_AUTH_PASSWORD`）。页面顶部开关控制 `ONLINE/OFFLINE`，卡片格列表展示来信、收藏、拉黑、删除、敏感词维护。内嵌分享海报编辑器（WindChime QR Poster）生成二维码卡片。
+访问 `/mail`（密码 = `MAIL_AUTH_PASSWORD`；未配置时回退到 `ADMIN_PASSWORD`）。页面顶部开关控制 `ONLINE/OFFLINE`，卡片格列表展示来信、收藏、拉黑、删除、敏感词维护。内嵌分享海报编辑器（WindChime QR Poster）生成二维码卡片。
 
 **新建活动主题 / 归档往期活动:**
 
@@ -438,7 +438,7 @@ cp codes.db codes.db.$(date +%F).bak
                  (Turnstile + 限流 + 敏感词)                 ▼
                    └─ 写库 mail_messages              site_config.mail (SQLite)
                                                               │
- 主播打开 /mail (MAIL_AUTH_PASSWORD)                           │
+ 主播打开 /mail (MAIL_AUTH_PASSWORD 或 ADMIN_PASSWORD)         │
    └─ <WindChimeAdminPanel />                           GET /api/config
         └─ GET /api/mail/messages                              ▲
              PATCH 标已读/收藏                         前端 15s 轮询
@@ -464,7 +464,7 @@ cp codes.db codes.db.$(date +%F).bak
 
 ### 主播后台 `/mail` 开关和操作
 
-- 打开 `/mail` 页面，密码 = `MAIL_AUTH_PASSWORD`
+- 打开 `/mail` 页面，密码 = `MAIL_AUTH_PASSWORD`（未配置时回退到 `ADMIN_PASSWORD`）
 - 顶部开关控制访客端是否能看见 SpeedDial 发信入口
 - 卡片列表：收藏·拉黑·标已读·删除 4 种操作，底部按钮已換成赛博朋克风格 + lucide 图标
 - 侧边面板：黑名单·敏感词·被标记的可疑来信

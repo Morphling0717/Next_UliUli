@@ -8,6 +8,40 @@ import { AdminTabsNav } from "./components/AdminTabsNav";
 import { LoadingOverlay } from "./components/LoadingOverlay";
 import { AdminTabId, AssetFile, HiddenSongItem, SiteConfig, SongItem } from "./types";
 
+const EDITOR_NAME_STORAGE_KEY = "uliuli:admin:editor-name";
+
+type ConfigLoadResponse = {
+  success: boolean;
+  message?: string;
+  code?: string;
+  current_version?: number;
+  config_version?: number;
+  config_updated_at?: string | null;
+  config_updated_by?: string | null;
+  config_history_count?: number;
+  site_config?: SiteConfig;
+  songs?: SongItem[];
+  hidden_songs?: HiddenSongItem[];
+};
+
+type MutableConfig = SiteConfig & Record<string, unknown>;
+type UnknownRecord = Record<string, unknown>;
+
+function formatAuditTime(value: string | null | undefined): string {
+  if (!value) return "未知时间";
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function getConfigSection(config: MutableConfig, section: string): UnknownRecord {
+  const existing = config[section];
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    return existing as UnknownRecord;
+  }
+  const nextSection: UnknownRecord = {};
+  config[section] = nextSection;
+  return nextSection;
+}
+
 // ========== MAIN COMPONENT ==========
 export default function AdminDashboard() {
   // ===== STATE MANAGEMENT =====
@@ -28,21 +62,34 @@ export default function AdminDashboard() {
   }>({ memes: [], pic: [] });
   const [assetSortOrder, setAssetSortOrder] = useState<"asc" | "desc">("asc");
   const [adminPassword, setAdminPassword] = useState<string>("");
+  const [configVersion, setConfigVersion] = useState(0);
+  const [configUpdatedAt, setConfigUpdatedAt] = useState<string | null>(null);
+  const [configUpdatedBy, setConfigUpdatedBy] = useState<string | null>(null);
+  const [historyCount, setHistoryCount] = useState(0);
+  const [editorName, setEditorName] = useState(() =>
+    typeof window === "undefined"
+      ? ""
+      : window.localStorage.getItem(EDITOR_NAME_STORAGE_KEY) ?? "",
+  );
 
   // ===== INITIALIZE DATA =====
   useEffect(() => {
-    loadConfigFromDB();
+    void loadConfigFromDB(true);
   }, []);
 
-  async function loadConfigFromDB() {
+  async function loadConfigFromDB(isInitial = false) {
     try {
       const res = await fetch("/api/config", { cache: "no-store" });
-      const data = await res.json();
+      const data = (await res.json()) as ConfigLoadResponse;
       
       if (data.success) {
-        setConfig(data.site_config);
-        setSongData(data.songs);
-        setHiddenSongs(data.hidden_songs);
+        setConfig(data.site_config || {});
+        setSongData(data.songs || []);
+        setHiddenSongs(data.hidden_songs || []);
+        setConfigVersion(Number(data.config_version || 0));
+        setConfigUpdatedAt(data.config_updated_at ?? null);
+        setConfigUpdatedBy(data.config_updated_by ?? null);
+        setHistoryCount(Number(data.config_history_count || 0));
       } else {
         console.error("Failed to load config:", data.message);
         await Swal.fire({
@@ -53,10 +100,12 @@ export default function AdminDashboard() {
           color: "#ff4444",
         });
       }
-      
-      setTimeout(() => {
-        setIsLoading(false);
-      }, 500);
+
+      if (isInitial) {
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 500);
+      }
     } catch (error) {
       console.error("Config load error:", error);
       await Swal.fire({
@@ -66,39 +115,51 @@ export default function AdminDashboard() {
         background: "#1e293b",
         color: "#ff4444",
       });
-      setTimeout(() => {
-        setIsLoading(false);
-      }, 500);
+      if (isInitial) {
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 500);
+      }
     }
   }
 
+  const handleEditorNameChange = (value: string) => {
+    setEditorName(value);
+    window.localStorage.setItem(EDITOR_NAME_STORAGE_KEY, value);
+  };
+
   // ===== CONFIG UPDATERS =====
-  const updateConfig = (section: string, key: string, val: any) => {
-    setConfig((prev) => ({
-      ...prev,
-      [section]: {
-        ...(prev as any)[section],
-        [key]: val,
-      },
-    }));
+  const updateConfig = (section: string, key: string, val: unknown) => {
+    setConfig((prev) => {
+      const nextConfig = { ...prev } as MutableConfig;
+      const sectionData = getConfigSection(nextConfig, section);
+      sectionData[key] = val;
+      return nextConfig;
+    });
   };
 
   const updateNested = (
     section: string,
     obj: string,
     prop: string,
-    val: any
+    val: unknown
   ) => {
     setConfig((prev) => {
-      const newConfig = { ...prev };
+      const newConfig = { ...prev } as MutableConfig;
+      const sectionData = getConfigSection(newConfig, section);
       if (obj === "") {
-        (newConfig as any)[section][prop] = val;
+        sectionData[prop] = val;
       } else {
-        if (!((newConfig as any)[section][obj])) {
-          (newConfig as any)[section][obj] = {};
+        const existingNested = sectionData[obj];
+        if (
+          !existingNested ||
+          typeof existingNested !== "object" ||
+          Array.isArray(existingNested)
+        ) {
+          sectionData[obj] = {};
         }
         if (prop !== "") {
-          (newConfig as any)[section][obj][prop] = val;
+          (sectionData[obj] as UnknownRecord)[prop] = val;
         }
       }
       return newConfig;
@@ -110,13 +171,19 @@ export default function AdminDashboard() {
     arrayKey: string,
     index: number,
     key: string,
-    val: any
+    val: unknown
   ) => {
     setConfig((prev) => {
-      const newConfig = { ...prev };
-      const arr = (newConfig as any)[section][arrayKey];
-      if (arr && arr[index]) {
-        arr[index][key] = val;
+      const newConfig = { ...prev } as MutableConfig;
+      const sectionData = getConfigSection(newConfig, section);
+      const arr = sectionData[arrayKey];
+      if (
+        Array.isArray(arr) &&
+        arr[index] &&
+        typeof arr[index] === "object" &&
+        !Array.isArray(arr[index])
+      ) {
+        (arr[index] as UnknownRecord)[key] = val;
       }
       return newConfig;
     });
@@ -126,34 +193,37 @@ export default function AdminDashboard() {
     section: string,
     arrayKey: string,
     index: number,
-    val: any
+    val: unknown
   ) => {
     setConfig((prev) => {
-      const newConfig = { ...prev };
-      const arr = (newConfig as any)[section][arrayKey];
-      if (arr) {
+      const newConfig = { ...prev } as MutableConfig;
+      const sectionData = getConfigSection(newConfig, section);
+      const arr = sectionData[arrayKey];
+      if (Array.isArray(arr)) {
         arr[index] = val;
       }
       return newConfig;
     });
   };
 
-  const addArrayItem = (section: string, arrayKey: string, defaultValue: any) => {
+  const addArrayItem = (section: string, arrayKey: string, defaultValue: unknown) => {
     setConfig((prev) => {
-      const newConfig = { ...prev };
-      if (!((newConfig as any)[section][arrayKey])) {
-        (newConfig as any)[section][arrayKey] = [];
+      const newConfig = { ...prev } as MutableConfig;
+      const sectionData = getConfigSection(newConfig, section);
+      if (!Array.isArray(sectionData[arrayKey])) {
+        sectionData[arrayKey] = [];
       }
-      (newConfig as any)[section][arrayKey].push(defaultValue);
+      (sectionData[arrayKey] as unknown[]).push(defaultValue);
       return newConfig;
     });
   };
 
   const removeArrayItem = (section: string, arrayKey: string, index: number) => {
     setConfig((prev) => {
-      const newConfig = { ...prev };
-      const arr = (newConfig as any)[section][arrayKey];
-      if (arr) {
+      const newConfig = { ...prev } as MutableConfig;
+      const sectionData = getConfigSection(newConfig, section);
+      const arr = sectionData[arrayKey];
+      if (Array.isArray(arr)) {
         arr.splice(index, 1);
       }
       return newConfig;
@@ -171,7 +241,10 @@ export default function AdminDashboard() {
       const person =
         newConfig.model?.credits?.[creditIndex]?.val?.[personIndex];
       if (person) {
-        (person as any)[key] = val;
+        newConfig.model?.credits?.[creditIndex]?.val?.splice(personIndex, 1, {
+          ...person,
+          [key]: val,
+        });
       }
       return newConfig;
     });
@@ -303,8 +376,8 @@ export default function AdminDashboard() {
           color: "#ff4444",
         });
       }
-    } catch (e) {
-      console.error(e);
+    } catch {
+      console.error("Fetch assets failed");
     }
   };
 
@@ -360,7 +433,7 @@ export default function AdminDashboard() {
           color: "#ff4444",
         });
       }
-    } catch (e) {
+    } catch {
       Swal.close();
       await Swal.fire({
         icon: "error",
@@ -424,7 +497,7 @@ export default function AdminDashboard() {
             color: "#ff4444",
           });
         }
-      } catch (e) {
+      } catch {
         await Swal.fire({
           icon: "error",
           title: "网络错误",
@@ -455,7 +528,7 @@ export default function AdminDashboard() {
       } else {
         alert("删除失败: " + data.message);
       }
-    } catch (e) {
+    } catch {
       alert("网络错误");
     }
   };
@@ -499,7 +572,10 @@ export default function AdminDashboard() {
   const updateSong = (i: number, key: string, val: string) => {
     setSongData((prev) => {
       const newData = [...prev];
-      (newData[i] as any)[key] = val;
+      const song = newData[i];
+      if (song) {
+        newData[i] = { ...song, [key]: val } as SongItem;
+      }
       return newData;
     });
   };
@@ -587,6 +663,21 @@ export default function AdminDashboard() {
 
   // ===== SAVE FUNCTION =====
   const saveData = async () => {
+    const normalizedEditorName = editorName.trim();
+    if (!normalizedEditorName) {
+      await Swal.fire({
+        icon: "warning",
+        title: "请先填写修改人",
+        text: "建议填写你们群里会互相通知时使用的名字，例如：ASUS / 丝瓜 / 运营",
+        background: "#1e293b",
+        color: "#ffd166",
+      });
+      return;
+    }
+
+    setEditorName(normalizedEditorName);
+    window.localStorage.setItem(EDITOR_NAME_STORAGE_KEY, normalizedEditorName);
+
     const { value: password } = await Swal.fire({
       title: "身份验证",
       input: "password",
@@ -600,6 +691,8 @@ export default function AdminDashboard() {
 
     const payload = {
       password,
+      editor_name: normalizedEditorName,
+      base_config_version: configVersion,
       site_info: config,
       song_data: songData,
       hidden_songs: hiddenSongs,
@@ -621,12 +714,38 @@ export default function AdminDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = (await res.json()) as ConfigLoadResponse;
       Swal.close();
+
+      if (res.status === 409 || data.code === "CONFIG_VERSION_CONFLICT") {
+        const result = await Swal.fire({
+          icon: "warning",
+          title: "检测到新版本",
+          html: `当前线上版本：<b>#${data.current_version ?? "?"}</b><br/>最近修改人：<b>${data.config_updated_by || "未知"}</b><br/>最近修改时间：<b>${formatAuditTime(data.config_updated_at)}</b><br/><br/>你当前页面里的改动还在，但已不能直接覆盖保存。建议先重新加载最新内容，再把你的修改合进去。`,
+          background: "#1e293b",
+          color: "#ffd166",
+          showCancelButton: true,
+          confirmButtonColor: "#2de2e6",
+          cancelButtonColor: "#475569",
+          confirmButtonText: "重新加载最新版本",
+          cancelButtonText: "先不刷新",
+        });
+
+        if (result.isConfirmed) {
+          await loadConfigFromDB(false);
+        }
+        return;
+      }
+
       if (data.success) {
+        setConfigVersion(Number(data.config_version || configVersion));
+        setConfigUpdatedAt(data.config_updated_at ?? null);
+        setConfigUpdatedBy(data.config_updated_by ?? normalizedEditorName);
+        await loadConfigFromDB(false);
         await Swal.fire({
           icon: "success",
           title: "SYSTEM UPDATED",
+          text: `已保存为版本 #${Number(data.config_version || configVersion)}`,
           background: "#1e293b",
           color: "#2de2e6",
         });
@@ -639,7 +758,7 @@ export default function AdminDashboard() {
           color: "#ff4444",
         });
       }
-    } catch (e) {
+    } catch {
       Swal.close();
       await Swal.fire({
         icon: "error",
@@ -658,7 +777,18 @@ export default function AdminDashboard() {
   return (
     <div className="p-4 md:p-8 min-h-screen bg-[#0f172a]">
       <div className="max-w-6xl mx-auto">
-        <AdminHeader onSave={saveData} />
+        <AdminHeader
+          onSave={saveData}
+          onReload={() => {
+            void loadConfigFromDB(false);
+          }}
+          currentVersion={configVersion}
+          lastUpdatedAt={configUpdatedAt}
+          lastUpdatedBy={configUpdatedBy}
+          historyCount={historyCount}
+          editorName={editorName}
+          onEditorNameChange={handleEditorNameChange}
+        />
         <AdminTabsNav activeTab={activeTab} onSwitchTab={switchTab} />
         <AdminTabContent
           activeTab={activeTab}
