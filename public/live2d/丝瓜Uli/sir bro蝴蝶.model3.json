@@ -1,0 +1,38 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "sir bro蝴蝶.moc3",
+		"Textures": [
+			"sir bro蝴蝶.4096/texture_00.png",
+			"sir bro蝴蝶.4096/texture_01.png",
+			"sir bro蝴蝶.4096/texture_02.png",
+			"sir bro蝴蝶.4096/texture_03.png",
+			"sir bro蝴蝶.4096/texture_04.png",
+			"sir bro蝴蝶.4096/texture_05.png",
+			"sir bro蝴蝶.4096/texture_06.png",
+			"sir bro蝴蝶.4096/texture_07.png",
+			"sir bro蝴蝶.4096/texture_08.png",
+			"sir bro蝴蝶.4096/texture_09.png",
+			"sir bro蝴蝶.4096/texture_10.png",
+			"sir bro蝴蝶.4096/texture_11.png",
+			"sir bro蝴蝶.4096/texture_12.png",
+			"sir bro蝴蝶.4096/texture_13.png",
+			"sir bro蝴蝶.4096/texture_14.png",
+			"sir bro蝴蝶.4096/texture_15.png"
+		],
+		"Physics": "sir bro蝴蝶.physics3.json",
+		"DisplayInfo": "sir bro蝴蝶.cdi3.json"
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": []
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": []
+		}
+	]
+}
