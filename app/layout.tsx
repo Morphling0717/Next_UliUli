@@ -1,5 +1,34 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import { PwaInstallGate } from "@/components/pwa-install-gate";
+import { PwaUpdateBanner } from "@/components/pwa-update-banner";
 import "./globals.css";
+
+type IphoneSplash = { w: number; h: number; deviceWidth: number; deviceHeight: number; ratio: number };
+const IPHONE_SPLASHES: IphoneSplash[] = [
+  // iPhone 14/15 Pro Max & 14 Plus
+  { w: 1290, h: 2796, deviceWidth: 430, deviceHeight: 932, ratio: 3 },
+  // iPhone 14/15 Pro
+  { w: 1179, h: 2556, deviceWidth: 393, deviceHeight: 852, ratio: 3 },
+  // iPhone 12/13/14 / 12 Pro / 13 Pro
+  { w: 1170, h: 2532, deviceWidth: 390, deviceHeight: 844, ratio: 3 },
+  // iPhone 12 Mini / 13 Mini
+  { w: 1080, h: 2340, deviceWidth: 360, deviceHeight: 780, ratio: 3 },
+  // iPhone 11 Pro Max / XS Max
+  { w: 1242, h: 2688, deviceWidth: 414, deviceHeight: 896, ratio: 3 },
+  // iPhone 11 / XR
+  { w: 828, h: 1792, deviceWidth: 414, deviceHeight: 896, ratio: 2 },
+  // iPhone 11 Pro / XS / X
+  { w: 1125, h: 2436, deviceWidth: 375, deviceHeight: 812, ratio: 3 },
+  // iPhone 8 Plus / 7 Plus / 6s Plus
+  { w: 1242, h: 2208, deviceWidth: 414, deviceHeight: 736, ratio: 3 },
+  // iPhone 8 / 7 / 6s / SE2 / SE3
+  { w: 750, h: 1334, deviceWidth: 375, deviceHeight: 667, ratio: 2 },
+];
+
+const startupImages = IPHONE_SPLASHES.map(({ w, h, deviceWidth, deviceHeight, ratio }) => ({
+  url: `/pwa-splash?w=${w}&h=${h}`,
+  media: `(device-width: ${deviceWidth}px) and (device-height: ${deviceHeight}px) and (-webkit-device-pixel-ratio: ${ratio}) and (orientation: portrait)`,
+}));
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.uliuli.cc';
 // metadataBase 需要有效 URL（支持 http 和 https）
@@ -9,6 +38,8 @@ export const metadata: Metadata = {
   metadataBase: new URL(metadataBaseUrl),
   title: "项目：丝瓜ULI",
   description: "蝴蝶梦中歌唱，彼方沉眠",
+  applicationName: "UliUli",
+  manifest: "/manifest.webmanifest",
   openGraph: {
     title: "项目：丝瓜ULI",
     description: "蝴蝶梦中歌唱，彼方沉眠",
@@ -31,14 +62,27 @@ export const metadata: Metadata = {
     description: "蝴蝶梦中歌唱，彼方沉眠",
     images: ['/og-image.jpg'],
   },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "UliUli",
+    startupImage: startupImages,
+  },
   icons: {
     icon: [
       { url: "/favicon.ico?v=2" },
-      { url: "/ct3b.png?v=2", type: "image/png" },
+      { url: "/app.jpg", type: "image/jpeg" },
     ],
     shortcut: "/favicon.ico?v=2",
-    apple: "/ct3b.png?v=2",
+    apple: "/app.jpg",
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#050508",
 };
 
 export default function RootLayout({
@@ -73,6 +117,8 @@ export default function RootLayout({
 
         {/* 页面主要内容 */}
         {children}
+        <PwaUpdateBanner />
+        <PwaInstallGate />
       </body>
     </html>
   );
