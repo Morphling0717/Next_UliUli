@@ -13,6 +13,19 @@ export function PwaUpdateBanner() {
     if (typeof window === "undefined") return;
     if (!("serviceWorker" in navigator)) return;
 
+    // dev 模式下 Next.js chunks 没有内容 hash，
+    // 一旦被 SW 缓存就会让 HMR 失效、导致用户看到老代码。
+    // 所以只在生产环境注册 SW，dev 模式主动注销已存在的 SW。
+    if (process.env.NODE_ENV !== "production") {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((r) => r.unregister());
+      });
+      if (window.caches) {
+        caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
+      }
+      return;
+    }
+
     let cancelled = false;
 
     const watchRegistration = (reg: ServiceWorkerRegistration) => {

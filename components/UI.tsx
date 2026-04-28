@@ -22,6 +22,9 @@ export interface GlassCardProps {
   children: React.ReactNode;
   className?: string;
   onClick?: () => void;
+  /** 跳过进入动画。在动态 overlay （如 FeaturePanel）里使用 GlassCard 时，
+   * IntersectionObserver 可能漏探入场事件导致卸在 opacity 0，需要跳过。 */
+  disableAnimation?: boolean;
 }
 
 export interface GoldenLuckModalProps {
@@ -90,7 +93,7 @@ export const ToastContainer: React.FC<{ notifications: ToastNotificationProps[] 
 );
 
 // --- 3. 玻璃拟态卡片组件 ---
-export const GlassCard: React.FC<GlassCardProps> = ({ children, className = "", onClick }) => {
+export const GlassCard: React.FC<GlassCardProps> = ({ children, className = "", onClick, disableAnimation = false }) => {
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);
 
@@ -118,9 +121,10 @@ export const GlassCard: React.FC<GlassCardProps> = ({ children, className = "", 
 
   return (
     <motion.div
-      whileInView={{ opacity: [0, 1], y: [20, 0] }}
-      viewport={{ once: true }}
-      transition={{ duration: 0.5 }}
+      initial={disableAnimation ? false : undefined}
+      whileInView={disableAnimation ? undefined : { opacity: [0, 1], y: [20, 0] }}
+      viewport={disableAnimation ? undefined : { once: true }}
+      transition={disableAnimation ? { duration: 0 } : { duration: 0.5 }}
       onClick={onClick}
       onMouseMove={handleMouseMove}
       className={`

@@ -23,9 +23,12 @@ export interface SongSystemProps {
   config?: any;
   songs?: SongItem[];
   hiddenSongs?: SongItem[];
+  /** 强制跳过列表的桌面 stagger 动画。/app 入口里 SongSystem 嵌在小屏 panel 中，
+   * 即使浏览器宽度 ≥ 768 也不应该走 ~9 秒的桌面 stagger 动画。 */
+  disableAnimation?: boolean;
 }
 
-export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotification, isUnlocked, config, songs, hiddenSongs }) => {
+export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotification, isUnlocked, config, songs, hiddenSongs, disableAnimation = false }) => {
   const uiConfig = config?.song_ui || {
       titlePrefix: "SONG", 
       titleSuffix: "_DATABASE",
@@ -44,7 +47,16 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
   const [pityCount, setPityCount] = useState<string | number>("...");
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
-  const [isMobile, setIsMobile] = useState(false); // 修复：在 useEffect 中获取，防止 SSR 报错
+  // 用 lazy initializer 在首屏就拿到正确的 isMobile，避免桌面 stagger 动画在
+  // 手机上把整个列表（数百条）挡住造成"空列表"假象。
+  // SongSystem 已是 dynamic({ ssr: false })，所以 window 一定可用。
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 768;
+  });
+
+  // 任一为真即跳过桌面动画
+  const skipStagger = isMobile || disableAnimation;
   
   const WORKER_URL = "/api"; 
   
@@ -168,7 +180,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
         {uiConfig.titlePrefix}<span className="text-(--neon-blue)">{uiConfig.titleSuffix}</span>
       </h2>
 
-      <GlassCard className="w-full max-w-6xl mx-auto p-4 md:p-8 min-h-[500px] md:min-h-175">
+      <GlassCard className="w-full max-w-6xl mx-auto p-4 md:p-8 min-h-[500px] md:min-h-175" disableAnimation={skipStagger}>
         <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 md:gap-6">
           <div className="text-sm font-mono text-(--neon-blue) text-center md:text-left">
             {uiConfig.serverText || "SERVER:"} {isOnline ? (uiConfig.serverOnline || "ONLINE") : (uiConfig.serverOffline || "OFFLINE")} // {uiConfig.pityText || "PITY:"} {pityCount}
@@ -217,18 +229,70 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
         </div>
 
         <div className="h-125 overflow-y-auto pr-2 custom-scrollbar relative">
+          {skipStagger ? (
+            // 无动画路径：用普通 div 直接渲染，避免 framer-motion 子级隐式继承
+            // 父级 variants 状态导致 opacity 卡在 0。
+            <div key={activeTab + searchTerm}>
+              {filteredSongs.length === 0 ? (
+                <div className="text-center text-gray-500 mt-20 font-mono tracking-widest">
+                  {uiConfig.emptyText || "/// DATA NOT FOUND ///"}
+                </div>
+              ) : (
+                filteredSongs.map((s, i) => (
+                  <div
+                    key={`${s.name}-${i}`}
+                    className={`flex justify-between items-center p-4 border-b border-white/5 transition-colors group cursor-pointer ${
+                        s.isHidden ? 'hover:bg-purple-900/20' : 'hover:bg-(--neon-blue)/10'
+                    }`}
+                    onClick={() => {
+                      const copyText = s.isHidden && s.artist === "UNKNOWN_ENTITY"
+                        ? `点歌 ${s.name}`
+                        : `点歌 ${s.name} ${s.artist}`;
+                      handleCopy(copyText, s.name);
+                    }}
+                  >
+                    <div>
+                      <div className={`font-medium transition-colors flex items-center gap-2 ${
+                          s.isHidden
+                            ? 'text-purple-300 group-hover:text-purple-100'
+                            : 'text-white group-hover:text-(--neon-blue)'
+                      }`}>
+                        {s.name}
+                        {s.isHidden && (
+                            <span className="text-[9px] font-tech tracking-widest bg-purple-600/20 border border-purple-500/50 text-purple-400 px-1.5 py-0.5 rounded">
+                                {uiConfig.secretTag || "SECRET"}
+                            </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 font-mono mt-1">
+                        {s.artist}
+                      </div>
+                    </div>
+                    <div className={`opacity-0 group-hover:opacity-100 transition-opacity ${
+                        s.isHidden ? 'text-purple-400' : 'text-(--neon-blue)'
+                    }`}>
+                      {copiedSong === s.name ? (
+                        uiConfig.copiedTag || "COPIED"
+                      ) : (
+                        <Icons.Copy size={16} />
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          ) : (
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab + searchTerm}
-              variants={isMobile ? undefined : listVariants as any}
-              initial={isMobile ? { opacity: 1 } : "hidden"}
-              animate={isMobile ? { opacity: 1 } : "visible"}
-              exit={isMobile ? { opacity: 1 } : "exit"}
-              transition={isMobile ? { duration: 0 } : undefined}
+              variants={listVariants as any}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
             >
               {filteredSongs.length === 0 ? (
                 <motion.div
-                  variants={isMobile ? undefined : itemVariants}
+                  variants={itemVariants}
                   className="text-center text-gray-500 mt-20 font-mono tracking-widest"
                 >
                   {uiConfig.emptyText || "/// DATA NOT FOUND ///"}
@@ -237,7 +301,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
                 filteredSongs.map((s, i) => (
                   <motion.div
                     key={`${s.name}-${i}`}
-                    variants={isMobile ? undefined : itemVariants}
+                    variants={itemVariants}
                     className={`flex justify-between items-center p-4 border-b border-white/5 transition-colors group cursor-pointer ${
                         s.isHidden ? 'hover:bg-purple-900/20' : 'hover:bg-(--neon-blue)/10'
                     }`}
@@ -279,6 +343,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
               )}
             </motion.div>
           </AnimatePresence>
+          )}
         </div>
       </GlassCard>
     </section>

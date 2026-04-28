@@ -126,6 +126,14 @@ export default function AppFeatureHub() {
     };
   }, [activePanel]);
 
+  // PWA 系统返回键 / 手势返回拦截：当任一层（panel / 模态）打开时
+  // push 一条 history 记录，按返回会触发 popstate，被我们捕获后关闭这一层
+  // 而不是直接退出 PWA。
+  useBackButtonClose(activePanel !== null, () => setActivePanel(null));
+  useBackButtonClose(mailOpen, () => setMailOpen(false));
+  useBackButtonClose(gachaOpen, () => setGachaOpen(false));
+  useBackButtonClose(isGoldenModalOpen, () => setIsGoldenModalOpen(false));
+
   const signalText = useMemo(() => {
     if (!mailOnline) return mailTexts?.disabledBanner || "信箱暂时关闭";
     if (activeTopics.length === 0) return "匿名写下想对 Uli 说的话";
@@ -282,7 +290,7 @@ export default function AppFeatureHub() {
         {/* Feature Bottom Sheets / Full Screen Overlays */}
         <FeaturePanel open={activePanel === "songs"} onClose={() => setActivePanel(null)}>
           <div className="h-full bg-[#050508] overflow-y-auto">
-            <SongSystem onUnlockHidden={() => unlockHidden(true)} addNotification={addNotification} isUnlocked={isUnlocked} config={siteConfig} songs={songs} hiddenSongs={hiddenSongs} />
+            <SongSystem onUnlockHidden={() => unlockHidden(true)} addNotification={addNotification} isUnlocked={isUnlocked} config={siteConfig} songs={songs} hiddenSongs={hiddenSongs} disableAnimation />
           </div>
         </FeaturePanel>
 
@@ -430,4 +438,42 @@ function FeatureLoading({ label }: { label: string }) {
       {label}
     </div>
   );
+}
+
+/**
+ * 当 `open` 为 true 时往 history 里 push 一条标记，监听 popstate：
+ *  - 用户按系统返回键 / 手势返回 → 触发 popstate → 调用 onClose 关闭这一层
+ *  - 用户点关闭按钮 / Esc 等主动关闭 → cleanup 中 history.back() 把标记弹掉，避免历史栈污染
+ *
+ * 这样在 PWA 中按返回不会直接退出 App，而是依次关闭打开的层。
+ */
+function useBackButtonClose(open: boolean, onClose: () => void) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    if (typeof window === "undefined") return;
+
+    window.history.pushState({ uliuliLayer: Date.now() }, "");
+
+    let closedByPop = false;
+    const handlePop = () => {
+      closedByPop = true;
+      onCloseRef.current();
+    };
+    window.addEventListener("popstate", handlePop);
+
+    return () => {
+      window.removeEventListener("popstate", handlePop);
+      // 主动关闭时，把刚才 push 的 history 标记 back 掉
+      if (!closedByPop) {
+        try {
+          window.history.back();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [open]);
 }
