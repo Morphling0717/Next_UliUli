@@ -1444,12 +1444,15 @@ DgpEngine.prototype._processPreActions = function (
             : FEVER_SSS_CHANCE_DEFAULT;
       const pC = isTanuki ? FEVER_MISS_CHANCE_TANUKI : FEVER_MISS_CHANCE_DEFAULT;
       const pS = 0.25;
-      const otherLargeBuckle = actor.buckles.find(
+      const equippedSameColorSource = actor.buckles.find(
         (b) =>
           b.id !== 'Fever' &&
           b.id !== 'Command_Raising' &&
           b.id !== 'Command_Twin' &&
           ['large', 'legendary', 'mythic'].includes(b.tier),
+      );
+      const baseFeverPool = ['Magnum', 'Zombie', 'Ninja', 'Monster', 'Beat'].filter(
+        (id) => id !== actor.inventory?.id && (!equippedSameColorSource || id !== equippedSameColorSource.id),
       );
 
       roundLogs.push({
@@ -1467,35 +1470,23 @@ DgpEngine.prototype._processPreActions = function (
         drawnId = 'Boost';
       } else if (rand < pSSS + pC) {
         rollResult = 'C';
-      } else if (rand < pSSS + pC + pS && otherLargeBuckle) {
+      } else if (rand < pSSS + pC + pS && equippedSameColorSource) {
         rollResult = 'S';
-        drawnId = otherLargeBuckle.id;
+        drawnId = equippedSameColorSource.id;
       } else {
         rollResult = 'A';
-        drawnId = this.pickRandom(
-          ['Magnum', 'Zombie', 'Ninja', 'Monster', 'Beat'].filter(
-            (id) => !otherLargeBuckle || id !== otherLargeBuckle.id,
-          ),
-        );
+        drawnId = this.pickRandom(baseFeverPool);
       }
 
       if (rollResult === 'C') {
-        const trashNames = ['水管', '螺旋桨', '战锤', '猫头鹰', '防爆盾'];
-        const tName = this.pickRandom(trashNames);
-        actor.feverSlot = {
-          id: 'Trash',
-          name: tName,
-          tier: 'small',
-          tags: ['trash'],
-          hp: 0,
-          atk: 0,
-          pref: {},
-          skills: [{ name: `滑稽的${tName}敲击`, type: 'attack', cd: 0, dmg: 0.5 }],
-        };
+        drawnId = this.pickRandom(
+          Object.keys(BUCKLES).filter((id) => BUCKLES[id].tier === 'small'),
+        );
+        actor.feverSlot = BUCKLES[drawnId];
         actor.shield += FEVER_MISS_CONSOLATION_SHIELD;
         roundLogs.push({
           round: r,
-          htmlText: `<span class="text-gray-500 font-bold"> [ 🎰 轮盘停止... 💦 | 🔨 | 💩 -> 💀 MISS... ] </span><br/><span class="text-gray-400">竟然摇出了小型武装 [${tName}]？！全场陷入了尴尬的沉默... (${e(actor.name)} 沮丧地获得了 50 点安慰护盾)</span>`,
+          htmlText: `<span class="text-gray-500 font-bold"> [ 🎰 轮盘停止... 💦 | 🔨 | 🛡️ -> 💀 MISS... ] </span><br/><span class="text-gray-400">虽然只摇出了小型带扣 [${BUCKLES[drawnId].name}]，但至少是真正的武装！(${e(actor.name)} 额外获得了 50 点安慰护盾)</span>`,
           type: 'system_warning',
           delay: 2500,
           actorId: actor.id,
@@ -1641,7 +1632,7 @@ DgpEngine.prototype._executeLootAction = function (
     // 没看上地上的，或者地上本来就没有，果断去开盲盒卡池抽卡
     const ownedIds = actor.buckles.map((b) => b.id);
     if (actor.inventory) ownedIds.push(actor.inventory.id);
-    if (actor.feverSlot && actor.feverSlot.id !== 'Trash') ownedIds.push(actor.feverSlot.id);
+    if (actor.feverSlot) ownedIds.push(actor.feverSlot.id);
 
     const avBuckles = Object.keys(BUCKLES).filter(
       (k) =>
@@ -1864,10 +1855,8 @@ DgpEngine.prototype._executeAttackAction = function (
       addS(slot1, ['tactical']);
     }
 
-    if (actor.feverSlot && actor.feverSlot.id !== 'Trash')
+    if (actor.feverSlot)
       addS(actor.feverSlot, ['attack', 'tactical', 'ultimate']);
-    else if (actor.feverSlot && actor.feverSlot.id === 'Trash')
-      addS(actor.feverSlot, ['attack']);
 
     if (actor.feverSlot && actor.feverSlot.id === 'Boost' && !actor.jackpotBurstReady) {
       availableSkills.push({
@@ -1992,7 +1981,7 @@ DgpEngine.prototype._executeAttackAction = function (
   let chosenSkill = availableSkills[0];
   let isBurstingJackpot = false;
 
-  if (actor.jackpotBurstReady && actor.feverSlot && actor.feverSlot.id !== 'Trash') {
+  if (actor.jackpotBurstReady && actor.feverSlot) {
     const sourceBuckle = BUCKLES[actor.feverSlot.id];
     const ultSkill =
       sourceBuckle.skills.find((s) => s.type === 'ultimate' || s.type === 'tactical') ||
@@ -2184,7 +2173,7 @@ DgpEngine.prototype._executeAttackAction = function (
       let otherBuckleObj: BuckleDef | null | undefined = actor.buckles
         ? actor.buckles.find((b) => b.name === otherName)
         : null;
-      if (!otherBuckleObj && actor.feverSlot && actor.feverSlot.id !== 'Trash')
+      if (!otherBuckleObj && actor.feverSlot)
         otherBuckleObj = actor.feverSlot;
       const coreName = actor.idCore ? actor.idCore.name : '机车';
 
@@ -2659,7 +2648,7 @@ DgpEngine.prototype._executeAttackAction = function (
     const droppedBuckles: BuckleDef[] = actor.buckles.filter((b) => b.id !== 'Command_Raising');
     if (
       actor.feverSlot &&
-      actor.feverSlot.id !== 'Trash' &&
+      ['large', 'legendary', 'mythic'].includes(actor.feverSlot.tier) &&
       actor.feverSlot.id !== 'Command_Raising'
     )
       droppedBuckles.push(actor.feverSlot);
@@ -2839,7 +2828,7 @@ DgpEngine.prototype.resolveSkillCombo = function (
       if (
         actor.feverSlot &&
         actor.feverSlot.id !== sourceBuckle.id &&
-        actor.feverSlot.id !== 'Trash'
+        ['large', 'legendary', 'mythic'].includes(actor.feverSlot.tier)
       )
         pool.push(actor.feverSlot.id);
       if (actor.inventory && actor.inventory.tier === 'large') pool.push(actor.inventory.id);

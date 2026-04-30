@@ -406,6 +406,7 @@ cp codes.db codes.db.$(date +%F).bak
 - **核心引擎**：`lib/dgp/engine.ts`
 - **数据与规则**：`lib/dgp/data.ts`、`lib/dgp/logic.ts`、`lib/dgp/constants.ts`
 - **工具与类型**：`lib/dgp/core.ts`、`lib/dgp/rng.ts`、`lib/dgp/types.ts`
+- **详细文档**：[`lib/dgp/README.md`](./lib/dgp/README.md)（包含玩法、回合流程、装备体系、事件、场地、ID Core、带扣与实现细节）
 
 ### 当前版本的关键升级
 
