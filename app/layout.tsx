@@ -34,6 +34,10 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.uliuli.cc";
 const metadataBaseUrl = siteUrl.startsWith("http") ? siteUrl : `https://${siteUrl}`;
 const siteOrigin = new URL(metadataBaseUrl).origin;
 const canonicalUrl = new URL("/", siteOrigin).toString();
+const ogImageLandscape = new URL("/og-image.jpg", siteOrigin).toString();
+// 方形分享图（微信 / 微博 / QQ 国内分享卡片更多用方形缩略图）。
+// public/app.jpg 是 402x402 方形 JPEG，正好可以同时充当 PWA 图标和方形 OG。
+const ogImageSquare = new URL("/app.jpg", siteOrigin).toString();
 const siteTitle = "丝瓜Uli | UliUli 主站";
 const siteDescription = "丝瓜Uli（丝瓜 / 丝瓜ULI / UliUli）官方主站，集中展示直播、歌回、视频、点歌与互动内容。";
 const siteKeywords = [
@@ -110,6 +114,11 @@ export const metadata: Metadata = {
   classification: "VTuber, Music, Live Streaming",
   alternates: {
     canonical: canonicalUrl,
+    // 单语站点显式声明 zh-CN，避免 Google 把空缺的 hreflang 误判成需要其他语言版本。
+    languages: {
+      "zh-CN": canonicalUrl,
+      "x-default": canonicalUrl,
+    },
   },
   formatDetection: {
     telephone: false,
@@ -135,11 +144,21 @@ export const metadata: Metadata = {
     url: canonicalUrl,
     siteName: "丝瓜Uli | UliUli",
     images: [
+      // 横版优先（Twitter / Facebook / Telegram / 飞书）
       {
-        url: "/og-image.jpg",
+        url: ogImageLandscape,
         width: 1200,
         height: 630,
         alt: "丝瓜Uli | UliUli 主站",
+        type: "image/jpeg",
+      },
+      // 方形备选（微信 / 微博 / QQ / 钉钉）
+      {
+        url: ogImageSquare,
+        width: 402,
+        height: 402,
+        alt: "丝瓜Uli | UliUli",
+        type: "image/jpeg",
       },
     ],
     locale: "zh_CN",
@@ -149,7 +168,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: siteTitle,
     description: siteDescription,
-    images: ["/og-image.jpg"],
+    images: [ogImageLandscape],
   },
   appleWebApp: {
     capable: true,
@@ -159,15 +178,21 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/favicon.ico?v=2" },
-      { url: "/app.jpg", type: "image/jpeg" },
+      { url: "/favicon.ico?v=2", sizes: "any" },
+      { url: "/app.jpg", type: "image/jpeg", sizes: "402x402" },
     ],
     shortcut: "/favicon.ico?v=2",
-    apple: "/app.jpg",
+    apple: [
+      // iOS 添加到主屏幕标准入口；402x402 jpg 在 iOS 12+ 上能正确呈现。
+      { url: "/app.jpg", sizes: "180x180", type: "image/jpeg" },
+      { url: "/app.jpg", sizes: "402x402", type: "image/jpeg" },
+    ],
   },
   other: {
     "applicable-device": "pc,mobile",
     "msapplication-TileColor": "#050508",
+    // 国内分享卡片解析常用的额外字段（image_src 兼容老版本微博/QQ）。
+    "image_src": ogImageSquare,
   },
 };
 
@@ -186,19 +211,43 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <head>
-        {/* 强制浏览器不缓存 HTML (在 Next.js 里其实可以通过路由缓存策略控制，但保留你的标签以策安全) */}
-        <meta httpEquiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-        <meta httpEquiv="Pragma" content="no-cache" />
-        <meta httpEquiv="Expires" content="0" />
-        
-        {/* 引入字体 */}
+        {/* 注意：之前这里有 <meta http-equiv="Cache-Control" no-store> 三件套，
+         * 会主动告诉爬虫 / CDN 不要缓存 HTML，等于压低了搜索引擎抓取频率，
+         * 也吃掉了 Cloudflare 边缘缓存收益。已改由 /api/config 端点自身保持
+         * no-store，HTML 本身允许 CDN 协商缓存，对 SEO 与 TTFB 都更友好。 */}
+
+        {/* LCP 关键资源预加载：首屏看到的第一张大图就是默认 Model.webp，
+         * 用 imagesrcset/imagesizes 提示浏览器尽早开始下载，能稳定降低 LCP。 */}
+        <link
+          rel="preload"
+          as="image"
+          href="/Model.webp"
+          // @ts-expect-error fetchpriority 在 React 类型里要 18.3+ 才内置
+          fetchpriority="high"
+        />
+
+        {/* 引入字体：preconnect + 异步 stylesheet (display=swap)。
+         * 用 print → onload swap 把字体 CSS 变成非阻塞，避免 fonts.googleapis.com
+         * 在国内时不时不通时整页空白，影响 LCP / 收录。 */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Syncopate:wght@400;700&family=Noto+Sans+SC:wght@100;400;700&family=Ma+Shan+Zheng&display=swap"
           rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Syncopate:wght@400;700&family=Noto+Sans+SC:wght@100;400;700&family=Ma+Shan+Zheng&display=swap"
+          media="print"
+          // print 媒体查询不阻塞首屏，加载完后由内联脚本切回 all。
+          // 这是 web.dev 推荐的非阻塞字体加载模式。
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {...({ onLoad: "this.media='all'" } as any)}
         />
-        
+        <noscript>
+          {/* JS 关闭时（含部分爬虫）回退到普通同步加载，保证字体可用。 */}
+          <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Syncopate:wght@400;700&family=Noto+Sans+SC:wght@100;400;700&family=Ma+Shan+Zheng&display=swap"
+          />
+        </noscript>
+
         {verificationMetas.map(({ name, content }) => (
           <meta key={name} name={name} content={content} />
         ))}
