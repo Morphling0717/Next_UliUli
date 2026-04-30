@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { PwaInstallGate } from "@/components/pwa-install-gate";
 import { PwaUpdateBanner } from "@/components/pwa-update-banner";
 import "./globals.css";
@@ -217,29 +218,36 @@ export default function RootLayout({
          * no-store，HTML 本身允许 CDN 协商缓存，对 SEO 与 TTFB 都更友好。 */}
 
         {/* LCP 关键资源预加载：首屏看到的第一张大图就是默认 Model.webp，
-         * 用 imagesrcset/imagesizes 提示浏览器尽早开始下载，能稳定降低 LCP。 */}
+         * 提示浏览器尽早开始下载，能稳定降低 LCP。
+         * fetchPriority 驼峰是 React 18.3+ 标准 DOM prop。 */}
         <link
           rel="preload"
           as="image"
           href="/Model.webp"
-          // @ts-expect-error fetchpriority 在 React 类型里要 18.3+ 才内置
-          fetchpriority="high"
+          fetchPriority="high"
         />
 
         {/* 引入字体：preconnect + 异步 stylesheet (display=swap)。
-         * 用 print → onload swap 把字体 CSS 变成非阻塞，避免 fonts.googleapis.com
-         * 在国内时不时不通时整页空白，影响 LCP / 收录。 */}
+         *
+         * 字体异步化策略：SSR 阶段先把 stylesheet 标成 media="print"（不阻塞渲染），
+         * 紧跟一段内联脚本把所有 print stylesheet 改回 media="all"。脚本在 head 里
+         * 执行非常早，字体几乎没延迟。
+         *
+         * 注意：之前曾尝试在 <link> 上写 onLoad="this.media='all'"，但 React 不接
+         * 受字符串形式的事件处理器，会每次渲染都报 "Expected onLoad listener to be
+         * a function" 把 console / hydration 拖死。已改用独立 <script> 注入。
+         */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Syncopate:wght@400;700&family=Noto+Sans+SC:wght@100;400;700&family=Ma+Shan+Zheng&display=swap"
           media="print"
-          // print 媒体查询不阻塞首屏，加载完后由内联脚本切回 all。
-          // 这是 web.dev 推荐的非阻塞字体加载模式。
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          {...({ onLoad: "this.media='all'" } as any)}
+          data-async-font="true"
         />
+        <Script id="async-google-fonts" strategy="afterInteractive">
+          {"document.querySelectorAll('link[data-async-font]').forEach(function(l){l.media='all';});"}
+        </Script>
         <noscript>
           {/* JS 关闭时（含部分爬虫）回退到普通同步加载，保证字体可用。 */}
           <link
