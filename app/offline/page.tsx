@@ -4,6 +4,10 @@ import { OfflineRetryButton } from "@/components/offline-retry-button";
 export const metadata: Metadata = {
   title: "离线模式 · UliUli",
   description: "暂时连不上网络，已在离线模式下显示。",
+  robots: {
+    index: false,
+    follow: false,
+  },
 };
 
 export const viewport: Viewport = {

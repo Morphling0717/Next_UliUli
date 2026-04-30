@@ -27,15 +27,11 @@ export async function generateMetadata(): Promise<Metadata> {
     count > 0
       ? `UliUli 的活动信箱聚合页，当前有 ${count} 个活动可参与投信`
       : "UliUli 当前没有进行中的活动";
-  // 没有活动时 noindex，防止空页面被收录
   return {
     title,
     description,
     openGraph: { title, description, type: "website" },
-    robots:
-      count > 0
-        ? { index: true, follow: true }
-        : { index: false, follow: false },
+    robots: { index: false, follow: false },
   };
 }
 

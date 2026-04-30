@@ -30,42 +30,131 @@ const startupImages = IPHONE_SPLASHES.map(({ w, h, deviceWidth, deviceHeight, ra
   media: `(device-width: ${deviceWidth}px) and (device-height: ${deviceHeight}px) and (-webkit-device-pixel-ratio: ${ratio}) and (orientation: portrait)`,
 }));
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.uliuli.cc';
-// metadataBase 需要有效 URL（支持 http 和 https）
-const metadataBaseUrl = siteUrl.startsWith('http') ? siteUrl : `https://${siteUrl}`;
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.uliuli.cc";
+const metadataBaseUrl = siteUrl.startsWith("http") ? siteUrl : `https://${siteUrl}`;
+const siteOrigin = new URL(metadataBaseUrl).origin;
+const canonicalUrl = new URL("/", siteOrigin).toString();
+const siteTitle = "丝瓜Uli | UliUli 主站";
+const siteDescription = "丝瓜Uli（丝瓜 / 丝瓜ULI / UliUli）官方主站，集中展示直播、歌回、视频、点歌与互动内容。";
+const siteKeywords = [
+  "丝瓜",
+  "丝瓜Uli",
+  "丝瓜ULI",
+  "UliUli",
+  "ULI",
+  "VTuber",
+  "虚拟主播",
+  "歌回",
+  "直播",
+  "点歌",
+  "主站",
+];
+const sameAsLinks = [
+  process.env.NEXT_PUBLIC_BILIBILI_LIVE_URL,
+  process.env.NEXT_PUBLIC_BILIBILI_SPACE_URL,
+  process.env.NEXT_PUBLIC_WEIBO_URL,
+  process.env.NEXT_PUBLIC_DOUYIN_URL,
+  process.env.NEXT_PUBLIC_XIAOHONGSHU_URL,
+  process.env.NEXT_PUBLIC_X_URL,
+].filter((value): value is string => Boolean(value));
+const googleSiteVerification =
+  process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION || "-XdV8ranOz9CFlWKYkc3NZ8VDv-5PGwCBXyaD57fOh4";
+const bingSiteVerification =
+  process.env.NEXT_PUBLIC_BING_SITE_VERIFICATION || "F855BDDAE6A00B5C07F387EE9710F8A7";
+const verificationMetas = [
+  { name: "baidu-site-verification", content: process.env.NEXT_PUBLIC_BAIDU_SITE_VERIFICATION },
+  { name: "sogou_site_verification", content: process.env.NEXT_PUBLIC_SOGOU_SITE_VERIFICATION },
+  { name: "so-site-verification", content: process.env.NEXT_PUBLIC_360_SITE_VERIFICATION },
+  { name: "msvalidate.01", content: bingSiteVerification },
+  { name: "google-site-verification", content: googleSiteVerification },
+].filter((item): item is { name: string; content: string } => Boolean(item.content));
+const structuredData = [
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: siteTitle,
+    alternateName: ["丝瓜", "丝瓜Uli", "丝瓜ULI", "UliUli", "ULI"],
+    url: canonicalUrl,
+    description: siteDescription,
+    inLanguage: "zh-CN",
+    keywords: siteKeywords.join(", "),
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "ProfilePage",
+    name: "丝瓜Uli 官方主页",
+    url: canonicalUrl,
+    inLanguage: "zh-CN",
+    mainEntity: {
+      "@type": "Person",
+      name: "丝瓜Uli",
+      alternateName: ["丝瓜", "丝瓜ULI", "UliUli", "ULI"],
+      description: siteDescription,
+      url: canonicalUrl,
+      image: new URL("/og-image.jpg", siteOrigin).toString(),
+      jobTitle: "VTuber",
+      ...(sameAsLinks.length > 0 ? { sameAs: sameAsLinks } : {}),
+    },
+  },
+];
 
 export const metadata: Metadata = {
-  metadataBase: new URL(metadataBaseUrl),
-  title: "项目：丝瓜ULI",
-  description: "蝴蝶梦中歌唱，彼方沉眠",
+  metadataBase: new URL(siteOrigin),
+  title: siteTitle,
+  description: siteDescription,
+  keywords: siteKeywords,
+  authors: [{ name: "丝瓜Uli", url: canonicalUrl }],
+  creator: "丝瓜Uli",
+  publisher: "UliUli",
+  category: "entertainment",
+  classification: "VTuber, Music, Live Streaming",
+  alternates: {
+    canonical: canonicalUrl,
+  },
+  formatDetection: {
+    telephone: false,
+    address: false,
+    email: false,
+  },
   applicationName: "UliUli",
   manifest: "/manifest.webmanifest",
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
   openGraph: {
-    title: "项目：丝瓜ULI",
-    description: "蝴蝶梦中歌唱，彼方沉眠",
-    url: siteUrl,
-    siteName: "项目：丝瓜ULI",
+    title: siteTitle,
+    description: siteDescription,
+    url: canonicalUrl,
+    siteName: "丝瓜Uli | UliUli",
     images: [
       {
-        url: '/og-image.jpg',
+        url: "/og-image.jpg",
         width: 1200,
         height: 630,
-        alt: '项目：丝瓜ULI — 蝴蝶梦中歌唱，彼方沉眠',
+        alt: "丝瓜Uli | UliUli 主站",
       },
     ],
-    locale: 'zh_CN',
-    type: 'website',
+    locale: "zh_CN",
+    type: "website",
   },
   twitter: {
-    card: 'summary_large_image',
-    title: "项目：丝瓜ULI",
-    description: "蝴蝶梦中歌唱，彼方沉眠",
-    images: ['/og-image.jpg'],
+    card: "summary_large_image",
+    title: siteTitle,
+    description: siteDescription,
+    images: ["/og-image.jpg"],
   },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "UliUli",
+    title: "丝瓜Uli",
     startupImage: startupImages,
   },
   icons: {
@@ -75,6 +164,10 @@ export const metadata: Metadata = {
     ],
     shortcut: "/favicon.ico?v=2",
     apple: "/app.jpg",
+  },
+  other: {
+    "applicable-device": "pc,mobile",
+    "msapplication-TileColor": "#050508",
   },
 };
 
@@ -104,6 +197,14 @@ export default function RootLayout({
         <link
           href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Syncopate:wght@400;700&family=Noto+Sans+SC:wght@100;400;700&family=Ma+Shan+Zheng&display=swap"
           rel="stylesheet"
+        />
+        
+        {verificationMetas.map(({ name, content }) => (
+          <meta key={name} name={name} content={content} />
+        ))}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
         />
         
       </head>

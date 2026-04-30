@@ -72,9 +72,6 @@ export async function generateMetadata(
       ? `活动进行中 · 欢迎给 Uli 投一封信`
       : "UliUli 的活动信箱");
 
-  // 只有 active 才允许索引；其它状态都 noindex
-  const indexable = variant === "active";
-
   return {
     title: titleMap[variant],
     description,
@@ -83,9 +80,7 @@ export async function generateMetadata(
       description,
       type: "website",
     },
-    robots: indexable
-      ? { index: true, follow: true }
-      : { index: false, follow: false },
+    robots: { index: false, follow: false },
   };
 }
 
