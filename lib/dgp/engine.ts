@@ -652,7 +652,7 @@ export class DgpEngine {
       this.groundBuckles.push('Command_Raising');
       roundLogs.push({
         round: r,
-        htmlText: `👀 场外的观测者 <span class="text-blue-400 font-bold">尼拉姆</span> 扶了下眼镜：“看来现有的武装无法打破僵局，让我来加点料吧。”<br/>☄️ 一枚闪耀着橙色光芒的【喷射器带扣】如陨石般坠落在了战场中心！<br/>⚔️ <span class="text-orange-400 font-bold text-lg drop-shadow-md">【遗物降临】全场第一把 ✈️[喷射器带扣 (Jet Buckle)] 掉落在了无主之地上！所有骑士的目光瞬间被吸引，一场惨烈的争夺战即将爆发！</span>`,
+        htmlText: `👀 制作人 <span class="text-blue-400 font-bold">尼拉姆</span> 察觉到 GM 基洛利正打算暗中干预游戏规则与观赏性，咽下惠方卷后：“如果有人想擅自介入比赛，那就需要有制裁他的玩家。”<br/>☄️ 一枚闪耀着橙色光芒的【喷射器带扣】被投送到了比赛场地中心！<br/>⚔️ <span class="text-orange-400 font-bold text-lg drop-shadow-md">【观测者投放】✈️[喷射器带扣 (Jet Buckle)] 掉落在了比赛场地上！爆发争夺大赛！</span>`,
         type: 'system_warning',
         delay: 3500,
         activeStage: this.activeStage,
@@ -667,11 +667,21 @@ export class DgpEngine {
       r === this.gmFeverDropRound + COMMAND_DROP_OFFSET_SECOND &&
       this.commandDrops === 1
     ) {
+      const firstCommandHolder =
+        currentPlayers.find(
+          (p) =>
+            p.status === 'alive' &&
+            !p.isJyamato &&
+            !p.isClone &&
+            (p.buckles.some((b) => b.id === 'Command_Raising' || b.id === 'Command_Twin') ||
+              p.inventory?.id === 'Command_Raising'),
+        ) || null;
+      const firstCommandHolderName = firstCommandHolder ? e(firstCommandHolder.name) : '拿到第一枚喷射器的骑士';
       this.commandDrops++;
       this.groundBuckles.push('Command_Raising');
       roundLogs.push({
         round: r,
-        htmlText: `🚨 <span class="text-red-500 font-bold text-lg drop-shadow-md">【系统劫持】</span> 整个大奖赛控制台爆发出刺耳的警报，赛场天穹变为暗红色！<span class="text-red-600 font-bold">GM 基洛利 亲自介入！</span><br/>🗣️ “比赛的走向已经脱离了我的剧本... 只有真正的强者，才有资格打破这个僵局！”<br/>☄️ 管理员强行越权！第二枚【喷射器带扣】突破空间限制，被强行投放至战场！<br/>⚔️ <span class="text-red-500 font-black text-xl drop-shadow-md">【禁忌投放】最后一把 ✈️[喷射器带扣 (Jet Buckle)] 狠狠砸在地面上！最惨烈的物资争夺战进入白热化阶段！</span>`,
+        htmlText: `🚨 <span class="text-red-500 font-bold text-lg drop-shadow-md">【GM介入】</span> DGP比赛场地爆发出刺耳的警报，赛场天穹变为暗红色！<span class="text-red-600 font-bold">GM 基洛利 亲自介入！</span><br/>🗣️ “${firstCommandHolderName} 的力量已经过于强势。为了维持游戏平衡，必须投下新的制衡手段。”<br/>☄️ 基洛利强行降下第二枚【喷射器带扣】!<br/>⚔️ <span class="text-red-500 font-black text-xl drop-shadow-md">【制衡投放】第二把 ✈️[喷射器带扣 (Jet Buckle)] 投放到赛场上！去阻止 ${firstCommandHolderName} 吧！</span>`,
         type: 'system_danger',
         delay: 4000,
         activeStage: this.activeStage,
@@ -2221,7 +2231,8 @@ DgpEngine.prototype._executeAttackAction = function (
     } else if (modifiedSkill.isWeaponSlotSkill) {
       fullActionLog = `${actionPrefix} ${e(actor.name)} ${weaponLog}`;
     } else {
-      fullActionLog = `${actionPrefix} ${e(actor.name)} ${weaponLog}使用 [${modifiedSkill.name}]`;
+      const skillVerb = weaponLog.includes('驱动器上的') ? '发动' : '使用';
+      fullActionLog = `${actionPrefix} ${e(actor.name)} ${weaponLog}${skillVerb} [${modifiedSkill.name}]`;
     }
   }
 
@@ -2781,6 +2792,11 @@ DgpEngine.prototype.resolveSkillCombo = function (
   }
 
   if (sourceBuckle?.weapon) {
+    const driverTriggerSkillNames = [
+      'Magnum Strike (马格南骑士踢)',
+      '蓄毒之臂·狂野利爪',
+      '忍法·风遁分身',
+    ];
     let modeLog = '';
     if (sourceBuckle.id === 'Magnum') {
       if (modifiedSkill.name.includes('手枪') || modifiedSkill.name.includes('Charge'))
@@ -2788,7 +2804,13 @@ DgpEngine.prototype.resolveSkillCombo = function (
       else if (modifiedSkill.name.includes('步枪') || modifiedSkill.name.includes('Blast'))
         modeLog = '·步枪模式';
     }
-    weaponLog = `拔出了 <span class="text-gray-300">[${sourceBuckle.weapon.name}${modeLog}]</span>，`;
+    if (driverTriggerSkillNames.includes(modifiedSkill.name)) {
+      weaponLog = `触发驱动器上的 <span class="text-gray-300">[${sourceBuckle.name}带扣]</span>，`;
+    } else if (sourceBuckle.id === 'Monster') {
+      weaponLog = `激活双臂的 <span class="text-gray-300">[${sourceBuckle.weapon.name}]</span>，`;
+    } else {
+      weaponLog = `拔出了 <span class="text-gray-300">[${sourceBuckle.weapon.name}${modeLog}]</span>，`;
+    }
   }
 
   // --- Command Twin 专属神话级播报与特化文案 ---

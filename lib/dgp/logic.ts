@@ -107,8 +107,16 @@ export function getThreatScore(
       if (target.atk > 100) score += 40;
     }
     if (actor.int > 50) {
-      if (target.idCore?.passive === 'thorns') score -= 70;
-      if (target.shield > 200) score -= 50;
+      if (target.idCore?.passive === 'thorns') {
+        const actorHpRatio = actor.hp / actor.maxHp;
+        const targetHpRatio = target.hp / target.maxHp;
+        const targetHasFever = target.buckles?.some((b) => b.id === 'Fever');
+        score -= targetHasFever ? 25 : 15;
+        if (actorHpRatio < 0.35) score -= targetHasFever ? 30 : 15;
+        if (targetHpRatio < 0.4) score += 45;
+        if (target.atk > actor.atk) score += 20;
+      }
+      if (target.shield > 200) score -= Math.min(30, target.shield / 25);
     }
     if (skill && skill.magic && target.buffs.some((b) => b.type === 'Wet')) score += 60;
   }
