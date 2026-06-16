@@ -184,7 +184,7 @@ npm run dev
 
 ```bash
 # SQLite 数据库文件
-cp codes.db codes.db.backup
+npm run db:backup
 ```
 
 ---
@@ -206,7 +206,7 @@ cp codes.db codes.db.backup
 ### Q: 为什么看不到配置数据？
 
 **A:** 
-1. 检查数据库是否正确迁移：`ls codes.db`
+1. 检查数据库是否正确迁移：`ls data/codes.db`
 2. 查看浏览器控制台是否有 API 错误
 3. 确认 `/api/config` 返回正确的 JSON
 

@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import type { SiteConfig } from '@/app/admin/types';
 
 // 引入 UI 组件库
 import { GlassCard, Icons } from './UI';
@@ -15,7 +16,7 @@ if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
 
-const getConfig = (providedConfig?: any) => {
+const getConfig = (providedConfig?: SiteConfig): SiteConfig => {
   return providedConfig || {};
 };
 
@@ -57,7 +58,7 @@ export interface DashboardProps {
   avatarSrc: string;
   onAvatarClick: () => void;
   onOpenGame: () => void;
-  config?: any;
+  config?: SiteConfig;
   assetVersion?: number;
 }
 
@@ -141,7 +142,7 @@ const CyberGlitchText: React.FC<{ text: string; className?: string; style?: Reac
 };
 
 // --- 1. Hero Section ---
-const HeroSection: React.FC<{ stats: string | number; config?: any }> = ({ stats, config }) => {
+const HeroSection: React.FC<{ stats: string | number; config?: SiteConfig }> = ({ stats, config }) => {
   const cfg = getConfig(config).hero || {};
 
   const scrollToSongs = () => {
@@ -179,7 +180,7 @@ const HeroSection: React.FC<{ stats: string | number; config?: any }> = ({ stats
           </p>
           <p className="text-xs md:text-sm text-gray-500 tracking-wider flex items-center gap-2">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            {cfg.statusText || "项目状态: 存活"} // {cfg.followersText || "现有追随者:"}{" "}
+            {cfg.statusText || "项目状态: 存活"} <span aria-hidden>{"//"}</span> {cfg.followersText || "现有追随者:"}{" "}
             <span className="text-(--neon-blue)">{stats}</span>
           </p>
         </div>
@@ -208,7 +209,7 @@ const HeroSection: React.FC<{ stats: string | number; config?: any }> = ({ stats
 };
 
 // --- 2. Model Breakdown ---
-const ModelBreakdown: React.FC<{ avatarSrc: string; onAvatarClick: () => void; config?: any; assetVersion?: number }> = ({
+const ModelBreakdown: React.FC<{ avatarSrc: string; onAvatarClick: () => void; config?: SiteConfig; assetVersion?: number }> = ({
   avatarSrc,
   onAvatarClick,
   config,
@@ -303,7 +304,7 @@ const ModelBreakdown: React.FC<{ avatarSrc: string; onAvatarClick: () => void; c
 };
 
 // --- 3. Live Status & Shortcuts ---
-const LiveStatusSection: React.FC<{ liveStatus: boolean; onOpenGame: () => void; config?: any }> = ({ liveStatus, onOpenGame, config }) => {
+const LiveStatusSection: React.FC<{ liveStatus: boolean; onOpenGame: () => void; config?: SiteConfig }> = ({ liveStatus, onOpenGame, config }) => {
   const cfg = getConfig(config).live || {};
   const links: LinkItem[] = cfg.links || [];
 
@@ -429,7 +430,7 @@ const LiveStatusSection: React.FC<{ liveStatus: boolean; onOpenGame: () => void;
 };
 
 // --- 4. Gallery (Horizontal Video Gallery) ---
-export const HorizontalVideoGallery: React.FC<{ videos: VideoItem[]; config?: any }> = ({ videos, config }) => {
+export const HorizontalVideoGallery: React.FC<{ videos: VideoItem[]; config?: SiteConfig }> = ({ videos, config }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const cfg = getConfig(config).gallery || {};
@@ -504,7 +505,7 @@ export const HorizontalVideoGallery: React.FC<{ videos: VideoItem[]; config?: an
 
               <div className="flex items-center gap-2 text-xs text-gray-400 font-mono">
                 <span className="flex items-center gap-1">
-                  <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polygon points="5 3 19 12 5 21 5 3" />
                   </svg>
                   {v.play}

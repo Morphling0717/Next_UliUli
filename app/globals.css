@@ -313,6 +313,7 @@ body {
 
 /* 资源图片框 */
 .asset-img-box {
+  position: relative;
   height: 100px;
   width: 100%;
   display: flex;
@@ -744,4 +745,3 @@ body {
   -webkit-mask: var(--lucide-trash) no-repeat center / contain;
   mask: var(--lucide-trash) no-repeat center / contain;
 }
-

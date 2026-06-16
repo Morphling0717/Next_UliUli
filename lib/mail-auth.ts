@@ -1,33 +1,18 @@
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
 import { getClientIp } from './db';
+import {
+  getExpectedPassword,
+  safeEqual,
+  verifyAdminSession,
+} from './admin-session';
 import {
   checkLoginLock,
   clearLoginFailure,
   recordLoginFailure,
 } from './mail-rate-limit';
 
-/**
- * 常数时间字符串比较，防时序侧信道（timing attack）。
- * 注意 `crypto.timingSafeEqual` 要求两个 Buffer 长度相同，所以先比长度再比内容。
- */
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) {
-    // 跑一次等长假比较，避免长度信息从分支耗时上泄漏
-    crypto.timingSafeEqual(ab, Buffer.alloc(ab.length));
-    return false;
-  }
-  return crypto.timingSafeEqual(ab, bb);
-}
-
 function getMailAdminPassword(): string | null {
-  const mailPassword = process.env.MAIL_AUTH_PASSWORD?.trim();
-  if (mailPassword) return mailPassword;
-  const adminPassword = process.env.ADMIN_PASSWORD?.trim();
-  if (adminPassword) return adminPassword;
-  return null;
+  return getExpectedPassword('mail');
 }
 
 /**
@@ -44,6 +29,8 @@ function getMailAdminPassword(): string | null {
  * `ADMIN_PASSWORD`。
  */
 export async function verifyMailAdmin(req: Request): Promise<NextResponse | null> {
+  if (await verifyAdminSession(req, 'mail')) return null;
+
   const expected = getMailAdminPassword();
   if (!expected) {
     return NextResponse.json(
@@ -55,7 +42,7 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
   const ip = getClientIp(req);
 
   // 先看这个 IP 是不是已经被锁
-  const lock = checkLoginLock(ip);
+  const lock = await checkLoginLock(ip);
   if (lock.locked) {
     const retryAfterSec = Math.ceil(lock.retryAfterMs / 1000);
     return NextResponse.json(
@@ -88,13 +75,13 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
   // 用 timing-safe 比较
   for (const c of candidates) {
     if (safeEqual(c, expected)) {
-      clearLoginFailure(ip);
+      await clearLoginFailure(ip);
       return null;
     }
   }
 
   // 没有任何候选通过（包括没带密码）：记失败
-  const result = recordLoginFailure(ip);
+  const result = await recordLoginFailure(ip);
   if (result.locked) {
     const retryAfterSec = Math.ceil(result.retryAfterMs / 1000);
     return NextResponse.json(
@@ -120,7 +107,8 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
  * 仅读 `X-Mail-Password` header；不接受 body 里的 password，避免意外消费
  * 请求体。
  */
-export function isMailAdminHeader(req: Request): boolean {
+export async function hasMailAdminAccess(req: Request): Promise<boolean> {
+  if (await verifyAdminSession(req, 'mail')) return true;
   const expected = getMailAdminPassword();
   if (!expected) return false;
   const header = req.headers.get('x-mail-password');

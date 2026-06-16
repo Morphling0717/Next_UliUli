@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const CONFIG = {
@@ -235,7 +235,10 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
   }, []);
 
   useEffect(() => {
-      if (mode === "HISTORY") checkHistoryStatus();
+      if (mode !== "HISTORY") return;
+      queueMicrotask(() => {
+          void checkHistoryStatus();
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
@@ -291,7 +294,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
               setMode("MACHINE");
            
           } else { alert(data.error || "操作失败"); }
-      } catch (e) { alert("网络错误"); } finally { setAuthLoading(false); }
+      } catch { alert("网络错误"); } finally { setAuthLoading(false); }
   };
 
   const handleLogout = () => {

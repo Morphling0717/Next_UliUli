@@ -59,15 +59,17 @@ export function NewTopicModal({ open, onClose, authHeader, onCreated }: Props) {
   // 打开时重置（避免上次的 state 残留）
   useEffect(() => {
     if (!open) return;
-    setTitle("");
-    setSlug("");
-    setDescription("");
-    setNote("");
-    setUseTimeWindow(true);
-    setStartsLocal(nowAsBeijingLocal());
-    setEndsLocal(plusDaysAsBeijingLocal(7));
-    setShowPermanentWarn(false);
-    setServerError(null);
+    queueMicrotask(() => {
+      setTitle("");
+      setSlug("");
+      setDescription("");
+      setNote("");
+      setUseTimeWindow(true);
+      setStartsLocal(nowAsBeijingLocal());
+      setEndsLocal(plusDaysAsBeijingLocal(7));
+      setShowPermanentWarn(false);
+      setServerError(null);
+    });
   }, [open]);
 
   // ESC 关闭 + 锁滚

@@ -224,9 +224,7 @@ export default function HomeClient({
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const apiUrl = siteConfig?.api?.bilibili || "https://api.uliuli.cc/api";
-
-        const response = await fetch(apiUrl);
+        const response = await fetch("/api/bilibili", { cache: "no-store" });
         if (response.ok) {
           const data = await response.json();
 
@@ -253,7 +251,6 @@ export default function HomeClient({
     };
 
     fetchData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 3. 通用功能函数

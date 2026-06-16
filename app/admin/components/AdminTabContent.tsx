@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import NextImage from "next/image";
 import {
   ArrowDown,
   ArrowDownAZ,
@@ -12,7 +13,7 @@ import {
   Film,
   FolderOpen,
   Home,
-  Image,
+  Image as ImageIcon,
   Link,
   List,
   Lock as LockIcon,
@@ -40,7 +41,6 @@ interface AdminTabContentProps {
   assetsCache: { memes: AssetFile[]; pic: AssetFile[] };
   currentAssetFolder: "memes" | "pic";
   assetSortOrder: "asc" | "desc";
-  adminPassword: string;
   updateConfig: (section: string, key: string, val: unknown) => void;
   updateNested: (section: string, nestedKey: string, key: string, val: unknown) => void;
   updateArray: (section: string, arrayKey: string, index: number, key: string, val: unknown) => void;
@@ -58,7 +58,7 @@ interface AdminTabContentProps {
   addHiddenRow: () => void;
   removeHidden: (i: number) => void;
   updateHidden: (i: number, val: string) => void;
-  fetchAssets: (folder: "memes" | "pic", password?: string) => Promise<void>;
+  fetchAssets: (folder: "memes" | "pic") => Promise<void>;
   toggleAssetSort: () => void;
   uploadFile: (input: HTMLInputElement) => Promise<void>;
   copyPath: (path: string) => Promise<void>;
@@ -75,7 +75,6 @@ export function AdminTabContent(props: AdminTabContentProps) {
     assetsCache,
     currentAssetFolder,
     assetSortOrder,
-    adminPassword,
     updateConfig,
     updateNested,
     updateArray,
@@ -142,7 +141,7 @@ export function AdminTabContent(props: AdminTabContentProps) {
             </div>
           </div>
           <div className="card">
-            <div className="section-title"><Image className="w-4 h-4" /> 详情图 (Details)</div>
+            <div className="section-title"><ImageIcon className="w-4 h-4" /> 详情图 (Details)</div>
             <div className="grid gap-4">
               {(config.model?.details || []).map((d, i) => (
                 <div key={i} className="flex gap-2 items-center bg-black/20 p-3 rounded">
@@ -557,8 +556,8 @@ export function AdminTabContent(props: AdminTabContentProps) {
               <div className="flex items-center gap-4">
                 <span className="flex items-center gap-1"><FolderOpen className="w-4 h-4" /> 资源管理器</span>
                 <div className="flex bg-black/30 rounded p-1">
-                  <button onClick={() => fetchAssets("memes", adminPassword)} className={`px-3 py-1 text-xs rounded transition ${currentAssetFolder === "memes" ? "bg-cyan-500 text-black font-bold" : "text-gray-400 hover:text-white"}`}>memes (表情包)</button>
-                  <button onClick={() => fetchAssets("pic", adminPassword)} className={`px-3 py-1 text-xs rounded transition ${currentAssetFolder === "pic" ? "bg-cyan-500 text-black font-bold" : "text-gray-400 hover:text-white"}`}>pic (图片)</button>
+                  <button onClick={() => fetchAssets("memes")} className={`px-3 py-1 text-xs rounded transition ${currentAssetFolder === "memes" ? "bg-cyan-500 text-black font-bold" : "text-gray-400 hover:text-white"}`}>memes (表情包)</button>
+                  <button onClick={() => fetchAssets("pic")} className={`px-3 py-1 text-xs rounded transition ${currentAssetFolder === "pic" ? "bg-cyan-500 text-black font-bold" : "text-gray-400 hover:text-white"}`}>pic (图片)</button>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -570,14 +569,16 @@ export function AdminTabContent(props: AdminTabContentProps) {
                   <UploadCloud className="w-4 h-4" /> 上传文件
                   <input type="file" className="hidden" accept="image/*" onChange={(e) => uploadFile(e.currentTarget)} />
                 </label>
-                <button onClick={() => fetchAssets(currentAssetFolder, adminPassword)} className="bg-white/10 hover:bg-white/20 p-2 rounded text-gray-300"><RefreshCw className="w-4 h-4" /></button>
+                <button onClick={() => fetchAssets(currentAssetFolder)} className="bg-white/10 hover:bg-white/20 p-2 rounded text-gray-300"><RefreshCw className="w-4 h-4" /></button>
               </div>
             </div>
             <div className="text-xs text-gray-500 mb-4 font-mono">当前路径: /{currentAssetFolder}/ (共 {files.length} 个文件)</div>
             <div className="asset-grid max-h-[600px] overflow-y-auto custom-scrollbar p-1">
               {files.length > 0 ? files.map((f) => (
                 <div key={f.name} className="asset-item">
-                  <div className="asset-img-box"><img src={`${f.path}?t=${f.time}`} className="asset-img" loading="lazy" alt={f.name} /></div>
+                  <div className="asset-img-box">
+                    <NextImage src={`${f.path}?t=${f.time}`} className="asset-img" fill sizes="180px" alt={f.name} unoptimized />
+                  </div>
                   <div className="asset-info truncate" title={f.name}>{f.name}</div>
                   <div className="asset-actions">
                     <button onClick={() => copyPath(f.path)} className="text-white hover:text-cyan-400" title="复制路径"><Copy className="w-4 h-4" /></button>

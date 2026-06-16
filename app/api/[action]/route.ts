@@ -12,9 +12,23 @@ type SiteConfigRow = {
   value: string;
 };
 
+type JsonObject = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is JsonObject =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const parseJsonObject = (value: string): JsonObject => {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
 export async function POST(request: NextRequest) {
   const action = request.nextUrl.pathname.split('/').pop();
-  let body: any = {};
+  let body: JsonObject = {};
 
   if (action !== 'increment') {
     try {
@@ -26,19 +40,23 @@ export async function POST(request: NextRequest) {
 
   if (action === 'generate') {
     const { itemId } = body;
-    if (!itemId) return NextResponse.json({ error: "Missing itemId" }, { status: 400 });
+    if (typeof itemId !== "number" && typeof itemId !== "string") {
+      return NextResponse.json({ error: "Missing itemId" }, { status: 400 });
+    }
     const code = 'GIFT-' + crypto.randomBytes(3).toString('hex').toUpperCase();
     try {
       await run('INSERT INTO gift_codes (code, item_id) VALUES (?, ?)', [code, itemId]);
       return NextResponse.json({ success: true, code });
-    } catch (err) {
+    } catch {
       return NextResponse.json({ error: "Database error" }, { status: 500 });
     }
   }
 
   if (action === 'redeem') {
     const { code } = body;
-    if (!code) return NextResponse.json({ error: "Missing code" }, { status: 400 });
+    if (typeof code !== "string" || !code.trim()) {
+      return NextResponse.json({ error: "Missing code" }, { status: 400 });
+    }
     try {
       const row = await get<GiftCodeRow>('SELECT * FROM gift_codes WHERE code = ?', [code]);
       if (!row) return NextResponse.json({ error: "无效的兑换码" }, { status: 404 });
@@ -46,7 +64,7 @@ export async function POST(request: NextRequest) {
       
       await run('UPDATE gift_codes SET status = ? WHERE code = ?', ['used', code]);
       return NextResponse.json({ success: true, itemId: row.item_id });
-    } catch (err) {
+    } catch {
       return NextResponse.json({ error: "Database error" }, { status: 500 });
     }
   }
@@ -54,14 +72,16 @@ export async function POST(request: NextRequest) {
   if (action === 'check_status') {
     const { codes } = body;
     if (!Array.isArray(codes) || codes.length === 0) return NextResponse.json({ results: [] });
-    const placeholders = codes.map(() => '?').join(',');
+    const safeCodes = codes.filter((code): code is string => typeof code === "string" && code.length > 0);
+    if (safeCodes.length === 0) return NextResponse.json({ results: [] });
+    const placeholders = safeCodes.map(() => '?').join(',');
     try {
       const rows = await all<GiftCodeRow>(
         `SELECT code, status, item_id FROM gift_codes WHERE code IN (${placeholders})`,
-        codes,
+        safeCodes,
       );
       return NextResponse.json({ results: rows });
-    } catch (err) {
+    } catch {
       return NextResponse.json({ error: "Database error" }, { status: 500 });
     }
   }
@@ -82,8 +102,8 @@ export async function POST(request: NextRequest) {
         'SELECT value FROM site_config WHERE key = ?',
         ['site_config'],
       );
-      const parsedConfig = configRow?.value ? JSON.parse(configRow.value) : {};
-      const gachaConfig = parsedConfig?.gacha || {};
+      const parsedConfig = configRow?.value ? parseJsonObject(configRow.value) : {};
+      const gachaConfig = isRecord(parsedConfig.gacha) ? parsedConfig.gacha : {};
 
       const PITY_THRESHOLD = Math.max(1, Math.round(toFiniteNumber(gachaConfig.pityThreshold, DEFAULT_GACHA.pityThreshold)));
       const SOFT_PITY_START = Math.max(0, Math.round(toFiniteNumber(gachaConfig.softPityStart, DEFAULT_GACHA.softPityStart)));
@@ -131,7 +151,7 @@ export async function GET(request: NextRequest) {
     try {
       const countStr = await getConfig('pityCount');
       return NextResponse.json({ count: parseInt(countStr ?? '0', 10) || 0 });
-    } catch (e) {
+    } catch {
       return NextResponse.json({ error: "Database Error" }, { status: 500 });
     }
   }

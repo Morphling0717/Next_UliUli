@@ -19,16 +19,7 @@ const {
   SUCCUBUS_COUNTER_POOL,
   CHIMERA_PLUGIN_POOL,
   DIVA_BUFF_POOL,
-  VALORANT_POOL,
-  VALORANT_GUNS_POOL,
-  BABY_SUPPORT_POOL,
-  TUJUANJUAN_CALC_POOL,
-  TUJUANJUAN_STYLE_POOL,
 } = Data;
-
-// Suppress unused-variable warnings for superseded pools (replaced by individual skill definitions)
-void VALORANT_POOL, void VALORANT_GUNS_POOL,
-void BABY_SUPPORT_POOL, void TUJUANJUAN_CALC_POOL;
 
 // ---------------------------------------------------------------------------
 // Helper: 摸鱼伙伴 synergy engine (丝瓜 ↔ 兔卷卷 bond)

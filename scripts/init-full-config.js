@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 /**
  * 初始化完整配置脚本
  * 在第一次运行时，将所有可编辑的文本配置写入数据库
@@ -9,7 +11,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
-const dbPath = path.resolve(__dirname, '../codes.db');
+const dbPath = path.resolve(__dirname, '../data/codes.db');
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('❌ 数据库连接失败:', err);
@@ -110,7 +112,7 @@ const defaultConfig = {
     datePrefix: "DATE //",
   },
   api: {
-    bilibili: "https://api.uliuli.cc/api",
+    bilibili: "https://1377297588-5v9c60xnw1.ap-guangzhou.tencentscf.com/?mid=3546779356235807",
   },
   song_ui: {
     titlePrefix: "SONG",

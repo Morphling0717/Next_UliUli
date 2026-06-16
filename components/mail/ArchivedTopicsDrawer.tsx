@@ -66,12 +66,15 @@ export function ArchivedTopicsDrawer({
 
   // 打开时拉；关闭时清搜索
   useEffect(() => {
-    if (open) void load();
-    else {
-      setSearch("");
-      setDeleteTarget(null);
-      setDeleteError(null);
-    }
+    queueMicrotask(() => {
+      if (open) {
+        void load();
+      } else {
+        setSearch("");
+        setDeleteTarget(null);
+        setDeleteError(null);
+      }
+    });
   }, [open, load]);
 
   // ESC 关闭

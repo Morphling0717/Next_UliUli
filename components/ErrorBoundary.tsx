@@ -1,6 +1,11 @@
 "use client";
 
 import React, { Component, ErrorInfo, ReactNode } from 'react';
+import type { SiteConfig } from '@/app/admin/types';
+
+type WindowWithSiteConfig = Window & typeof globalThis & {
+  SITE_CONFIG?: SiteConfig;
+};
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -31,7 +36,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
 
   render() {
     const errorCfg =
-      typeof window !== "undefined" ? (window as any).SITE_CONFIG?.errors || {} : {};
+      typeof window !== "undefined" ? (window as WindowWithSiteConfig).SITE_CONFIG?.errors || {} : {};
     if (this.state.hasError) {
       return (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-slate-900/90 backdrop-blur p-10 text-white">

@@ -180,9 +180,9 @@ export async function POST(req: Request) {
   try {
     // IP 维度限流（在解析 body 之前就拒绝，节省处理成本）
     const ip = getClientIp(req);
-    const ipMin = rateLimit({ key: `mail:ip:min:${ip}`, ...RL_IP_PER_MIN });
+    const ipMin = await rateLimit({ key: `mail:ip:min:${ip}`, ...RL_IP_PER_MIN });
     if (!ipMin.allowed) return rateLimitResponse(ipMin.retryAfterMs);
-    const ipHour = rateLimit({ key: `mail:ip:hour:${ip}`, ...RL_IP_PER_HOUR });
+    const ipHour = await rateLimit({ key: `mail:ip:hour:${ip}`, ...RL_IP_PER_HOUR });
     if (!ipHour.allowed) return rateLimitResponse(ipHour.retryAfterMs);
 
     const body = (await req.json()) as {
@@ -243,7 +243,7 @@ export async function POST(req: Request) {
     // fingerprint 维度限流（防换 IP 绕开）
     const fp = (body.senderFingerprint ?? '').trim();
     if (fp) {
-      const fpHour = rateLimit({
+      const fpHour = await rateLimit({
         key: `mail:fp:hour:${fp}`,
         ...RL_FP_PER_HOUR,
       });

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isMailAdminHeader, verifyMailAdmin } from '@/lib/mail-auth';
+import { hasMailAdminAccess, verifyMailAdmin } from '@/lib/mail-auth';
 import {
   MailTopicError,
   archiveTopic,
@@ -57,7 +57,7 @@ export async function GET(
     }
 
     // 非管理员不返回 note（主播的内部备注）
-    if (!isMailAdminHeader(req)) {
+    if (!(await hasMailAdminAccess(req))) {
       const { note: _note, ...publicFields } = topic;
       void _note;
       return NextResponse.json(publicFields);

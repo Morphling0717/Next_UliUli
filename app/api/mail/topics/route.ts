@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isMailAdminHeader, verifyMailAdmin } from '@/lib/mail-auth';
+import { hasMailAdminAccess, verifyMailAdmin } from '@/lib/mail-auth';
 import {
   MailTopicError,
   createTopic,
@@ -28,7 +28,7 @@ function errorResponse(e: unknown, fallbackStatus = 500, fallbackMsg = '服务�
  *
  * - 公开（不带密码）：只返回可投信的活动主题（is_enabled=1 AND 未归档 AND
  *   在时间窗内 AND is_default=0）
- * - 管理端（带 `x-mail-password` 且正确）：返回全部主题；
+ * - 管理端（HttpOnly session，兼容旧 `x-mail-password`）：返回全部主题；
  *   `?include=archived` 控制是否包含已归档；默认**不含**归档，归档走另一次
  *   独立请求供抽屉用
  *
@@ -36,7 +36,7 @@ function errorResponse(e: unknown, fallbackStatus = 500, fallbackMsg = '服务�
  */
 export async function GET(req: Request) {
   try {
-    const isAdmin = isMailAdminHeader(req);
+    const isAdmin = await hasMailAdminAccess(req);
     if (isAdmin) {
       const url = new URL(req.url);
       const includeArchived = url.searchParams.get('include') === 'archived';

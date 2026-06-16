@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { BattleEngine } from "@/lib/namearena/battleEngine";
 import { namerenaCore } from "@/lib/namearena/core";
 import { namerenaData } from "@/lib/namearena/data";
@@ -67,6 +67,8 @@ function StatusIcon({ type }: { type: string }) {
   );
 }
 
+const getCore = () => namerenaCore;
+
 export function NameArenaGame() {
     const [inputNames, setInputNames] = useState('水人\n玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep');
     const [fighters, setFighters] = useState<Fighter[]>([]);
@@ -74,8 +76,9 @@ export function NameArenaGame() {
     const [showMvp, setShowMvp] = useState(false);
 
     const fullLogsRef = useRef<BattleLogEntry[]>([]);
-    const [displayLogs, setDisplayLogs] = useState<BattleLogEntry[]>([]);
-    const [isFullLogModalOpen, setIsFullLogModalOpen] = useState(false);
+	    const [displayLogs, setDisplayLogs] = useState<BattleLogEntry[]>([]);
+	    const [fullLogSnapshot, setFullLogSnapshot] = useState<BattleLogEntry[]>([]);
+	    const [isFullLogModalOpen, setIsFullLogModalOpen] = useState(false);
     const [logPage, setLogPage] = useState(1);
     const LOGS_PER_PAGE = 200;
 
@@ -85,30 +88,29 @@ export function NameArenaGame() {
     const logsEndRef = useRef<HTMLDivElement | null>(null);
     const timerRef = useRef<number | null>(null);
     const battleSpeedRef = useRef(1500);
-    const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1); 
+    const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1);
     const [isAutoScroll, setIsAutoScroll] = useState(true);
 
     useEffect(() => { if (isAutoScroll && gameState === 'FIGHTING') logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [displayLogs, isAutoScroll, gameState]);
 
-    const resetGame = () => { 
-        setGameState('SETUP'); 
-        setDisplayLogs([]); 
-        fullLogsRef.current = []; 
+    const resetGame = () => {
+        setGameState('SETUP');
+	        setDisplayLogs([]);
+	        fullLogsRef.current = [];
+	        setFullLogSnapshot([]);
         fightersRef.current = [];
-        setFighters([]); 
+        setFighters([]);
         setIsFullLogModalOpen(false);
         setShowMvp(false);
         spinalSwordRef.current = false;
         if (timerRef.current !== null) clearInterval(timerRef.current);
     };
 
-    const getCore = () => namerenaCore;
-
     const addLog = (logEntry: BattleLogEntry) => {
         fullLogsRef.current.push(logEntry);
         setDisplayLogs(prev => {
             const newLogs = [...prev, logEntry];
-            return newLogs.length > 100 ? newLogs.slice(-100) : newLogs; 
+            return newLogs.length > 100 ? newLogs.slice(-100) : newLogs;
         });
     };
 
@@ -134,22 +136,22 @@ export function NameArenaGame() {
 
         const trimmedInput = rawInputName.trim();
         const parts = trimmedInput.split('@');
-        const cleanName = parts[0].trim(); 
-        const teamName = parts.length > 1 ? parts[1].trim() : null; 
-        
+        const cleanName = parts[0].trim();
+        const teamName = parts.length > 1 ? parts[1].trim() : null;
+
         const seed = stringToSeed(trimmedInput);
         const rng = new SeededRNG(seed);
         const jobRng = teamName ? new SeededRNG(stringToSeed(teamName)) : rng;
-        
-        let jobKey = cleanName === '水人' || cleanName === '水人Morphling' ? 'SLIME' 
-            : cleanName === '玄凝' ? 'HIGH_END_GAMER' 
-            : cleanName === '屑' || cleanName === '屯硬币的屑' ? 'JOKE_KING' 
+
+	        const jobKey = cleanName === '水人' || cleanName === '水人Morphling' ? 'SLIME'
+            : cleanName === '玄凝' ? 'HIGH_END_GAMER'
+            : cleanName === '屑' || cleanName === '屯硬币的屑' ? 'JOKE_KING'
             : (cleanName.toLowerCase() === 'm1a2_abrams_sep' || cleanName.toLowerCase() === 'm1' || cleanName.toLowerCase() === 'arams_sep') ? 'WT_GRINDER'
-            : cleanName === '刺猬人' || cleanName === '刺猬人chiray' ? 'TOKU_FAN' 
-            : cleanName === '牢鳄' || cleanName === '鳄霸' ? 'GACHA_ADDICT' 
-            : cleanName === '小汀' || cleanName === '小汀公本' ? 'RED_FURY_SAMURAI' 
-            : cleanName === '克蕾儿丝菲尔' ? 'SUCCUBUS' 
-            : cleanName === '丝瓜uli' || cleanName === '丝瓜' ? 'VIRTUAL_DIVA' 
+            : cleanName === '刺猬人' || cleanName === '刺猬人chiray' ? 'TOKU_FAN'
+            : cleanName === '牢鳄' || cleanName === '鳄霸' ? 'GACHA_ADDICT'
+            : cleanName === '小汀' || cleanName === '小汀公本' ? 'RED_FURY_SAMURAI'
+            : cleanName === '克蕾儿丝菲尔' ? 'SUCCUBUS'
+            : cleanName === '丝瓜uli' || cleanName === '丝瓜' ? 'VIRTUAL_DIVA'
             : cleanName === '兔卷卷' || cleanName === '兔卷卷curly' ? 'Q_BUNNY'
             : rng.next() < 0.02
               ? 'ONE_PUNCH'
@@ -172,13 +174,13 @@ export function NameArenaGame() {
         );
 
         return {
-            id: generateUUID ? generateUUID() : `id-${Math.random()}`, 
-            name: cleanName, displayName: trimmedInput, teamId: teamName, 
+            id: generateUUID ? generateUUID() : `id-${Math.random()}`,
+            name: cleanName, displayName: trimmedInput, teamId: teamName,
             job: resolvedJobKey, jobData: JSON.parse(JSON.stringify(job)),
             maxHp: Math.floor(baseHp * (job.hp || 1) * (isMorphling ? 0.8 : 1.0)), currentHp: Math.floor(baseHp * (job.hp || 1) * (isMorphling ? 0.8 : 1.0)), hpPct: 1.0,
-            ...finalStats, critRate: rng.next() * 0.1 + 0.05, 
-            color: COLORS.length > 0 ? (teamName ? jobRng.pick(COLORS) : rng.pick(COLORS)) : 'text-gray-500', 
-            isDead: false, isDeadAnnounced: false, status: [], 
+            ...finalStats, critRate: rng.next() * 0.1 + 0.05,
+            color: COLORS.length > 0 ? (teamName ? jobRng.pick(COLORS) : rng.pick(COLORS)) : 'text-gray-500',
+            isDead: false, isDeadAnnounced: false, status: [],
             stats: { kills: 0, dmgDealt: 0, dmgTaken: 0 },
             isMorphling,
             isGamer: resolvedJobKey === 'HIGH_END_GAMER',
@@ -196,7 +198,7 @@ export function NameArenaGame() {
         };
     };
 
-    const battleStep = () => {
+    const battleStep = useCallback(() => {
         // Collect logs synchronously during the step so we can batch them with fighter state
         pendingLogsRef.current = [];
         const batchedLog = (logEntry: BattleLogEntry) => {
@@ -246,7 +248,7 @@ export function NameArenaGame() {
             setGameState('END');
             if (timerRef.current !== null) clearInterval(timerRef.current);
         }
-    };
+    }, []);
 
     useEffect(() => {
         if (gameState === 'FIGHTING')
@@ -255,7 +257,7 @@ export function NameArenaGame() {
             return () => {
                 if (timerRef.current !== null) clearInterval(timerRef.current);
             };
-    }, [gameState]);
+    }, [battleStep, gameState]);
 
     const changeSpeed = (spd: number) => {
         battleSpeedRef.current = spd;
@@ -271,11 +273,11 @@ export function NameArenaGame() {
 
         const renderLogText = (l: BattleLogEntry, i: number) => {
         const parts = nameRegex ? l.text.split(nameRegex) : [l.text];
-        
+
             const tagMap: Record<string, { label: string; bg: string }> = {
                 crit:   { label: '暴击', bg: 'bg-yellow-600' },
                 death:  { label: '击杀', bg: 'bg-red-600' },
-                win:    { label: '高光', bg: 'bg-indigo-600' }, 
+                win:    { label: '高光', bg: 'bg-indigo-600' },
                 heal:   { label: '恢复', bg: 'bg-emerald-600' },
                 buff:   { label: '增益', bg: 'bg-cyan-600' },
                 skill:  { label: '技能', bg: 'bg-blue-600' },
@@ -307,7 +309,7 @@ export function NameArenaGame() {
             );
         }
 
-        let colorClass = 'text-slate-200'; 
+        let colorClass = 'text-slate-200';
         if (l.type === 'crit') colorClass = 'text-yellow-400 font-bold';
         if (l.type === 'death') colorClass = 'text-red-400 font-bold';
         if (l.type === 'heal') colorClass = 'text-emerald-400';
@@ -340,7 +342,7 @@ export function NameArenaGame() {
         const validFighters = fighters.filter(f => !f.isSummon || f.stats.dmgDealt > 0);
         const sortedByDmg = [...validFighters].sort((a, b) => b.stats.dmgDealt - a.stats.dmgDealt);
         const maxDmg = Math.max(1, sortedByDmg[0]?.stats.dmgDealt || 1);
-        
+
         const mvpDmg = sortedByDmg[0];
         const mvpTank = [...validFighters].sort((a, b) => b.stats.dmgTaken - a.stats.dmgTaken)[0];
         const mvpKills = [...validFighters].sort((a, b) => b.stats.kills - a.stats.kills)[0];
@@ -438,10 +440,10 @@ export function NameArenaGame() {
                                     if(list.length<2) return alert("至少2人");
                                     const f = list.map(generateFighter).filter(x => x !== null);
                                     if (f.length < list.length) return alert("部分角色生成失败，请检查控制台");
-                                    
-                    fullLogsRef.current = []; setDisplayLogs([]);
+
+                    fullLogsRef.current = []; setFullLogSnapshot([]); setDisplayLogs([]);
                     fightersRef.current = f;
-                    setFighters(f); addLog({type:'system', text:'⚔️ 战斗开始！'}); 
+                    setFighters(f); addLog({type:'system', text:'⚔️ 战斗开始！'});
                     setGameState('FIGHTING'); spinalSwordRef.current = false; changeSpeed(1500);
                                 }} className="mt-6 w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 shadow-lg">
                                     <Icons.Play size={20} /> 开始战斗
@@ -465,9 +467,9 @@ export function NameArenaGame() {
                                 {[...fighters].sort((a, b) => b.currentHp - a.currentHp).map((f) => (
                                     <div
                                         key={f.id}
-                                        className={`min-w-0 max-w-full rounded-2xl border p-3 transition-[transform,box-shadow,border-color,background-color] duration-300 
-                                        ${f.isActing ? 'z-10 scale-[1.02] border-indigo-400 bg-slate-800 shadow-[0_0_20px_rgba(99,102,241,0.4)]' : 'border-slate-700 bg-slate-800/80'} 
-                                        ${f.isHit ? 'animate-shake border-red-500/50 bg-red-900/30' : ''} 
+                                        className={`min-w-0 max-w-full rounded-2xl border p-3 transition-[transform,box-shadow,border-color,background-color] duration-300
+                                        ${f.isActing ? 'z-10 scale-[1.02] border-indigo-400 bg-slate-800 shadow-[0_0_20px_rgba(99,102,241,0.4)]' : 'border-slate-700 bg-slate-800/80'}
+                                        ${f.isHit ? 'animate-shake border-red-500/50 bg-red-900/30' : ''}
                                         ${f.isDead ? 'scale-95 border-slate-800 bg-slate-900 opacity-40 grayscale-[0.8]' : 'shadow-md'}`}
                                     >
                                         <div className="flex gap-3 mb-2 relative">
@@ -501,13 +503,13 @@ export function NameArenaGame() {
                                 {showMvp ? renderMVP() : null}
                             </div>
                         </section>
-                        
+
                         <section className="relative flex min-h-0 min-w-0 flex-1 flex-col border-t border-slate-800 bg-slate-950 shadow-[inset_10px_0_20px_rgba(0,0,0,0.2)] max-h-[42vh] lg:max-h-none lg:border-l lg:border-t-0">
                             <div className="z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/80 p-3 shadow-sm backdrop-blur">
                                 <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">实时战斗记录 <span className="text-slate-500 normal-case tracking-normal">(显示末尾百条)</span></span>
                                 {gameState === 'END' ? (
                                     <div className="flex gap-2">
-                                        <button onClick={() => { setLogPage(1); setIsFullLogModalOpen(true); }} className="text-xs bg-indigo-600/80 hover:bg-indigo-500 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
+                                        <button onClick={() => { setLogPage(1); setFullLogSnapshot([...fullLogsRef.current]); setIsFullLogModalOpen(true); }} className="text-xs bg-indigo-600/80 hover:bg-indigo-500 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
                                             <Icons.BookOpen size={12}/> 战报回放
                                         </button>
                                         <button onClick={downloadLogs} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
@@ -531,19 +533,19 @@ export function NameArenaGame() {
                                 <div className="flex shrink-0 justify-between border-b border-slate-800 bg-slate-900 p-4 shadow-md">
                                     <div className="flex items-center gap-3">
                                         <h3 className="font-bold text-lg text-white flex items-center gap-2"><Icons.BookOpen size={20} className="text-indigo-400"/> 完整战报复盘</h3>
-                                        <span className="text-xs font-mono font-bold text-slate-400 bg-slate-800 px-2 py-1 rounded shadow-inner">共 {fullLogsRef.current.length} 个动作片段</span>
+                                        <span className="text-xs font-mono font-bold text-slate-400 bg-slate-800 px-2 py-1 rounded shadow-inner">共 {fullLogSnapshot.length} 个动作片段</span>
                                     </div>
                                     <button onClick={() => setIsFullLogModalOpen(false)} className="text-slate-400 hover:text-white p-2 hover:bg-slate-800 rounded-full transition"><Icons.X size={24}/></button>
                                 </div>
                                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-slate-950/80 p-6 font-mono text-base shadow-inner custom-scrollbar">
-                                    {fullLogsRef.current.slice((logPage-1)*LOGS_PER_PAGE, logPage*LOGS_PER_PAGE).map(renderLogText)}
+                                    {fullLogSnapshot.slice((logPage-1)*LOGS_PER_PAGE, logPage*LOGS_PER_PAGE).map(renderLogText)}
                                 </div>
                                 <div className="flex shrink-0 justify-center gap-6 border-t border-slate-800 bg-slate-900 p-4 shadow-[0_-10px_20px_rgba(0,0,0,0.2)]">
                                     <button disabled={logPage <= 1} onClick={() => setLogPage(p=>p-1)} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-sm font-bold text-slate-300 transition shadow-sm border border-slate-700">上一页</button>
                                     <span className="text-sm font-mono font-bold text-slate-400 bg-slate-950 px-4 py-1.5 rounded-lg shadow-inner border border-slate-800">
-                                        Page <span className="text-indigo-400">{logPage}</span> / {Math.ceil(fullLogsRef.current.length / LOGS_PER_PAGE)}
+                                        Page <span className="text-indigo-400">{logPage}</span> / {Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))}
                                     </span>
-                                    <button disabled={logPage >= Math.ceil(fullLogsRef.current.length / LOGS_PER_PAGE)} onClick={() => setLogPage(p=>p+1)} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-sm font-bold text-slate-300 transition shadow-sm border border-slate-700">下一页</button>
+                                    <button disabled={logPage >= Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))} onClick={() => setLogPage(p=>p+1)} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-sm font-bold text-slate-300 transition shadow-sm border border-slate-700">下一页</button>
                                 </div>
                             </div>
                         )}
@@ -556,7 +558,7 @@ export function NameArenaGame() {
                 .custom-scrollbar::-webkit-scrollbar-track { background: #020617; border-radius: 4px; }
                 .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
                 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
-                
+
                 @keyframes shake {
                     0%, 100% { transform: translateX(0) scale(1.02); }
                     25% { transform: translateX(-4px) rotate(-1deg) scale(1.02); }

@@ -46,8 +46,12 @@ yarn-error.log*
 next-env.d.ts
 
 # local runtime data
+data/
+backups/
 codes.db
 *.db
+*.db-shm
+*.db-wal
 *.db-journal
 *.sqlite
 *.sqlite3

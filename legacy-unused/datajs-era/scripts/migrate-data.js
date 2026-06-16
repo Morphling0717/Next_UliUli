@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 /**
  * 一次性数据迁移脚本
  * 将 public/data.js 中的数据迁移到 SQLite 数据库

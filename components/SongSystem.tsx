@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, type Variants } from 'framer-motion';
+import type { SiteConfig } from '@/app/admin/types';
 import { GlassCard, Icons } from './UI';
 
 export interface SongItem {
@@ -20,7 +21,7 @@ export interface SongSystemProps {
   onUnlockHidden: (showGoldenModal?: boolean) => void;
   addNotification: (msg: string) => void;
   isUnlocked: boolean;
-  config?: any;
+  config?: SiteConfig;
   songs?: SongItem[];
   hiddenSongs?: SongItem[];
   /** 强制跳过列表的桌面 stagger 动画。/app 入口里 SongSystem 嵌在小屏 panel 中，
@@ -28,18 +29,33 @@ export interface SongSystemProps {
   disableAnimation?: boolean;
 }
 
+const DEFAULT_SONG_CATEGORIES: SongCategory[] = [
+  { id: "all", label: "ALL" },
+  { id: "gufeng", label: "ANCIENT" },
+  { id: "liuxing", label: "POP" },
+  { id: "yingyu", label: "ENGLISH" },
+  { id: "riyu", label: "JAPANESE" },
+];
+
+const DEFAULT_SONG_UI: NonNullable<SiteConfig["song_ui"]> & { categories: SongCategory[] } = {
+  titlePrefix: "SONG",
+  titleSuffix: "_DATABASE",
+  categories: DEFAULT_SONG_CATEGORIES,
+};
+
+function pickRandomSong(songs: SongItem[]): SongItem {
+  return songs[Math.floor(Math.random() * songs.length)];
+}
+
 export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotification, isUnlocked, config, songs, hiddenSongs, disableAnimation = false }) => {
-  const uiConfig = config?.song_ui || {
-      titlePrefix: "SONG", 
-      titleSuffix: "_DATABASE",
-      categories: [
-          { id: "all", label: "ALL" },
-          { id: "gufeng", label: "ANCIENT" },
-          { id: "liuxing", label: "POP" },
-          { id: "yingyu", label: "ENGLISH" },
-          { id: "riyu", label: "JAPANESE" }
-      ]
-  };
+  const uiConfig = useMemo(() => {
+    const configuredCategories = config?.song_ui?.categories;
+    return {
+      ...DEFAULT_SONG_UI,
+      ...config?.song_ui,
+      categories: configuredCategories?.length ? configuredCategories : DEFAULT_SONG_CATEGORIES,
+    };
+  }, [config?.song_ui]);
   
   const [activeTab, setActiveTab] = useState<string>(uiConfig.categories[0]?.id || "all");
   const [searchTerm, setSearchTerm] = useState("");
@@ -60,8 +76,8 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
   
   const WORKER_URL = "/api"; 
   
-  const baseSongs = songs || [];
-  const hiddenSongsRaw = hiddenSongs || [];
+  const baseSongs = useMemo(() => songs ?? [], [songs]);
+  const hiddenSongsRaw = useMemo(() => hiddenSongs ?? [], [hiddenSongs]);
 
   const categories = useMemo(() => {
     const cats: SongCategory[] = [...uiConfig.categories];
@@ -85,7 +101,6 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
   }, [baseSongs, hiddenSongsRaw, isUnlocked]);
 
   useEffect(() => {
-    setIsMobile(window.innerWidth < 768);
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
@@ -108,7 +123,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
     if (songData.length === 0) return;
     setIsLoading(true);
 
-    const s = songData[Math.floor(Math.random() * songData.length)];
+    const s = pickRandomSong(songData);
     const copyText = s.isHidden && s.artist === "UNKNOWN_ENTITY" 
       ? `点歌 ${s.name}` 
       : `点歌 ${s.name} ${s.artist}`;
@@ -155,7 +170,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
     [activeTab, searchTerm, songData]
   );
 
-  const listVariants = {
+  const listVariants: Variants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
@@ -164,7 +179,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
     exit: { opacity: 0, filter: "blur(10px)", transition: { duration: 0.2 } },
   };
 
-  const itemVariants = {
+  const itemVariants: Variants = {
     hidden: { opacity: 0, x: -20, filter: "blur(5px)" },
     visible: {
       opacity: 1,
@@ -183,7 +198,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
       <GlassCard className="w-full max-w-6xl mx-auto p-4 md:p-8 min-h-[500px] md:min-h-175" disableAnimation={skipStagger}>
         <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 md:gap-6">
           <div className="text-sm font-mono text-(--neon-blue) text-center md:text-left">
-            {uiConfig.serverText || "SERVER:"} {isOnline ? (uiConfig.serverOnline || "ONLINE") : (uiConfig.serverOffline || "OFFLINE")} // {uiConfig.pityText || "PITY:"} {pityCount}
+            {uiConfig.serverText || "SERVER:"} {isOnline ? (uiConfig.serverOnline || "ONLINE") : (uiConfig.serverOffline || "OFFLINE")} <span aria-hidden>{"//"}</span> {uiConfig.pityText || "PITY:"} {pityCount}
           </div>
           <div className="flex gap-4 w-full md:w-auto">
             <input
@@ -285,7 +300,7 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab + searchTerm}
-              variants={listVariants as any}
+              variants={listVariants}
               initial="hidden"
               animate="visible"
               exit="exit"

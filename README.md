@@ -91,9 +91,9 @@ MAIL_AUTH_PASSWORD=
 DEV_UNLOCK_PASSWORD=change_me_to_a_dev_unlock_password
 
 # 必填：SQLite 文件路径
-#   本地：  ./codes.db
+#   本地：  ./data/codes.db
 #   Docker：/app/data/codes.db
-DATABASE_PATH=./codes.db
+DATABASE_PATH=./data/codes.db
 
 # 必填：公开站点地址（用于 Open Graph 分享卡片）
 NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
@@ -248,7 +248,7 @@ Next_UliUli/
 │  └─ pic/                        # 后台上传图片
 ├─ legacy-unused/datajs-era/      # 旧 data.js 归档（已迁移到 SQLite）
 ├─ scripts/
-├─ codes.db                       # 开发期的 SQLite 文件（已 gitignore）
+├─ data/codes.db                  # 开发期的 SQLite 文件（已 gitignore）
 ├─ Dockerfile                     # 多阶段构建 + sqlite3 原生编译
 ├─ docker-compose.yml
 ├─ .env.example
@@ -378,7 +378,7 @@ UPDATE global_config SET value = '0' WHERE key = 'pityCount';
 **备份数据库:**
 
 ```bash
-cp codes.db codes.db.$(date +%F).bak
+npm run db:backup
 ```
 
 **切换发信箱开关 / 读信:**

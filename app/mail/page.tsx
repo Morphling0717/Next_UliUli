@@ -40,22 +40,29 @@ import { ArchiveConfirmModal } from "@/components/mail/ArchiveConfirmModal";
 import type { Topic } from "@/components/mail/mail-topic-types";
 import { formatBeijing } from "@/components/mail/mail-time";
 
-const PWD_STORAGE_KEY = "uliuli:mail:pwd";
-
 export default function MailPage() {
-  const [password, setPassword] = useState<string | null>(null);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [sessionChecking, setSessionChecking] = useState(true);
   const [pwdInput, setPwdInput] = useState("");
   const [pwdError, setPwdError] = useState<string | null>(null);
   const [pwdChecking, setPwdChecking] = useState(false);
 
   useEffect(() => {
-    const stored = window.sessionStorage.getItem(PWD_STORAGE_KEY);
-    if (stored) {
-      void verifyPassword(stored).then((ok) => {
-        if (ok) setPassword(stored);
-        else window.sessionStorage.removeItem(PWD_STORAGE_KEY);
+    let cancelled = false;
+    void fetch("/api/mail/session", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data: { authenticated?: boolean }) => {
+        if (!cancelled) setAuthenticated(!!data.authenticated);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthenticated(false);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionChecking(false);
       });
-    }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onSubmitPwd = async (e: React.FormEvent) => {
@@ -64,21 +71,25 @@ export default function MailPage() {
     setPwdChecking(true);
     setPwdError(null);
     try {
-      const ok = await verifyPassword(pwdInput);
-      if (ok) {
-        window.sessionStorage.setItem(PWD_STORAGE_KEY, pwdInput);
-        setPassword(pwdInput);
+      const res = await fetch("/api/mail/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pwdInput }),
+      });
+      if (res.ok) {
+        setAuthenticated(true);
+        setPwdInput("");
       } else {
-        setPwdError("ACCESS_DENIED · 密码错误");
+        setPwdError(`ACCESS_DENIED · ${await readError(res)}`);
       }
     } finally {
       setPwdChecking(false);
     }
   };
 
-  const onLogout = () => {
-    window.sessionStorage.removeItem(PWD_STORAGE_KEY);
-    setPassword(null);
+  const onLogout = async () => {
+    await fetch("/api/mail/session", { method: "DELETE" }).catch(() => {});
+    setAuthenticated(false);
     setPwdInput("");
   };
 
@@ -109,7 +120,7 @@ export default function MailPage() {
           <p className="mt-3 font-mono text-sm text-gray-400">
             Uli 的匿名来信都挂在这里
           </p>
-          {password && (
+          {authenticated && (
             <button
               type="button"
               onClick={onLogout}
@@ -120,7 +131,11 @@ export default function MailPage() {
           )}
         </header>
 
-        {!password ? (
+        {sessionChecking ? (
+          <div className="mx-auto font-mono text-sm tracking-[0.2em] text-cyan-300/70">
+            VERIFYING SESSION...
+          </div>
+        ) : !authenticated ? (
           <PasswordGate
             value={pwdInput}
             onChange={setPwdInput}
@@ -129,7 +144,7 @@ export default function MailPage() {
             loading={pwdChecking}
           />
         ) : (
-          <MailContent password={password} onUnauthorized={onLogout} />
+          <MailContent onUnauthorized={onLogout} />
         )}
       </main>
     </>
@@ -186,29 +201,14 @@ function PasswordGate({
   );
 }
 
-async function verifyPassword(pwd: string): Promise<boolean> {
-  try {
-    const r = await fetch("/api/mail/messages", {
-      method: "GET",
-      headers: { "x-mail-password": pwd },
-      cache: "no-store",
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
 type ListResponse = {
   items: FlaggableRecord[];
   counts: Record<WindChimeInboxFilter, number>;
 };
 
 function MailContent({
-  password,
   onUnauthorized,
 }: {
-  password: string;
   onUnauthorized: () => void;
 }) {
   // ===== 主题 state =====
@@ -245,10 +245,7 @@ function MailContent({
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [copiedToast, setCopiedToast] = useState(false);
 
-  const authHeader = useMemo(
-    () => ({ "x-mail-password": password }),
-    [password],
-  );
+  const authHeader = useMemo(() => ({}), []);
 
   const handleAuthError = useCallback(
     (res: Response): boolean => {
@@ -373,13 +370,17 @@ function MailContent({
 
   // 挂载：拉主题 + 黑名单
   useEffect(() => {
-    void reloadTopics();
-    void reloadBlocklist();
+    queueMicrotask(() => {
+      void reloadTopics();
+      void reloadBlocklist();
+    });
   }, [reloadTopics, reloadBlocklist]);
 
   // activeTopicId 变化时重新拉留言列表（也适用于首次挂载）
   useEffect(() => {
-    void reload();
+    queueMicrotask(() => {
+      void reload();
+    });
   }, [reload]);
 
   // ===== 留言级操作：全部带 ?topicId= 做跨主题防呆 =====
@@ -573,17 +574,12 @@ function MailContent({
     }
   }, [activeTopic]);
 
-  const [shareUrl, setShareUrl] = useState("");
-  useEffect(() => {
-    if (!activeTopic) {
-      setShareUrl("");
-      return;
-    }
-    const origin = window.location.origin;
-    setShareUrl(
-      activeTopic.isDefault ? origin : `${origin}/m/${activeTopic.slug}`,
-    );
-  }, [activeTopic]);
+  const shareUrl =
+    activeTopic && typeof window !== "undefined"
+      ? activeTopic.isDefault
+        ? window.location.origin
+        : `${window.location.origin}/m/${activeTopic.slug}`
+      : "";
 
   const [poster, setPoster] = useState<WindChimeQrPosterConfig>(() => ({
     ...DEFAULT_POSTER_CONFIG,
@@ -597,23 +593,7 @@ function MailContent({
     let cancelled = false;
     (async () => {
       try {
-        // 优先读 site_config 里的 bili API 地址，fallback 到主站默认
-        let biliUrl = "https://api.uliuli.cc/api";
-        try {
-          const c = await fetch("/api/config", { cache: "no-store" });
-          if (c.ok) {
-            const cj = (await c.json()) as {
-              site_config?: { api?: { bilibili?: string } };
-            };
-            if (cj.site_config?.api?.bilibili) {
-              biliUrl = cj.site_config.api.bilibili;
-            }
-          }
-        } catch {
-          /* 用 fallback */
-        }
-
-        const r = await fetch(biliUrl, { cache: "no-store" });
+        const r = await fetch("/api/bilibili", { cache: "no-store" });
         if (!r.ok) return;
         const d = (await r.json()) as {
           success?: boolean;

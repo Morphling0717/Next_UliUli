@@ -6,204 +6,32 @@ import fs from 'fs';
 // 防止开发环境下热更新导致数据库连接被多次实例化锁死
 const globalForDb = global as unknown as { __db?: sqlite3.Database };
 
-const configuredDbPath = (process.env.DATABASE_PATH || 'codes.db').trim();
+const configuredDbPath = (process.env.DATABASE_PATH || 'data/codes.db').trim();
 const dbPath = path.isAbsolute(configuredDbPath)
   ? configuredDbPath
-  : path.resolve(/* turbopackIgnore: true */ process.cwd(), configuredDbPath);
+  : path.resolve(/*turbopackIgnore: true*/ process.cwd(), configuredDbPath);
 const dbDir = path.dirname(dbPath);
 
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+if (!fs.existsSync(/*turbopackIgnore: true*/ dbDir)) {
+  fs.mkdirSync(/*turbopackIgnore: true*/ dbDir, { recursive: true });
 }
 
 export const db = globalForDb.__db ?? new sqlite3.Database(dbPath);
+export const databasePath = dbPath;
+export const databaseDir = dbDir;
 
 if (process.env.NODE_ENV !== 'production') globalForDb.__db = db;
 
-// 初始化表结构
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS gift_codes (
-      code TEXT PRIMARY KEY,
-      item_id INTEGER,
-      status TEXT DEFAULT 'active',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  db.run(`
-    CREATE TABLE IF NOT EXISTS global_config (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    )
-  `);
-  db.run(`INSERT OR IGNORE INTO global_config (key, value) VALUES ('pityCount', '0')`);
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE,
-      password_hash TEXT,
-      salt TEXT,
-      token TEXT,
-      gacha_data TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+const rawRun = <T = sqlite3.RunResult>(query: string, params: unknown[] = []): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    db.run(query, params, function (err) {
+      if (err) reject(err);
+      else resolve(this as T);
+    });
+  });
+};
 
-  // ===== SITE CONFIG TABLE =====
-  db.run(`
-    CREATE TABLE IF NOT EXISTS site_config (
-      key TEXT PRIMARY KEY,
-      value TEXT,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      version INTEGER NOT NULL DEFAULT 1,
-      updated_by TEXT
-    )
-  `);
-  db.run(
-    `ALTER TABLE site_config ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
-    (err) => {
-      if (err && !/duplicate column name/i.test(err.message)) {
-        console.warn('[site_config] ADD COLUMN version:', err.message);
-      }
-    },
-  );
-  db.run(
-    `ALTER TABLE site_config ADD COLUMN updated_by TEXT`,
-    (err) => {
-      if (err && !/duplicate column name/i.test(err.message)) {
-        console.warn('[site_config] ADD COLUMN updated_by:', err.message);
-      }
-    },
-  );
-  db.run(`
-    CREATE TABLE IF NOT EXISTS site_config_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      snapshot_version INTEGER NOT NULL UNIQUE,
-      snapshot_updated_at TEXT,
-      snapshot_updated_by TEXT,
-      backed_up_at TEXT NOT NULL,
-      site_config_value TEXT NOT NULL,
-      songs_value TEXT NOT NULL,
-      hidden_songs_value TEXT NOT NULL
-    )
-  `);
-  db.run(
-    `CREATE INDEX IF NOT EXISTS idx_site_config_history_backed_up_at
-       ON site_config_history (backed_up_at DESC)`
-  );
-
-  // ===== SONGS TABLE =====
-  db.run(`
-    CREATE TABLE IF NOT EXISTS songs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      category TEXT NOT NULL,
-      name TEXT NOT NULL,
-      artist TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // ===== HIDDEN SONGS TABLE =====
-  db.run(`
-    CREATE TABLE IF NOT EXISTS hidden_songs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // ===== MAIL TABLES（发信箱） =====
-  db.run(`
-    CREATE TABLE IF NOT EXISTS mail_messages (
-      id TEXT PRIMARY KEY NOT NULL,
-      created_at TEXT NOT NULL,
-      text TEXT NOT NULL,
-      nickname TEXT,
-      link_url TEXT,
-      deleted_at TEXT,
-      is_read INTEGER NOT NULL DEFAULT 0,
-      is_favorited INTEGER NOT NULL DEFAULT 0,
-      is_flagged INTEGER NOT NULL DEFAULT 0,
-      sender_hash TEXT,
-      sender_label TEXT
-    )
-  `);
-  db.run(
-    `CREATE INDEX IF NOT EXISTS idx_mail_messages_created_at ON mail_messages (created_at)`
-  );
-  db.run(
-    `ALTER TABLE mail_messages ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0`,
-    (err) => {
-      if (err && !/duplicate column name/i.test(err.message)) {
-        console.warn('[mail_messages] ADD COLUMN is_flagged:', err.message);
-      }
-    },
-  );
-  db.run(`
-    CREATE TABLE IF NOT EXISTS mail_blocklist (
-      hash TEXT PRIMARY KEY NOT NULL,
-      label TEXT,
-      blocked_at TEXT NOT NULL,
-      sample_text TEXT
-    )
-  `);
-  db.run(`
-    CREATE TABLE IF NOT EXISTS mail_settings (
-      key TEXT PRIMARY KEY NOT NULL,
-      value TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `);
-
-  // ===== MAIL TOPICS（主题收件箱） =====
-  // 每条留言归属某个收件组；默认有且仅有一个"常规收件组"，历史留言通过
-  // topic_id 默认值自动归属到它 → 零破坏。主播可按需创建 N 个主题。
-  db.run(`
-    CREATE TABLE IF NOT EXISTS mail_topics (
-      id          TEXT PRIMARY KEY NOT NULL,
-      slug        TEXT UNIQUE NOT NULL,
-      title       TEXT NOT NULL,
-      description TEXT,
-      note        TEXT,
-      is_default  INTEGER NOT NULL DEFAULT 0,
-      is_enabled  INTEGER NOT NULL DEFAULT 1,
-      starts_at   TEXT,
-      ends_at     TEXT,
-      archived_at TEXT,
-      sort_order  INTEGER NOT NULL DEFAULT 0,
-      created_at  TEXT NOT NULL,
-      updated_at  TEXT NOT NULL
-    )
-  `);
-  // 约束：全表最多只能有一行 is_default=1
-  db.run(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_topics_one_default
-       ON mail_topics (is_default) WHERE is_default = 1`,
-  );
-
-  // mail_messages 增加 topic_id 列（幂等：重复 ALTER 会报 duplicate column name，吞掉）
-  db.run(
-    `ALTER TABLE mail_messages ADD COLUMN topic_id TEXT NOT NULL DEFAULT 'default'`,
-    (err) => {
-      if (err && !/duplicate column name/i.test(err.message)) {
-        console.warn('[mail_messages] ADD COLUMN topic_id:', err.message);
-      }
-    },
-  );
-  // 列表 / 分页（按主题 + 未删除 + 时间倒序）
-  db.run(
-    `CREATE INDEX IF NOT EXISTS idx_mail_messages_topic_created
-       ON mail_messages (topic_id, deleted_at, created_at)`,
-  );
-  // 未读数 badge 专用（切 tab 性能关键，主 tab 栏会高频查这个 count）
-  db.run(
-    `CREATE INDEX IF NOT EXISTS idx_mail_messages_topic_unread
-       ON mail_messages (topic_id, is_read) WHERE deleted_at IS NULL`,
-  );
-});
-
-// 封装 Promise 版本的常用方法，替代原先的回调地狱
-export const get = <T = Record<string, unknown>>(
+const rawGet = <T = Record<string, unknown>>(
   query: string,
   params: unknown[] = [],
 ): Promise<T | undefined> => {
@@ -214,7 +42,7 @@ export const get = <T = Record<string, unknown>>(
   });
 };
 
-export const all = <T = Record<string, unknown>>(
+const rawAll = <T = Record<string, unknown>>(
   query: string,
   params: unknown[] = [],
 ): Promise<T[]> => {
@@ -225,12 +53,144 @@ export const all = <T = Record<string, unknown>>(
   });
 };
 
-export const run = <T = sqlite3.RunResult>(query: string, params: unknown[] = []): Promise<T> => {
+const rawExec = (query: string): Promise<void> => {
   return new Promise((resolve, reject) => {
-    db.run(query, params, function (err) {
-      if (err) reject(err); else resolve(this as T);
+    db.exec(query, (err) => {
+      if (err) reject(err);
+      else resolve();
     });
   });
+};
+
+type MigrationRow = { id: string };
+type TableInfoRow = { name: string };
+
+export const MIGRATION_FILES = [
+  '202606160001_core_schema.sql',
+  '202606160002_sessions_rate_limits.sql',
+  '202606160003_bilibili_proxy_config.sql',
+] as const;
+
+export const EXPECTED_MIGRATION_IDS = MIGRATION_FILES.map((file) => file.replace(/\.sql$/, ''));
+
+async function columnExists(table: string, column: string): Promise<boolean> {
+  const rows = await rawAll<TableInfoRow>(`PRAGMA table_info(${table})`);
+  return rows.some((row) => row.name === column);
+}
+
+async function ensureColumn(
+  table: string,
+  column: string,
+  definition: string,
+): Promise<void> {
+  if (await columnExists(table, column)) return;
+  await rawRun(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+}
+
+async function runLegacyColumnBackfill(migrationId: string): Promise<void> {
+  if (migrationId === '202606160001_core_schema') {
+    await ensureColumn('site_config', 'version', 'version INTEGER NOT NULL DEFAULT 1');
+    await ensureColumn('site_config', 'updated_by', 'updated_by TEXT');
+    await ensureColumn('mail_messages', 'is_flagged', 'is_flagged INTEGER NOT NULL DEFAULT 0');
+    await ensureColumn('mail_messages', 'topic_id', "topic_id TEXT NOT NULL DEFAULT 'default'");
+  }
+}
+
+async function bootstrapDefaultTopic(): Promise<void> {
+  const existing = await rawGet<{ id: string }>(
+    `SELECT id FROM mail_topics WHERE id = 'default'`,
+  );
+  if (existing) return;
+
+  const row = await rawGet<{ value: string }>(
+    `SELECT value FROM mail_settings WHERE key = ?`,
+    ['mail.enabled'],
+  );
+  const initialEnabled =
+    row && (row.value === '1' || row.value === 'true') ? 1 :
+    row && (row.value === '0' || row.value === 'false') ? 0 :
+    1;
+
+  const now = new Date().toISOString();
+  await rawRun(
+    `INSERT OR IGNORE INTO mail_topics
+       (id, slug, title, description, note, is_default, is_enabled,
+        starts_at, ends_at, archived_at, sort_order, created_at, updated_at)
+     VALUES ('default', 'default', '常规信箱', NULL, NULL, 1, ?,
+             NULL, NULL, NULL, 0, ?, ?)`,
+    [initialEnabled, now, now],
+  );
+  console.info(
+    `[mail_topics] default topic bootstrapped, migrated is_enabled=${initialEnabled} from mail_settings.mail.enabled`,
+  );
+}
+
+async function applyDbMigrations(): Promise<void> {
+  await rawRun('PRAGMA foreign_keys = ON');
+  await rawRun('PRAGMA journal_mode = WAL').catch(() => {});
+  await rawRun('PRAGMA busy_timeout = 5000').catch(() => {});
+  await rawRun(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY NOT NULL,
+      applied_at TEXT NOT NULL
+    )
+  `);
+
+  const migrationsDir = path.join(/*turbopackIgnore: true*/ process.cwd(), 'migrations');
+  const applied = new Set(
+    (await rawAll<MigrationRow>('SELECT id FROM schema_migrations')).map((row) => row.id),
+  );
+
+  for (const file of MIGRATION_FILES) {
+    const id = file.replace(/\.sql$/, '');
+    if (applied.has(id)) continue;
+    const sql = fs.readFileSync(/*turbopackIgnore: true*/ path.join(migrationsDir, file), 'utf8');
+    await rawRun('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      await rawExec(sql);
+      await runLegacyColumnBackfill(id);
+      await rawRun(
+        'INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)',
+        [id, new Date().toISOString()],
+      );
+      await rawRun('COMMIT');
+    } catch (error) {
+      await rawRun('ROLLBACK').catch(() => {});
+      throw error;
+    }
+  }
+
+  await bootstrapDefaultTopic();
+}
+
+export const dbReady = applyDbMigrations().catch((error) => {
+  console.error('[db] migration failed:', error);
+  throw error;
+});
+
+// 封装 Promise 版本的常用方法，替代原先的回调地狱
+export const get = async <T = Record<string, unknown>>(
+  query: string,
+  params: unknown[] = [],
+): Promise<T | undefined> => {
+  await dbReady;
+  return rawGet<T>(query, params);
+};
+
+export const all = async <T = Record<string, unknown>>(
+  query: string,
+  params: unknown[] = [],
+): Promise<T[]> => {
+  await dbReady;
+  return rawAll<T>(query, params);
+};
+
+export const run = async <T = sqlite3.RunResult>(
+  query: string,
+  params: unknown[] = [],
+): Promise<T> => {
+  await dbReady;
+  return rawRun<T>(query, params);
 };
 
 export const getConfig = async (key: string) => {
@@ -414,48 +374,3 @@ export function matchBlockedTerm(
   }
   return null;
 }
-
-// ==============================================================
-// 默认主题自举 + 老 mail.enabled 一次性迁移
-// ==============================================================
-//
-// 启动时（module 首次加载）异步执行：若 default 主题不存在则创建它，
-// 并把 `mail_settings.mail.enabled` 的现有值作为它 is_enabled 的初值。
-// 迁移后该 key 保留做历史归档，业务代码不再读写。
-//
-// 幂等：通过检查 default 主题是否已存在判断。第二次启动后跳过。
-//
-// 注意：这个 IIFE 必须放在 get/run 定义之后，否则会触发 const TDZ。
-(async () => {
-  try {
-    const existing = (await get(
-      `SELECT id FROM mail_topics WHERE id = 'default'`,
-    )) as { id: string } | undefined;
-    if (existing) return;
-
-    // 读老 mail.enabled；缺省视为开启
-    const row = (await get(
-      `SELECT value FROM mail_settings WHERE key = ?`,
-      ['mail.enabled'],
-    )) as { value: string } | undefined;
-    const initialEnabled =
-      row && (row.value === '1' || row.value === 'true') ? 1 :
-      row && (row.value === '0' || row.value === 'false') ? 0 :
-      1;
-
-    const now = new Date().toISOString();
-    await run(
-      `INSERT OR IGNORE INTO mail_topics
-         (id, slug, title, description, note, is_default, is_enabled,
-          starts_at, ends_at, archived_at, sort_order, created_at, updated_at)
-       VALUES ('default', 'default', '常规信箱', NULL, NULL, 1, ?,
-               NULL, NULL, NULL, 0, ?, ?)`,
-      [initialEnabled, now, now],
-    );
-    console.info(
-      `[mail_topics] default topic bootstrapped, migrated is_enabled=${initialEnabled} from mail_settings.mail.enabled`,
-    );
-  } catch (e) {
-    console.warn('[mail_topics] bootstrap failed:', e);
-  }
-})();

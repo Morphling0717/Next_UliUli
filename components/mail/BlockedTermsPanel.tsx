@@ -61,7 +61,9 @@ export function BlockedTermsPanel({ authHeader, onUnauthorized }: Props) {
   }, [authHeader, handleAuthError]);
 
   useEffect(() => {
-    void reload();
+    queueMicrotask(() => {
+      void reload();
+    });
   }, [reload]);
 
   const parsed = useMemo(

@@ -1,20 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { verifyAdminRequest } from '@/lib/admin-auth';
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ALLOWED_DIRS = ['memes', 'pic'];
 const ALLOWED_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
 
 export async function POST(request: NextRequest) {
   try {
-    if (!ADMIN_PASSWORD) {
-      return NextResponse.json({
-        success: false,
-        message: '服务器未配置 ADMIN_PASSWORD 环境变量'
-      }, { status: 500 });
-    }
-
     const contentType = request.headers.get('content-type') || '';
     
     let action = '', folder = '', password = '', filename = '', newname = '';
@@ -36,9 +29,8 @@ export async function POST(request: NextRequest) {
       newname = body.newname;
     }
 
-    if (password !== ADMIN_PASSWORD) {
-      return NextResponse.json({ success: false, message: '密码错误，拒绝访问' });
-    }
+    const auth = await verifyAdminRequest(request, password);
+    if (auth) return auth;
 
     if (!ALLOWED_DIRS.includes(folder)) {
       return NextResponse.json({ success: false, message: '无效的文件夹权限' });
@@ -129,8 +121,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, message: '未知操作' });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Upload API Error:", error);
-    return NextResponse.json({ success: false, message: '服务器内部错误: ' + error.message });
+    const message = error instanceof Error ? error.message : '未知错误';
+    return NextResponse.json({ success: false, message: '服务器内部错误: ' + message });
   }
 }

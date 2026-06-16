@@ -6,9 +6,11 @@ type UserProfileRow = {
   gacha_data: string | null;
 };
 
+type JsonObject = Record<string, unknown>;
+
 export async function POST(request: NextRequest) {
   const action = request.nextUrl.pathname.split('/').pop();
-  let body: any = {};
+  let body: JsonObject = {};
   try {
     body = await request.json();
   } catch {
@@ -17,7 +19,7 @@ export async function POST(request: NextRequest) {
 
   if (action === 'sync') {
     const { token, data } = body;
-    if (!token) return NextResponse.json({ error: "未登录" }, { status: 401 });
+    if (typeof token !== "string" || !token) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
     const dataStr = JSON.stringify(data);
     try {
@@ -25,21 +27,23 @@ export async function POST(request: NextRequest) {
       // Note: sqlite3 wrapper this.changes equivalent, might be omitted in basic wraps, assuming success
       if (result && result.changes === 0) return NextResponse.json({ error: "Token 无效或过期" }, { status: 401 });
       return NextResponse.json({ success: true });
-    } catch (err) {
+    } catch {
       return NextResponse.json({ error: "同步失败" }, { status: 500 });
     }
   }
 
   if (action === 'me') {
     const { token } = body;
+    if (typeof token !== "string" || !token) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
     try {
       const user = await get<UserProfileRow>('SELECT username, gacha_data FROM users WHERE token = ?', [token]);
       if (!user) return NextResponse.json({ error: "无效 Token" }, { status: 401 });
       
-      let cloudData = {};
-      try { cloudData = JSON.parse(user.gacha_data ?? '{}'); } catch(e) {}
+      let cloudData: unknown = {};
+      try { cloudData = JSON.parse(user.gacha_data ?? '{}'); } catch {}
       return NextResponse.json({ success: true, username: user.username, data: cloudData });
-    } catch (err) {
+    } catch {
       return NextResponse.json({ error: "数据库错误" }, { status: 500 });
     }
   }

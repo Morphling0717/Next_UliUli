@@ -92,27 +92,30 @@ export function FlaggedMailPanel({
   useEffect(() => {
     if (!openId) return;
     let cancelled = false;
-    setOpenLoading(true);
-    setOpenError(null);
-    setOpenData(null);
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
-          { headers: authHeader, cache: "no-store" },
-        );
-        if (handleAuthError(r)) return;
-        if (!r.ok) throw new Error(await readError(r));
-        const j = (await r.json()) as FullMessage;
-        if (!cancelled) setOpenData(j);
-      } catch (e) {
-        if (!cancelled) {
-          setOpenError(e instanceof Error ? e.message : "加载失败");
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setOpenLoading(true);
+      setOpenError(null);
+      setOpenData(null);
+      void (async () => {
+        try {
+          const r = await fetch(
+            `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
+            { headers: authHeader, cache: "no-store" },
+          );
+          if (handleAuthError(r)) return;
+          if (!r.ok) throw new Error(await readError(r));
+          const j = (await r.json()) as FullMessage;
+          if (!cancelled) setOpenData(j);
+        } catch (e) {
+          if (!cancelled) {
+            setOpenError(e instanceof Error ? e.message : "加载失败");
+          }
+        } finally {
+          if (!cancelled) setOpenLoading(false);
         }
-      } finally {
-        if (!cancelled) setOpenLoading(false);
-      }
-    })();
+      })();
+    });
     return () => {
       cancelled = true;
     };
