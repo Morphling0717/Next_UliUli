@@ -78,7 +78,7 @@ npm run dev
 
 ## 🔐 环境变量
 
-`.env.local`(本地)或 1Panel 应用环境变量:
+`.env.local`(本地)、`.env`(Docker Compose)或 1Panel 应用环境变量:
 
 ```bash
 # 必填：后台管理员密码（用于 /api/admin/save、/api/admin/upload）
@@ -95,6 +95,9 @@ DEV_UNLOCK_PASSWORD=change_me_to_a_dev_unlock_password
 #   Docker：/app/data/codes.db
 DATABASE_PATH=./data/codes.db
 
+# Docker Compose 宿主机端口；默认只绑定 127.0.0.1，避免绕过反代直连 Node
+HOST_PORT=3000
+
 # 必填：公开站点地址（用于 Open Graph 分享卡片）
 NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
 
@@ -108,7 +111,7 @@ NEXT_PUBLIC_TURNSTILE_SITE_KEY=
 TURNSTILE_SECRET=
 ```
 
-> ⚠️ 生产环境务必修改 `ADMIN_PASSWORD` / `DEV_UNLOCK_PASSWORD`；若希望 `/mail` 独立口令，再额外设置 `MAIL_AUTH_PASSWORD`。请勿把 `.env.local` 提交到仓库。
+> ⚠️ 生产环境务必修改 `ADMIN_PASSWORD` / `DEV_UNLOCK_PASSWORD`；若希望 `/mail` 独立口令，再额外设置 `MAIL_AUTH_PASSWORD`。请勿把 `.env.local` 或生产 `.env` 提交到仓库。
 
 ---
 
@@ -305,6 +308,8 @@ Next_UliUli/
 ### 方式 A：Docker Compose（推荐）
 
 ```bash
+cp .env.example .env
+# 编辑 .env，至少设置 ADMIN_PASSWORD / DEV_UNLOCK_PASSWORD / WINDCHIME_HASH_SALT
 docker compose up -d --build
 ```
 
@@ -314,7 +319,7 @@ docker compose up -d --build
 - `./public/memes` → `/app/public/memes`(上传表情)
 - `./public/pic` → `/app/public/pic`(上传图片)
 
-**生产前**请修改 `docker-compose.yml` 里的 `ADMIN_PASSWORD` / `DEV_UNLOCK_PASSWORD`；若希望 `/mail` 单独口令，再额外设置 `MAIL_AUTH_PASSWORD`（或改用 `.env` 文件）。
+`docker-compose.yml` 默认只把容器端口绑定到 `127.0.0.1:${HOST_PORT:-3000}`，生产建议让 1Panel/OpenResty/Nginx 反代到这个本地端口，不要把 Node 的 3000 端口直接暴露到公网。
 
 ### 方式 B：1Panel 中构建 Dockerfile
 

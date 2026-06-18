@@ -15,6 +15,10 @@ function getMailAdminPassword(): string | null {
   return getExpectedPassword('mail');
 }
 
+function lockKey(req: Request): string {
+  return `mail:${getClientIp(req)}`;
+}
+
 /**
  * 检查请求是否带有正确的 mail 后台密码。
  *
@@ -39,10 +43,10 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
     );
   }
 
-  const ip = getClientIp(req);
+  const key = lockKey(req);
 
   // 先看这个 IP 是不是已经被锁
-  const lock = await checkLoginLock(ip);
+  const lock = await checkLoginLock(key);
   if (lock.locked) {
     const retryAfterSec = Math.ceil(lock.retryAfterMs / 1000);
     return NextResponse.json(
@@ -75,13 +79,13 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
   // 用 timing-safe 比较
   for (const c of candidates) {
     if (safeEqual(c, expected)) {
-      await clearLoginFailure(ip);
+      await clearLoginFailure(key);
       return null;
     }
   }
 
   // 没有任何候选通过（包括没带密码）：记失败
-  const result = await recordLoginFailure(ip);
+  const result = await recordLoginFailure(key);
   if (result.locked) {
     const retryAfterSec = Math.ceil(result.retryAfterMs / 1000);
     return NextResponse.json(

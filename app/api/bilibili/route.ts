@@ -14,6 +14,10 @@ const FETCH_TIMEOUT_MS = Math.max(
   2_000,
   Number(process.env.BILIBILI_FETCH_TIMEOUT_MS || 8_000),
 );
+const REFRESH_ERROR_BACKOFF_MS = Math.max(
+  15_000,
+  Number(process.env.BILIBILI_REFRESH_ERROR_BACKOFF_SECONDS || 60) * 1000,
+);
 
 type CacheState = {
   data: unknown;
@@ -25,6 +29,7 @@ type ConfigRow = { value: string };
 const G = globalThis as unknown as {
   __bilibiliCache?: CacheState;
   __bilibiliRefresh?: Promise<void>;
+  __bilibiliRefreshBlockedUntil?: number;
 };
 
 function upstreamUrl(): string {
@@ -111,9 +116,13 @@ async function refreshCache(fetchedAt = Date.now()): Promise<unknown> {
 
 function triggerBackgroundRefresh() {
   if (G.__bilibiliRefresh) return;
+  const now = Date.now();
+  if (G.__bilibiliRefreshBlockedUntil && now < G.__bilibiliRefreshBlockedUntil) return;
+
   G.__bilibiliRefresh = refreshCache()
     .then(() => undefined)
     .catch((error) => {
+      G.__bilibiliRefreshBlockedUntil = Date.now() + REFRESH_ERROR_BACKOFF_MS;
       console.warn('[api/bilibili] background refresh failed:', error);
     })
     .finally(() => {

@@ -9,8 +9,16 @@ import {
   sessionCookieOptions,
   verifyAdminSession,
 } from '@/lib/admin-session';
+import { getClientIp } from '@/lib/db';
+import {
+  checkLoginLock,
+  clearLoginFailure,
+  recordLoginFailure,
+} from '@/lib/mail-rate-limit';
 
 export const dynamic = 'force-dynamic';
+
+const lockKey = (req: Request) => `dev:${getClientIp(req)}`;
 
 export async function GET(request: NextRequest) {
   return NextResponse.json({
@@ -39,13 +47,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const key = lockKey(request);
+    const lock = await checkLoginLock(key);
+    if (lock.locked) {
+      const retryAfterSec = Math.ceil(lock.retryAfterMs / 1000);
+      return NextResponse.json(
+        {
+          success: false,
+          message: `尝试次数过多，请在 ${Math.ceil(retryAfterSec / 60)} 分钟后再试`,
+        },
+        { status: 429, headers: { 'retry-after': String(retryAfterSec) } },
+      );
+    }
+
     if (!safeEqual(password, expected)) {
+      const result = await recordLoginFailure(key);
+      if (result.locked) {
+        const retryAfterSec = Math.ceil(result.retryAfterMs / 1000);
+        return NextResponse.json(
+          {
+            success: false,
+            message: `尝试次数过多，已锁定 ${Math.ceil(retryAfterSec / 60)} 分钟`,
+          },
+          { status: 429, headers: { 'retry-after': String(retryAfterSec) } },
+        );
+      }
       return NextResponse.json(
         { success: false, message: '密码错误' },
         { status: 401 },
       );
     }
 
+    await clearLoginFailure(key);
     const session = await createAdminSession('dev', request);
     const res = NextResponse.json({ success: true, unlocked: true });
     res.cookies.set(

@@ -18,6 +18,8 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+const lockKey = (req: Request) => `admin:${getClientIp(req)}`;
+
 export async function GET(req: Request) {
   return NextResponse.json({ authenticated: await verifyAdminSession(req, 'admin') });
 }
@@ -31,8 +33,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const ip = getClientIp(req);
-  const lock = await checkLoginLock(ip);
+  const key = lockKey(req);
+  const lock = await checkLoginLock(key);
   if (lock.locked) {
     const retryAfterSec = Math.ceil(lock.retryAfterMs / 1000);
     return NextResponse.json(
@@ -47,7 +49,7 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as { password?: string } | null;
   const password = typeof body?.password === 'string' ? body.password : '';
   if (!password || !safeEqual(password, expected)) {
-    const result = await recordLoginFailure(ip);
+    const result = await recordLoginFailure(key);
     if (result.locked) {
       const retryAfterSec = Math.ceil(result.retryAfterMs / 1000);
       return NextResponse.json(
@@ -64,7 +66,7 @@ export async function POST(req: Request) {
     );
   }
 
-  await clearLoginFailure(ip);
+  await clearLoginFailure(key);
   const session = await createAdminSession('admin', req);
   const res = NextResponse.json({ success: true, authenticated: true });
   res.cookies.set(
