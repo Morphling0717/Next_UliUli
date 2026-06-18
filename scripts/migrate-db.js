@@ -56,11 +56,28 @@ async function ensureColumn(table, column, definition) {
 }
 
 async function runLegacyColumnBackfill(migrationId) {
-  if (migrationId !== '202606160001_core_schema') return;
-  await ensureColumn('site_config', 'version', 'version INTEGER NOT NULL DEFAULT 1');
-  await ensureColumn('site_config', 'updated_by', 'updated_by TEXT');
-  await ensureColumn('mail_messages', 'is_flagged', 'is_flagged INTEGER NOT NULL DEFAULT 0');
-  await ensureColumn('mail_messages', 'topic_id', "topic_id TEXT NOT NULL DEFAULT 'default'");
+  if (migrationId === '202606160001_core_schema') {
+    await ensureColumn('site_config', 'version', 'version INTEGER NOT NULL DEFAULT 1');
+    await ensureColumn('site_config', 'updated_by', 'updated_by TEXT');
+    await ensureColumn('mail_messages', 'is_flagged', 'is_flagged INTEGER NOT NULL DEFAULT 0');
+    await ensureColumn('mail_messages', 'topic_id', "topic_id TEXT NOT NULL DEFAULT 'default'");
+  }
+  if (migrationId === '202606180001_gacha_server_state') {
+    await ensureColumn('gift_codes', 'owner_user_id', 'owner_user_id INTEGER');
+    await ensureColumn('gift_codes', 'claimed_by_user_id', 'claimed_by_user_id INTEGER');
+    await ensureColumn('gift_codes', 'claimed_at', 'claimed_at TEXT');
+    await ensureColumn('gift_codes', 'expires_at', 'expires_at TEXT');
+    await ensureColumn('gift_codes', 'source', "source TEXT NOT NULL DEFAULT 'legacy'");
+    await ensureColumn('gift_codes', 'updated_at', 'updated_at TEXT');
+    await run(
+      `CREATE INDEX IF NOT EXISTS idx_gift_codes_owner_created
+         ON gift_codes (owner_user_id, created_at DESC)`,
+    );
+    await run(
+      `CREATE INDEX IF NOT EXISTS idx_gift_codes_claimed_by
+         ON gift_codes (claimed_by_user_id)`,
+    );
+  }
 }
 
 async function bootstrapDefaultTopic() {
@@ -121,7 +138,7 @@ async function main() {
     try {
       await exec(fs.readFileSync(path.join(migrationsDir, file), 'utf8'));
       await runLegacyColumnBackfill(id);
-      await run('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)', [
+      await run('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)', [
         id,
         new Date().toISOString(),
       ]);

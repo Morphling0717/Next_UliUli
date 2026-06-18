@@ -13,6 +13,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:migrate": "node scripts/migrate-db.js",
+    "gacha:migrate": "npm run db:migrate && node scripts/migrate-gacha-data.js",
     "db:backup": "node scripts/backup-db.js",
     "clean": "rimraf .next out build node_modules"
   },

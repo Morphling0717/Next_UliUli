@@ -73,7 +73,18 @@ export async function GET() {
 
   if (criticalFailures.length === 0) {
     try {
-      const [siteConfig, songCount, hiddenCount, migrations, rateLimit, lastBackup] =
+      const [
+        siteConfig,
+        songCount,
+        hiddenCount,
+        migrations,
+        rateLimit,
+        lastBackup,
+        userCount,
+        gachaProfileCount,
+        gachaInventoryCount,
+        unmigratedGachaUsers,
+      ] =
         await Promise.all([
           get<SiteConfigRow>(
             'SELECT version, updated_at FROM site_config WHERE key = ?',
@@ -88,6 +99,15 @@ export async function GET() {
           get<ConfigRow>(
             'SELECT value FROM global_config WHERE key = ?',
             ['db.last_backup'],
+          ),
+          get<CountRow>('SELECT COUNT(*) AS count FROM users'),
+          get<CountRow>('SELECT COUNT(*) AS count FROM gacha_profiles'),
+          get<CountRow>('SELECT COALESCE(SUM(quantity), 0) AS count FROM gacha_inventory'),
+          get<CountRow>(
+            `SELECT COUNT(*) AS count
+               FROM users u
+               LEFT JOIN gacha_profiles gp ON gp.user_id = u.id
+              WHERE gp.user_id IS NULL OR gp.migrated_from_legacy_at IS NULL`,
           ),
         ]);
 
@@ -117,6 +137,15 @@ export async function GET() {
       };
 
       checks.rateLimits = { ok: true, ...rateLimit };
+      const unmigrated = Number(unmigratedGachaUsers?.count ?? 0);
+      if (unmigrated > 0) warnings.push(`gacha: ${unmigrated} users not migrated`);
+      checks.gacha = {
+        ok: unmigrated === 0,
+        users: Number(userCount?.count ?? 0),
+        profiles: Number(gachaProfileCount?.count ?? 0),
+        inventoryItems: Number(gachaInventoryCount?.count ?? 0),
+        unmigratedUsers: unmigrated,
+      };
       const backup = backupHealth(parseBackupManifest(lastBackup));
       if (!backup.ok) warnings.push(`backup: ${backup.reason}`);
       checks.backup = backup;

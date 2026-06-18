@@ -69,6 +69,7 @@ export const MIGRATION_FILES = [
   '202606160001_core_schema.sql',
   '202606160002_sessions_rate_limits.sql',
   '202606160003_bilibili_proxy_config.sql',
+  '202606180001_gacha_server_state.sql',
 ] as const;
 
 export const EXPECTED_MIGRATION_IDS = MIGRATION_FILES.map((file) => file.replace(/\.sql$/, ''));
@@ -93,6 +94,22 @@ async function runLegacyColumnBackfill(migrationId: string): Promise<void> {
     await ensureColumn('site_config', 'updated_by', 'updated_by TEXT');
     await ensureColumn('mail_messages', 'is_flagged', 'is_flagged INTEGER NOT NULL DEFAULT 0');
     await ensureColumn('mail_messages', 'topic_id', "topic_id TEXT NOT NULL DEFAULT 'default'");
+  }
+  if (migrationId === '202606180001_gacha_server_state') {
+    await ensureColumn('gift_codes', 'owner_user_id', 'owner_user_id INTEGER');
+    await ensureColumn('gift_codes', 'claimed_by_user_id', 'claimed_by_user_id INTEGER');
+    await ensureColumn('gift_codes', 'claimed_at', 'claimed_at TEXT');
+    await ensureColumn('gift_codes', 'expires_at', 'expires_at TEXT');
+    await ensureColumn('gift_codes', 'source', "source TEXT NOT NULL DEFAULT 'legacy'");
+    await ensureColumn('gift_codes', 'updated_at', 'updated_at TEXT');
+    await rawRun(
+      `CREATE INDEX IF NOT EXISTS idx_gift_codes_owner_created
+         ON gift_codes (owner_user_id, created_at DESC)`,
+    );
+    await rawRun(
+      `CREATE INDEX IF NOT EXISTS idx_gift_codes_claimed_by
+         ON gift_codes (claimed_by_user_id)`,
+    );
   }
 }
 
@@ -150,7 +167,7 @@ async function applyDbMigrations(): Promise<void> {
       await rawExec(sql);
       await runLegacyColumnBackfill(id);
       await rawRun(
-        'INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)',
+        'INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)',
         [id, new Date().toISOString()],
       );
       await rawRun('COMMIT');

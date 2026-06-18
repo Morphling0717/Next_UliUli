@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-import { run, get, all, getConfig, setConfig } from '@/lib/db';
-
-type GiftCodeRow = {
-  code: string;
-  status: string;
-  item_id: number;
-};
+import { get, getConfig, setConfig } from '@/lib/db';
+import {
+  GachaError,
+  checkOwnedGachaCodes,
+  getGachaUserByToken,
+  packageGachaItem,
+  redeemGachaCode,
+} from '@/lib/gacha';
 
 type SiteConfigRow = {
   value: string;
@@ -39,50 +39,48 @@ export async function POST(request: NextRequest) {
   }
 
   if (action === 'generate') {
-    const { itemId } = body;
+    const { token, itemId } = body;
     if (typeof itemId !== "number" && typeof itemId !== "string") {
       return NextResponse.json({ error: "Missing itemId" }, { status: 400 });
     }
-    const code = 'GIFT-' + crypto.randomBytes(3).toString('hex').toUpperCase();
     try {
-      await run('INSERT INTO gift_codes (code, item_id) VALUES (?, ?)', [code, itemId]);
-      return NextResponse.json({ success: true, code });
-    } catch {
-      return NextResponse.json({ error: "Database error" }, { status: 500 });
+      const user = await getGachaUserByToken(token);
+      const result = await packageGachaItem(user.id, itemId);
+      return NextResponse.json({ success: true, ...result });
+    } catch (error) {
+      const status = error instanceof GachaError ? error.status : 500;
+      const message = error instanceof Error ? error.message : "Database error";
+      return NextResponse.json({ error: message }, { status });
     }
   }
 
   if (action === 'redeem') {
-    const { code } = body;
+    const { token, code } = body;
     if (typeof code !== "string" || !code.trim()) {
       return NextResponse.json({ error: "Missing code" }, { status: 400 });
     }
     try {
-      const row = await get<GiftCodeRow>('SELECT * FROM gift_codes WHERE code = ?', [code]);
-      if (!row) return NextResponse.json({ error: "无效的兑换码" }, { status: 404 });
-      if (row.status === 'used') return NextResponse.json({ error: "该兑换码已被使用" }, { status: 400 });
-      
-      await run('UPDATE gift_codes SET status = ? WHERE code = ?', ['used', code]);
-      return NextResponse.json({ success: true, itemId: row.item_id });
-    } catch {
-      return NextResponse.json({ error: "Database error" }, { status: 500 });
+      const user = await getGachaUserByToken(token);
+      const result = await redeemGachaCode(user.id, code);
+      return NextResponse.json({ success: true, ...result });
+    } catch (error) {
+      const status = error instanceof GachaError ? error.status : 500;
+      const message = error instanceof Error ? error.message : "Database error";
+      return NextResponse.json({ error: message }, { status });
     }
   }
 
   if (action === 'check_status') {
-    const { codes } = body;
+    const { token, codes } = body;
     if (!Array.isArray(codes) || codes.length === 0) return NextResponse.json({ results: [] });
-    const safeCodes = codes.filter((code): code is string => typeof code === "string" && code.length > 0);
-    if (safeCodes.length === 0) return NextResponse.json({ results: [] });
-    const placeholders = safeCodes.map(() => '?').join(',');
     try {
-      const rows = await all<GiftCodeRow>(
-        `SELECT code, status, item_id FROM gift_codes WHERE code IN (${placeholders})`,
-        safeCodes,
-      );
-      return NextResponse.json({ results: rows });
-    } catch {
-      return NextResponse.json({ error: "Database error" }, { status: 500 });
+      const user = await getGachaUserByToken(token);
+      const results = await checkOwnedGachaCodes(user.id, codes);
+      return NextResponse.json({ results });
+    } catch (error) {
+      const status = error instanceof GachaError ? error.status : 500;
+      const message = error instanceof Error ? error.message : "Database error";
+      return NextResponse.json({ error: message }, { status });
     }
   }
 

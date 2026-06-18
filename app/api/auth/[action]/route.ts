@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { run, get, hashPassword } from '@/lib/db';
+import { getGachaState, initializeFreshGachaProfile, migrateLegacyGachaForUser } from '@/lib/gacha';
 
 type UserAuthRow = {
   id: number;
@@ -26,7 +27,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (action === 'register') {
-    const { username, password, initialData } = body;
+    const { username, password } = body;
     if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
       return NextResponse.json({ error: "请输入用户名和密码" }, { status: 400 });
     }
@@ -34,14 +35,16 @@ export async function POST(request: NextRequest) {
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = hashPassword(password, salt);
     const token = crypto.randomBytes(32).toString('hex');
-    const dataStr = JSON.stringify(initialData || {});
+    const dataStr = JSON.stringify({});
 
     try {
-      await run(
+      const result = await run(
         'INSERT INTO users (username, password_hash, salt, token, gacha_data) VALUES (?, ?, ?, ?, ?)',
         [username, hash, salt, token, dataStr]
       );
-      return NextResponse.json({ success: true, token, username });
+      await initializeFreshGachaProfile(result.lastID);
+      const state = await getGachaState(result.lastID);
+      return NextResponse.json({ success: true, token, username, data: state });
     } catch (error) {
       if (isSqliteUniqueError(error)) return NextResponse.json({ error: "用户名已存在" }, { status: 400 });
       return NextResponse.json({ error: "数据库错误" }, { status: 500 });
@@ -64,10 +67,10 @@ export async function POST(request: NextRequest) {
       const newToken = crypto.randomBytes(32).toString('hex');
       await run('UPDATE users SET token = ? WHERE id = ?', [newToken, user.id]);
 
-      let cloudData: unknown = {};
-      try { cloudData = JSON.parse(user.gacha_data ?? '{}'); } catch {}
+      await migrateLegacyGachaForUser(user.id, user.gacha_data);
+      const state = await getGachaState(user.id);
 
-      return NextResponse.json({ success: true, token: newToken, username: user.username, data: cloudData });
+      return NextResponse.json({ success: true, token: newToken, username: user.username, data: state });
     } catch {
       return NextResponse.json({ error: "数据库错误" }, { status: 500 });
     }

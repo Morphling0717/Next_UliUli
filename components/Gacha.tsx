@@ -34,7 +34,32 @@ export interface CloudData {
   coins: number;
   history: HistoryItem[];
   lastLogin: string;
+  lastDailyClaim?: string | null;
 }
+
+type ApiGachaState = Partial<CloudData> & {
+  lastDailyClaim?: string | null;
+};
+
+const normalizeGachaState = (raw: ApiGachaState | null | undefined): CloudData => {
+  const collection = Array.isArray(raw?.collection)
+    ? raw.collection.filter((id): id is number => Number.isInteger(id) && id >= 1 && id <= CONFIG.TOTAL_ITEMS)
+    : [];
+  const history = Array.isArray(raw?.history) ? raw.history : [];
+  const coins = Number.isFinite(Number(raw?.coins)) ? Math.max(0, Math.floor(Number(raw?.coins))) : CONFIG.INITIAL_COINS;
+  const lastDailyClaim =
+    typeof raw?.lastDailyClaim === 'string' ? raw.lastDailyClaim :
+    typeof raw?.lastLogin === 'string' ? raw.lastLogin :
+    "";
+
+  return {
+    collection,
+    history,
+    coins,
+    lastLogin: lastDailyClaim,
+    lastDailyClaim,
+  };
+};
 
 const GachaIcons = {
   Capsule: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><path d="M12 2a10 10 0 0 1 10 10v4a6 6 0 0 1-6 6H8a6 6 0 0 1-6-6v-4A10 10 0 0 1 12 2z" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 12v10" /></svg>),
@@ -90,8 +115,6 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
   const [giftLoading, setGiftLoading] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
-  const [, setCheatBuffer] = useState("");
-  const [isInfiniteMode, setIsInfiniteMode] = useState(false);
 
   useEffect(() => {
       if (isOpen) document.body.style.overflow = 'hidden';
@@ -112,43 +135,52 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
       return () => clearTimeout(t);
   }, []);
 
-  const syncToCloud = async (dataToSync: CloudData, token: string) => {
-      if (!token) return;
-      try {
-          await fetch(`${CONFIG.API_BASE}/user/sync`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token, data: dataToSync })
-          });
-      } catch(e) { console.error("Sync failed", e); }
+  const applyGachaState = (raw: ApiGachaState | null | undefined) => {
+    const data = normalizeGachaState(raw);
+    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(data));
+    setCollection(data.collection);
+    setHistory(data.history);
+    setCoins(data.coins);
   };
 
-  const saveAll = (newColl: number[], newCoins: number, newHistory?: HistoryItem[]) => {
-    const today = new Date().toDateString();
-    const data: CloudData = { 
-        collection: newColl, 
-        coins: newCoins, 
-        history: newHistory || history,
-        lastLogin: today 
-    };
-    
-    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(data));
-    setCollection(newColl);
-    setCoins(newCoins);
-    if (newHistory) setHistory(newHistory);
-    
-    if (user) syncToCloud(data, user.token);
+  const loadServerState = async (token: string, claimDaily = false) => {
+      const res = await fetch(`${CONFIG.API_BASE}/gacha/me`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "读取服务器存档失败");
+      setUser({ username: data.username, token });
+      applyGachaState(data.data);
+
+      if (!claimDaily) return data.data;
+
+      const dailyRes = await fetch(`${CONFIG.API_BASE}/gacha/daily`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+      });
+      const dailyData = await dailyRes.json();
+      if (dailyData.success) {
+          applyGachaState(dailyData.state);
+          if (dailyData.claimed) setTimeout(() => setShowDailyBonus(true), 1000);
+          return dailyData.state;
+      }
+
+      return data.data;
   };
 
   const checkHistoryStatus = async () => {
       if (history.length === 0) return;
+      if (!user?.token) return;
       setIsCheckingStatus(true);
       try {
           const codesToCheck = history.map(h => h.code);
-          const res = await fetch(`${CONFIG.API_BASE}/check_status`, {
+          const res = await fetch(`${CONFIG.API_BASE}/gacha/check-status`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ codes: codesToCheck })
+              body: JSON.stringify({ token: user.token, codes: codesToCheck })
           });
           const data = await res.json();
           if (data.results) {
@@ -162,7 +194,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
                   }
                   return h;
               });
-              if (hasChanges) saveAll(collection, coins, newHistory);
+              if (hasChanges) applyGachaState({ collection, coins, history: newHistory, lastLogin: new Date().toISOString().slice(0, 10) });
           }
       } catch (e) { console.error("Status check failed", e); }
       finally { setIsCheckingStatus(false); }
@@ -172,66 +204,28 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
     const init = async () => {
         try {
           const token = localStorage.getItem(CONFIG.AUTH_KEY);
-          let cloudData: CloudData | null = null;
-          let currentUser: User | null = null;
 
           if (token) {
               try {
-                  const res = await fetch(`${CONFIG.API_BASE}/user/me`, {
-                      method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ token })
-                  });
-                  const resData = await res.json();
-                  if (resData.success) {
-                      currentUser = { username: resData.username, token };
-                      setUser(currentUser);
-                      cloudData = resData.data; 
-                  } else { localStorage.removeItem(CONFIG.AUTH_KEY); }
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
-              } catch(e) {}
+                  await loadServerState(token, true);
+                  return;
+              } catch(e) {
+                  console.error(e);
+                  localStorage.removeItem(CONFIG.AUTH_KEY);
+                  setUser(null);
+              }
           }
 
           const localRaw = localStorage.getItem(CONFIG.STORAGE_KEY);
-          let data: CloudData = { collection: [], history: [], coins: CONFIG.INITIAL_COINS, lastLogin: "" };
-
-          if (cloudData) {
-              data = { ...data, ...cloudData };
-          } else if (localRaw) {
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
-              try { data = { ...data, ...JSON.parse(localRaw) }; } catch (e) {}
+          if (localRaw) {
+              try { applyGachaState(JSON.parse(localRaw)); } catch { applyGachaState(null); }
+          } else {
+              applyGachaState(null);
           }
-
-          const today = new Date().toDateString(); 
-          let bonusAwarded = false;
-          
-          if (data.lastLogin !== today) {
-              data.coins += CONFIG.DAILY_REWARD;
-              data.lastLogin = today;
-              bonusAwarded = true;
-          }
-
-          // 修复：强制防御旧版 localStorage 的脏数据，确保一定是个数组
-          const safeCollection = Array.isArray(data.collection) ? data.collection : [];
-          const safeHistory = Array.isArray(data.history) ? data.history : [];
-
-          setCollection(safeCollection);
-          setHistory(safeHistory);
-          setCoins(data.coins || 0);
-          
-          // 同步回安全的数据格式
-          data.collection = safeCollection;
-          data.history = safeHistory;
-          localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(data));
-          if (currentUser) syncToCloud(data, currentUser.token);
-
-          if (bonusAwarded) {
-              setTimeout(() => setShowDailyBonus(true), 1500);
-          }
-
         } catch (e) { console.error(e); }
     };
     init();
-   
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -247,13 +241,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
       setAuthLoading(true);
       try {
           const endpoint = authMode === 'LOGIN' ? '/auth/login' : '/auth/register';
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const body: any = { username: usernameInput, password: passwordInput };
-          
-          if (authMode === 'REGISTER') {
-              const today = new Date().toDateString();
-              body.initialData = { collection, coins, history, lastLogin: today };
-          }
+          const body = { username: usernameInput, password: passwordInput };
 
           const res = await fetch(`${CONFIG.API_BASE}${endpoint}`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -263,33 +251,8 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
           if (data.success) {
               localStorage.setItem(CONFIG.AUTH_KEY, data.token);
               setUser({ username: data.username, token: data.token });
-              
-              if (authMode === 'LOGIN' && data.data) {
-                  if (window.confirm(`欢迎回来 ${data.username}！\n检测到云端存档 (硬币:${data.data.coins}, 收集:${data.data.collection?.length || 0})。\n是否加载云端存档覆盖当前本地进度？`)) {
-                      const cloud = data.data;
-                      const today = new Date().toDateString();
-                      
-                      let newCoins = cloud.coins || 0;
-                      let lastLogin = cloud.lastLogin || "";
-                      
-                      if (lastLogin !== today) {
-                          newCoins += CONFIG.DAILY_REWARD;
-                          lastLogin = today;
-                          setTimeout(() => setShowDailyBonus(true), 1000);
-                      }
-
-                      const mergedData: CloudData = {
-                          collection: cloud.collection || [], 
-                          coins: newCoins, 
-                          history: cloud.history || [],
-                          lastLogin: lastLogin
-                      };
-                      setCollection(mergedData.collection); setCoins(mergedData.coins); setHistory(mergedData.history);
-                      localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(mergedData));
-                      
-                      syncToCloud(mergedData, data.token);
-                  }
-              }
+              applyGachaState(data.data);
+              await loadServerState(data.token, true);
               alert(authMode === 'LOGIN' ? "登录成功！" : "注册成功！");
               setMode("MACHINE");
            
@@ -298,102 +261,97 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
   };
 
   const handleLogout = () => {
-      if(window.confirm("确定要退出登录吗？\n本地数据将保留，但后续操作不会同步到云端。")) {
+      if(window.confirm("确定要退出登录吗？\n本地只会保留一份显示缓存，后续抽卡需要重新登录。")) {
           localStorage.removeItem(CONFIG.AUTH_KEY);
           setUser(null);
           alert("已安全登出。");
       }
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
       let confirmMsg = "⚠️ 警告：确定要重置所有数据吗？\n\n- 表情包、硬币、记录将全部清空\n- 你将回到初始状态 (刷初始)";
-      if (user) confirmMsg += "\n\n因为你已登录，云端数据也会被同步清空！此操作不可撤销！";
+      if (user) confirmMsg += "\n\n因为你已登录，服务器存档也会被清空！此操作不可撤销！";
       else confirmMsg += "\n\n(仅清除本地浏览器缓存)";
 
       if (window.confirm(confirmMsg)) {
           if (window.confirm("🔴 最后一次确认：真的要删档重来吗？")) {
-              const today = new Date().toDateString();
-              const resetData: CloudData = { collection: [], coins: CONFIG.INITIAL_COINS, history: [], lastLogin: today };
-              
-              localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(resetData));
-              setCollection([]); setCoins(CONFIG.INITIAL_COINS); setHistory([]);
-              
-              if (user) syncToCloud(resetData, user.token);
-              
-              alert("数据已重置！祝你下一次运气爆棚！✨");
-              setMode("MACHINE");
+              try {
+                  if (user) {
+                      const res = await fetch(`${CONFIG.API_BASE}/gacha/reset`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ token: user.token })
+                      });
+                      const data = await res.json();
+                      if (!data.success) throw new Error(data.error || "重置失败");
+                      applyGachaState(data.data);
+                  } else {
+                      applyGachaState({ collection: [], coins: CONFIG.INITIAL_COINS, history: [], lastLogin: "" });
+                  }
+                  alert("数据已重置！");
+                  setMode("MACHINE");
+              } catch (error) {
+                  alert(error instanceof Error ? error.message : "重置失败");
+              }
           }
       }
   };
 
-  useEffect(() => {
-      if (!isOpen) return;
-      const handleCheatInput = (e: KeyboardEvent) => {
-          const target = e.target as HTMLElement;
-          if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
-          
-          setCheatBuffer(prev => {
-              const newBuf = (prev + e.key).slice(-20); 
-              if (newBuf.includes("morphling0717")) {
-                  setIsInfiniteMode(true);
-                  alert("⚡️ DEVELOPER MODE ACTIVATED ⚡️");
-                  return ""; 
-              }
-              return newBuf;
-          });
-      };
-      window.addEventListener("keydown", handleCheatInput);
-      return () => window.removeEventListener("keydown", handleCheatInput);
-  }, [isOpen]);
-
-  const handleSpin = () => {
+  const handleSpin = async () => {
     if (isSpinning) return;
-    if (!isInfiniteMode && coins < CONFIG.COIN_COST) { alert(`硬币不足！每日登录可领 ${CONFIG.DAILY_REWARD} 枚硬币！`); return; }
-    
-    const allIds = Array.from({ length: CONFIG.TOTAL_ITEMS }, (_, i) => i + 1);
+    if (!user?.token) { setMode("ACCOUNT"); alert("请先登录账号，抽卡库存现在由服务器保存。"); return; }
+    if (coins < CONFIG.COIN_COST) { alert(`硬币不足！每日登录可领 ${CONFIG.DAILY_REWARD} 枚硬币！`); return; }
+
     setIsSpinning(true);
     setReward(null);
-    const nextCoins = isInfiniteMode ? coins : coins - CONFIG.COIN_COST;
-    setCoins(nextCoins);
-
-    const randomId = allIds[Math.floor(Math.random() * allIds.length)];
-    const img = new Image();
-    img.src = `${CONFIG.PATH_PREFIX}${randomId}.webp`;
-    
     const minAnimationTime = 1500; 
     const startTime = Date.now();
 
-    const showResult = () => {
+    try {
+        const res = await fetch(`${CONFIG.API_BASE}/gacha/spin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: user.token })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || "抽卡失败");
+
+        const itemId = Number(data.itemId);
+        const img = new Image();
+        img.src = `${CONFIG.PATH_PREFIX}${itemId}.webp`;
+
+        const showResult = () => {
+            setReward(itemId);
+            applyGachaState(data.state);
+            setIsSpinning(false);
+        };
+
+        const onReady = () => {
+            const elapsed = Date.now() - startTime;
+            const remaining = Math.max(0, minAnimationTime - elapsed);
+            setTimeout(showResult, remaining);
+        };
+
+        if (img.complete) onReady(); else { img.onload = onReady; img.onerror = onReady; }
+    } catch (error) {
         setIsSpinning(false);
-        setReward(randomId);
-        saveAll([...collection, randomId], nextCoins, history);
-    };
-
-    const onReady = () => {
-        const elapsed = Date.now() - startTime;
-        const remaining = Math.max(0, minAnimationTime - elapsed);
-        setTimeout(showResult, remaining);
-    };
-
-    if (img.complete) onReady(); else { img.onload = onReady; img.onerror = onReady; }
+        alert(error instanceof Error ? error.message : "抽卡失败");
+    }
   };
 
   const handleGenerateCode = async (itemId: number) => {
-      const index = collection.indexOf(itemId);
-      if (index === -1) { alert("错误：你好像并没有这张表情包？"); return; }
+      if (!user?.token) { setMode("ACCOUNT"); alert("请先登录账号，打包库存现在由服务器校验。"); return; }
+      if (getCount(itemId) <= 0) { alert("错误：你好像并没有这张表情包？"); return; }
       if (!window.confirm("确定要将这个表情包打包送人吗？送出后你将失去一张库存！")) return;
       setGiftLoading(true);
       try {
-          const res = await fetch(`${CONFIG.API_BASE}/generate`, {
+          const res = await fetch(`${CONFIG.API_BASE}/gacha/package`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ itemId })
+              body: JSON.stringify({ token: user.token, itemId })
           });
           const data = await res.json();
           if (data.success) {
-              const newColl = [...collection];
-              newColl.splice(index, 1); 
-              const newHistoryItem: HistoryItem = { code: data.code, itemId: itemId, createdAt: new Date().toLocaleString(), status: 'active' };
-              saveAll(newColl, coins, [newHistoryItem, ...history]);
+              applyGachaState(data.state);
               setPreviewImage(null);
               setMode("HISTORY");
            
@@ -404,16 +362,17 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
 
   const handleRedeem = async () => {
       if (!redeemCode) return;
+      if (!user?.token) { setMode("ACCOUNT"); alert("请先登录账号，兑换结果会直接进入服务器库存。"); return; }
       setGiftLoading(true);
       try {
-          const res = await fetch(`${CONFIG.API_BASE}/redeem`, {
+          const res = await fetch(`${CONFIG.API_BASE}/gacha/redeem`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ code: redeemCode.trim() })
+              body: JSON.stringify({ token: user.token, code: redeemCode.trim() })
           });
           const data = await res.json();
           if (data.success) {
               alert("兑换成功！新表情包已入库！");
-              saveAll([...collection, data.itemId], coins, history);
+              applyGachaState(data.state);
               setRedeemCode("");
            
           } else { alert("兑换失败: " + (data.error || "无效的兑换码")); }
@@ -429,7 +388,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
   };
 
   // 修复：二次防御，防止渲染时 collection 为非法对象导致崩溃
-const safeCollection = Array.isArray(collection) ? collection : [];
+  const safeCollection = Array.isArray(collection) ? collection : [];
   const safeHistory = Array.isArray(history) ? history : []; 
   const uniqueCollection = new Set(safeCollection);
   const progress = Math.round((uniqueCollection.size / CONFIG.TOTAL_ITEMS) * 100);
@@ -471,7 +430,7 @@ const safeCollection = Array.isArray(collection) ? collection : [];
             >
               <div className="w-full md:w-64 bg-black/40 border-b md:border-b-0 md:border-r border-white/10 p-4 gap-4 md:p-6 md:gap-6 flex flex-col shrink-0">
                 <div className="flex justify-between items-start md:block">
-                  <div><h2 className="text-xl md:text-2xl font-cyber font-bold text-white mb-1">GACHA<span className="text-(--neon-blue)">_SYS</span></h2><div className="text-[10px] md:text-xs font-mono text-gray-500">V4.3 SYNC FIX</div></div>
+                  <div><h2 className="text-xl md:text-2xl font-cyber font-bold text-white mb-1">GACHA<span className="text-(--neon-blue)">_SYS</span></h2><div className="text-[10px] md:text-xs font-mono text-gray-500">V5 SERVER STATE</div></div>
                 </div>
                 
                 <div className="bg-gray-900 rounded-lg p-3 md:p-4 border border-white/5 space-y-2">
@@ -487,7 +446,7 @@ const safeCollection = Array.isArray(collection) ? collection : [];
                   )}
                   <div className="w-full h-px bg-white/10 my-2"></div>
                   <div className="flex justify-between text-xs font-mono text-gray-400"><span>COLLECTION</span><span className="text-(--neon-blue)">{progress}%</span></div>
-                  <div className="bg-black/40 p-2 rounded border border-yellow-500/20 flex items-center justify-between"><span className="text-xs text-gray-400 font-mono">BALANCE</span><span className="text-yellow-400 font-bold font-mono text-lg flex items-center gap-2"><GachaIcons.Coin /> {isInfiniteMode ? "∞" : coins}</span></div>
+                  <div className="bg-black/40 p-2 rounded border border-yellow-500/20 flex items-center justify-between"><span className="text-xs text-gray-400 font-mono">BALANCE</span><span className="text-yellow-400 font-bold font-mono text-lg flex items-center gap-2"><GachaIcons.Coin /> {coins}</span></div>
                 </div>
 
                 <div className="flex flex-row md:flex-col gap-2 mt-auto">
@@ -527,9 +486,9 @@ const safeCollection = Array.isArray(collection) ? collection : [];
                         </div>
                         <button onClick={handleSpin} className={`relative px-10 py-3 md:px-12 md:py-4 text-lg md:text-xl font-bold font-tech tracking-widest clip-path-polygon flex flex-col items-center shrink-0 transition-all duration-200 ${isSpinning ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-(--neon-blue) text-black hover:bg-white hover:shadow-[0_0_30px_var(--neon-blue)] active:scale-95'}`} disabled={isSpinning} style={{ clipPath: "polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%)" }}>
                           {isSpinning ? "PROCESSING..." : "START SPIN"}
-                          {!isSpinning && (<div className="text-[10px] font-mono mt-1 flex items-center gap-1 opacity-80">{isInfiniteMode ? "FREE (DEV)" : `COST: ${CONFIG.COIN_COST}`} <GachaIcons.Coin /></div>)}
+                          {!isSpinning && (<div className="text-[10px] font-mono mt-1 flex items-center gap-1 opacity-80">COST: {CONFIG.COIN_COST} <GachaIcons.Coin /></div>)}
                         </button>
-                        <div className="mt-4 text-xs text-gray-500 font-mono pb-4 md:pb-0">{isInfiniteMode ? "⚡️ DEVELOPER MODE ⚡️" : `持有: ${coins} COINS`}</div>
+                        <div className="mt-4 text-xs text-gray-500 font-mono pb-4 md:pb-0">{user ? `持有: ${coins} COINS` : "登录后可抽卡"}</div>
                       </div>
                     )}
 
@@ -592,7 +551,7 @@ const safeCollection = Array.isArray(collection) ? collection : [];
                           {user ? (
                               <div className="text-center space-y-4">
                                   <div className="text-2xl font-bold text-white">已登录: <span className="text-(--neon-blue)">{user.username}</span></div>
-                                  <div className="text-gray-400 text-sm">云端同步已开启，您的进度会自动保存。</div>
+                                  <div className="text-gray-400 text-sm">服务器存档已开启，抽卡、打包、兑换都会实时记账。</div>
                                   <button onClick={handleLogout} className="px-6 py-2 border border-red-500/50 text-red-400 rounded hover:bg-red-500/20 transition-colors">退出登录</button>
                                   
                                   <div className="mt-8 pt-8 border-t border-white/10 w-full max-w-sm">
@@ -609,7 +568,7 @@ const safeCollection = Array.isArray(collection) ? collection : [];
                                       <input type="password" placeholder="密码" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} className="w-full bg-black/50 border border-white/20 rounded p-3 text-white focus:border-(--neon-blue) outline-none" />
                                   </div>
                                   <button onClick={handleAuth} disabled={authLoading} className="w-full bg-(--neon-blue) text-black font-bold py-3 rounded hover:bg-white transition-colors disabled:opacity-50 mt-4">{authLoading ? "处理中..." : (authMode === 'LOGIN' ? '登 录' : '注 册')}</button>
-                                  <div className="text-center text-xs text-gray-500 mt-4 cursor-pointer hover:text-white" onClick={() => setAuthMode(authMode === 'LOGIN' ? 'REGISTER' : 'LOGIN')}>{authMode === 'LOGIN' ? '没有账号？点击注册 (并同步当前进度)' : '已有账号？点击登录'}</div>
+                                  <div className="text-center text-xs text-gray-500 mt-4 cursor-pointer hover:text-white" onClick={() => setAuthMode(authMode === 'LOGIN' ? 'REGISTER' : 'LOGIN')}>{authMode === 'LOGIN' ? '没有账号？点击注册' : '已有账号？点击登录'}</div>
                                   
                                   <div className="mt-6 pt-4 border-t border-white/10 text-center">
                                       <button onClick={handleReset} className="text-xs text-red-500/50 hover:text-red-500">重置本地数据 (刷初始)</button>
