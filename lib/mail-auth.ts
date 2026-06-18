@@ -76,6 +76,10 @@ export async function verifyMailAdmin(req: Request): Promise<NextResponse | null
     }
   }
 
+  if (candidates.length === 0) {
+    return NextResponse.json({ error: '密码错误或未授权' }, { status: 401 });
+  }
+
   // 用 timing-safe 比较
   for (const c of candidates) {
     if (safeEqual(c, expected)) {
