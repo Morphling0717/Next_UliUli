@@ -38,6 +38,14 @@ type GiftCodeRow = {
   claimed_at: string | null;
 };
 
+type LocalImportRow = {
+  fingerprint: string;
+  imported_items: number;
+  imported_coins: number;
+  imported_codes: number;
+  created_at: string;
+};
+
 export type GachaHistoryItem = {
   code: string;
   itemId: number;
@@ -54,6 +62,12 @@ export type GachaState = {
   totalItems: number;
   coinCost: number;
   dailyReward: number;
+  localImport: {
+    importedAt: string | null;
+    importedItems: number;
+    importedCoins: number;
+    importedCodes: number;
+  };
 };
 
 export class GachaError extends Error {
@@ -108,8 +122,8 @@ const normalizeCode = (code: unknown): string | null => {
   return normalized;
 };
 
-function parseLegacyGachaData(raw: string | null) {
-  const parsed = parseJsonObject(raw);
+function parseLegacyGachaData(raw: unknown) {
+  const parsed = typeof raw === 'string' ? parseJsonObject(raw) : isRecord(raw) ? raw : {};
   const collection = Array.isArray(parsed.collection) ? parsed.collection : [];
   const inventory = new Map<number, number>();
 
@@ -144,6 +158,26 @@ function parseLegacyGachaData(raw: string | null) {
     hasData: inventory.size > 0 || history.length > 0 || Number.isFinite(Number(parsed.coins)),
   };
 }
+
+function getLegacyFingerprint(legacy: ReturnType<typeof parseLegacyGachaData>) {
+  const stable = {
+    coins: legacy.coins,
+    lastDailyClaim: legacy.lastDailyClaim,
+    inventory: Array.from(legacy.inventory.entries()).sort((a, b) => a[0] - b[0]),
+    history: legacy.history
+      .map((item) => ({
+        code: item.code,
+        itemId: item.itemId,
+        status: item.status,
+        createdAt: item.createdAt,
+      }))
+      .sort((a, b) => a.code.localeCompare(b.code)),
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(stable)).digest('hex');
+}
+
+const sumInventory = (inventory: Map<number, number>) =>
+  Array.from(inventory.values()).reduce((sum, quantity) => sum + Math.max(0, quantity), 0);
 
 function expandInventory(rows: InventoryRow[]): number[] {
   const collection: number[] = [];
@@ -349,12 +383,133 @@ export async function migrateLegacyGachaForUser(userId: number, rawLegacyData: s
   });
 }
 
+export async function importLocalGachaForUser(userId: number, localData: unknown) {
+  const legacy = parseLegacyGachaData(localData);
+  const localItemCount = sumInventory(legacy.inventory);
+  if (!legacy.hasData || (localItemCount === 0 && legacy.history.length === 0 && legacy.coins <= 0)) {
+    throw new GachaError('没有可导入的本地旧存档', 400);
+  }
+
+  const result = await transaction(async () => {
+    const existingImport = await get<LocalImportRow>(
+      `SELECT fingerprint, imported_items, imported_coins, imported_codes, created_at
+         FROM gacha_local_imports
+        WHERE user_id = ?`,
+      [userId],
+    );
+    if (existingImport) {
+      throw new GachaError('这个账号已经导入过本地旧存档，不能重复导入', 409);
+    }
+
+    const profile = await ensureProfileInCurrentTx(userId);
+    const serverInventoryRows = await all<InventoryRow>(
+      `SELECT item_id, quantity
+         FROM gacha_inventory
+        WHERE user_id = ?`,
+      [userId],
+    );
+    const serverInventory = new Map(
+      serverInventoryRows.map((row) => [row.item_id, Math.max(0, Number(row.quantity) || 0)]),
+    );
+    const now = new Date().toISOString();
+    const fingerprint = getLegacyFingerprint(legacy);
+    let importedItems = 0;
+
+    for (const [itemId, localQuantity] of legacy.inventory.entries()) {
+      const serverQuantity = serverInventory.get(itemId) ?? 0;
+      if (localQuantity <= serverQuantity) continue;
+      importedItems += localQuantity - serverQuantity;
+      await run(
+        `INSERT INTO gacha_inventory (user_id, item_id, quantity, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, item_id) DO UPDATE SET
+           quantity = excluded.quantity,
+           updated_at = excluded.updated_at`,
+        [userId, itemId, localQuantity, now],
+      );
+    }
+
+    const currentCoins = Math.max(0, Number(profile.coins) || 0);
+    const nextCoins = Math.max(currentCoins, legacy.coins);
+    const importedCoins = nextCoins - currentCoins;
+    const dailyDates = [profile.last_daily_claim, legacy.lastDailyClaim]
+      .filter((value): value is string => Boolean(value))
+      .sort();
+    const nextDailyClaim = dailyDates.at(-1) ?? null;
+
+    if (importedCoins > 0 || nextDailyClaim !== profile.last_daily_claim) {
+      await run(
+        `UPDATE gacha_profiles
+            SET coins = ?,
+                last_daily_claim = ?,
+                updated_at = ?
+          WHERE user_id = ?`,
+        [nextCoins, nextDailyClaim, now, userId],
+      );
+    }
+
+    let importedCodes = 0;
+    for (const item of legacy.history) {
+      await run(
+        `INSERT OR IGNORE INTO gift_codes
+           (code, item_id, status, created_at, owner_user_id, source, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'local_import', ?)`,
+        [item.code, item.itemId, item.status === 'used' ? 'used' : 'active', item.createdAt, userId, now],
+      );
+      const update = await run(
+        `UPDATE gift_codes
+            SET owner_user_id = ?,
+                updated_at = ?
+          WHERE code = ?
+            AND (owner_user_id IS NULL OR owner_user_id = ?)`,
+        [userId, now, item.code, userId],
+      );
+      if (update.changes > 0) importedCodes += 1;
+    }
+
+    await run(
+      `INSERT INTO gacha_local_imports
+         (user_id, fingerprint, imported_items, imported_coins, imported_codes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [userId, fingerprint, importedItems, importedCoins, importedCodes, now],
+    );
+
+    await insertTransaction({
+      userId,
+      type: 'local_import',
+      quantity: importedItems,
+      coinsDelta: importedCoins,
+      metadata: {
+        fingerprint,
+        mode: 'max_merge',
+        localItems: localItemCount,
+        localCodes: legacy.history.length,
+        localCoins: legacy.coins,
+        importedCodes,
+      },
+      createdAt: now,
+    });
+
+    return {
+      importedAt: now,
+      importedItems,
+      importedCoins,
+      importedCodes,
+      localItems: localItemCount,
+      localCodes: legacy.history.length,
+      localCoins: legacy.coins,
+    };
+  });
+
+  return { ...result, state: await getGachaState(userId) };
+}
+
 export async function getGachaState(userId: number): Promise<GachaState> {
   await transaction(async () => {
     await ensureProfileInCurrentTx(userId);
   });
 
-  const [profile, inventory, history] = await Promise.all([
+  const [profile, inventory, history, localImport] = await Promise.all([
     get<ProfileRow>(
       `SELECT user_id, coins, pity_count, last_daily_claim, migrated_from_legacy_at
          FROM gacha_profiles
@@ -376,6 +531,12 @@ export async function getGachaState(userId: number): Promise<GachaState> {
         LIMIT 200`,
       [userId],
     ),
+    get<LocalImportRow>(
+      `SELECT fingerprint, imported_items, imported_coins, imported_codes, created_at
+         FROM gacha_local_imports
+        WHERE user_id = ?`,
+      [userId],
+    ),
   ]);
 
   return {
@@ -387,6 +548,12 @@ export async function getGachaState(userId: number): Promise<GachaState> {
     totalItems: GACHA_TOTAL_ITEMS,
     coinCost: GACHA_COIN_COST,
     dailyReward: GACHA_DAILY_REWARD,
+    localImport: {
+      importedAt: localImport?.created_at ?? null,
+      importedItems: Number(localImport?.imported_items ?? 0),
+      importedCoins: Number(localImport?.imported_coins ?? 0),
+      importedCodes: Number(localImport?.imported_codes ?? 0),
+    },
   };
 }
 

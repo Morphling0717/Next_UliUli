@@ -9,6 +9,7 @@ const CONFIG = {
   TOTAL_ITEMS: 136,
   PATH_PREFIX: "/memes/", 
   STORAGE_KEY: "blue_morpho_gacha_collection_v2", 
+  LEGACY_BACKUP_KEY: "blue_morpho_gacha_legacy_backup_v1",
   AUTH_KEY: "blue_morpho_auth_token",
   COIN_COST: 1,      
   DAILY_REWARD: 3,   
@@ -35,15 +36,24 @@ export interface CloudData {
   history: HistoryItem[];
   lastLogin: string;
   lastDailyClaim?: string | null;
+  serverManaged?: boolean;
 }
 
 type ApiGachaState = Partial<CloudData> & {
   lastDailyClaim?: string | null;
+  localImport?: {
+    importedAt?: string | null;
+    importedItems?: number;
+    importedCoins?: number;
+    importedCodes?: number;
+  };
 };
 
 const normalizeGachaState = (raw: ApiGachaState | null | undefined): CloudData => {
   const collection = Array.isArray(raw?.collection)
-    ? raw.collection.filter((id): id is number => Number.isInteger(id) && id >= 1 && id <= CONFIG.TOTAL_ITEMS)
+    ? raw.collection
+        .map((id) => Number(id))
+        .filter((id): id is number => Number.isInteger(id) && id >= 1 && id <= CONFIG.TOTAL_ITEMS)
     : [];
   const history = Array.isArray(raw?.history) ? raw.history : [];
   const coins = Number.isFinite(Number(raw?.coins)) ? Math.max(0, Math.floor(Number(raw?.coins))) : CONFIG.INITIAL_COINS;
@@ -59,6 +69,11 @@ const normalizeGachaState = (raw: ApiGachaState | null | undefined): CloudData =
     lastLogin: lastDailyClaim,
     lastDailyClaim,
   };
+};
+
+const hasImportableLocalData = (raw: ApiGachaState | null | undefined) => {
+  const data = normalizeGachaState(raw);
+  return data.collection.length > 0 || data.history.length > 0 || data.coins > CONFIG.INITIAL_COINS;
 };
 
 const GachaIcons = {
@@ -110,6 +125,9 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [localImportAvailable, setLocalImportAvailable] = useState(false);
+  const [localImportedAt, setLocalImportedAt] = useState<string | null>(null);
 
   const [redeemCode, setRedeemCode] = useState("");
   const [giftLoading, setGiftLoading] = useState(false);
@@ -135,15 +153,51 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
       return () => clearTimeout(t);
   }, []);
 
-  const applyGachaState = (raw: ApiGachaState | null | undefined) => {
+  const readLocalProgress = (key = CONFIG.STORAGE_KEY): ApiGachaState | null => {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? parsed as ApiGachaState
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const refreshLegacyImportAvailability = (serverState?: ApiGachaState | null) => {
+    const backup = readLocalProgress(CONFIG.LEGACY_BACKUP_KEY);
+    const importedAt = serverState?.localImport?.importedAt || null;
+    setLocalImportedAt(importedAt);
+    setLocalImportAvailable(Boolean(backup && hasImportableLocalData(backup) && !importedAt));
+  };
+
+  const rememberLegacyLocalProgress = () => {
+    const current = readLocalProgress(CONFIG.STORAGE_KEY);
+    if (!current || current.serverManaged || !hasImportableLocalData(current)) {
+      refreshLegacyImportAvailability();
+      return null;
+    }
+    localStorage.setItem(CONFIG.LEGACY_BACKUP_KEY, JSON.stringify({
+      ...normalizeGachaState(current),
+      backedUpAt: new Date().toISOString(),
+    }));
+    refreshLegacyImportAvailability();
+    return current;
+  };
+
+  const applyGachaState = (raw: ApiGachaState | null | undefined, serverManaged = true) => {
     const data = normalizeGachaState(raw);
-    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify({ ...data, serverManaged }));
     setCollection(data.collection);
     setHistory(data.history);
     setCoins(data.coins);
+    refreshLegacyImportAvailability(raw);
   };
 
   const loadServerState = async (token: string, claimDaily = false) => {
+      rememberLegacyLocalProgress();
       const res = await fetch(`${CONFIG.API_BASE}/gacha/me`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -152,7 +206,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
       const data = await res.json();
       if (!data.success) throw new Error(data.error || "读取服务器存档失败");
       setUser({ username: data.username, token });
-      applyGachaState(data.data);
+      applyGachaState(data.data, true);
 
       if (!claimDaily) return data.data;
 
@@ -163,7 +217,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
       });
       const dailyData = await dailyRes.json();
       if (dailyData.success) {
-          applyGachaState(dailyData.state);
+          applyGachaState(dailyData.state, true);
           if (dailyData.claimed) setTimeout(() => setShowDailyBonus(true), 1000);
           return dailyData.state;
       }
@@ -194,7 +248,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
                   }
                   return h;
               });
-              if (hasChanges) applyGachaState({ collection, coins, history: newHistory, lastLogin: new Date().toISOString().slice(0, 10) });
+              if (hasChanges) applyGachaState({ collection, coins, history: newHistory, lastLogin: new Date().toISOString().slice(0, 10) }, true);
           }
       } catch (e) { console.error("Status check failed", e); }
       finally { setIsCheckingStatus(false); }
@@ -218,9 +272,9 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
 
           const localRaw = localStorage.getItem(CONFIG.STORAGE_KEY);
           if (localRaw) {
-              try { applyGachaState(JSON.parse(localRaw)); } catch { applyGachaState(null); }
+              try { applyGachaState(JSON.parse(localRaw), false); } catch { applyGachaState(null, false); }
           } else {
-              applyGachaState(null);
+              applyGachaState(null, false);
           }
         } catch (e) { console.error(e); }
     };
@@ -236,10 +290,57 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
+  const getImportSummary = (raw: ApiGachaState) => {
+    const data = normalizeGachaState(raw);
+    return {
+      items: data.collection.length,
+      unique: new Set(data.collection).size,
+      coins: data.coins,
+      codes: data.history.length,
+    };
+  };
+
+  const handleImportLocalProgress = async (tokenOverride?: string, showSuccessAlert = true) => {
+      const token = tokenOverride || user?.token;
+      if (!token) { setMode("ACCOUNT"); alert("请先登录账号再导入本地旧存档。"); return false; }
+      const backup = readLocalProgress(CONFIG.LEGACY_BACKUP_KEY) || rememberLegacyLocalProgress();
+      if (!backup || !hasImportableLocalData(backup)) {
+          setLocalImportAvailable(false);
+          alert("没有检测到可导入的本地旧存档。");
+          return false;
+      }
+
+      setImportLoading(true);
+      try {
+          const res = await fetch(`${CONFIG.API_BASE}/gacha/import-local`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token, data: backup })
+          });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || "导入失败");
+
+          localStorage.removeItem(CONFIG.LEGACY_BACKUP_KEY);
+          applyGachaState(data.state, true);
+          setLocalImportAvailable(false);
+          setLocalImportedAt(data.importedAt || data.state?.localImport?.importedAt || null);
+          if (showSuccessAlert) {
+              alert(`本地旧存档已导入云端。\n新增库存: ${data.importedItems}\n金币补足: ${data.importedCoins}\n记录导入: ${data.importedCodes}`);
+          }
+          return true;
+      } catch (error) {
+          alert(error instanceof Error ? error.message : "导入失败");
+          return false;
+      } finally {
+          setImportLoading(false);
+      }
+  };
+
   const handleAuth = async () => {
       if (!usernameInput || !passwordInput) return alert("请输入用户名和密码");
       setAuthLoading(true);
       try {
+          rememberLegacyLocalProgress();
           const endpoint = authMode === 'LOGIN' ? '/auth/login' : '/auth/register';
           const body = { username: usernameInput, password: passwordInput };
 
@@ -251,8 +352,18 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
           if (data.success) {
               localStorage.setItem(CONFIG.AUTH_KEY, data.token);
               setUser({ username: data.username, token: data.token });
-              applyGachaState(data.data);
-              await loadServerState(data.token, true);
+              applyGachaState(data.data, true);
+              const serverState = await loadServerState(data.token, true);
+              const backup = readLocalProgress(CONFIG.LEGACY_BACKUP_KEY);
+              if (backup && hasImportableLocalData(backup) && !serverState?.localImport?.importedAt) {
+                  const summary = getImportSummary(backup);
+                  const shouldImport = window.confirm(
+                      `检测到本地旧存档：${summary.items} 张库存 / ${summary.unique} 种 / ${summary.coins} 金币 / ${summary.codes} 条打包记录。\n\n是否一次性导入云端？导入后服务器将接管这份进度，且此账号不能重复导入。`
+                  );
+                  if (shouldImport) {
+                      await handleImportLocalProgress(data.token, true);
+                  }
+              }
               alert(authMode === 'LOGIN' ? "登录成功！" : "注册成功！");
               setMode("MACHINE");
            
@@ -284,9 +395,9 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
                       });
                       const data = await res.json();
                       if (!data.success) throw new Error(data.error || "重置失败");
-                      applyGachaState(data.data);
+                      applyGachaState(data.data, true);
                   } else {
-                      applyGachaState({ collection: [], coins: CONFIG.INITIAL_COINS, history: [], lastLogin: "" });
+                      applyGachaState({ collection: [], coins: CONFIG.INITIAL_COINS, history: [], lastLogin: "" }, false);
                   }
                   alert("数据已重置！");
                   setMode("MACHINE");
@@ -322,7 +433,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
 
         const showResult = () => {
             setReward(itemId);
-            applyGachaState(data.state);
+            applyGachaState(data.state, true);
             setIsSpinning(false);
         };
 
@@ -351,7 +462,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
           });
           const data = await res.json();
           if (data.success) {
-              applyGachaState(data.state);
+              applyGachaState(data.state, true);
               setPreviewImage(null);
               setMode("HISTORY");
            
@@ -372,7 +483,7 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
           const data = await res.json();
           if (data.success) {
               alert("兑换成功！新表情包已入库！");
-              applyGachaState(data.state);
+              applyGachaState(data.state, true);
               setRedeemCode("");
            
           } else { alert("兑换失败: " + (data.error || "无效的兑换码")); }
@@ -552,6 +663,14 @@ export const GachaSystem: React.FC<GachaSystemProps> = ({
                               <div className="text-center space-y-4">
                                   <div className="text-2xl font-bold text-white">已登录: <span className="text-(--neon-blue)">{user.username}</span></div>
                                   <div className="text-gray-400 text-sm">服务器存档已开启，抽卡、打包、兑换都会实时记账。</div>
+                                  {localImportAvailable && (
+                                      <button onClick={() => handleImportLocalProgress()} disabled={importLoading} className="px-5 py-2 bg-yellow-400 text-black rounded font-bold hover:bg-white transition-colors disabled:opacity-50">
+                                          {importLoading ? "导入中..." : "导入本地旧存档"}
+                                      </button>
+                                  )}
+                                  {!localImportAvailable && localImportedAt && (
+                                      <div className="text-xs text-yellow-300/80 font-mono">LOCAL_IMPORT: {localImportedAt}</div>
+                                  )}
                                   <button onClick={handleLogout} className="px-6 py-2 border border-red-500/50 text-red-400 rounded hover:bg-red-500/20 transition-colors">退出登录</button>
                                   
                                   <div className="mt-8 pt-8 border-t border-white/10 w-full max-w-sm">

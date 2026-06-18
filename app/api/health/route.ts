@@ -84,6 +84,7 @@ export async function GET() {
         gachaProfileCount,
         gachaInventoryCount,
         unmigratedGachaUsers,
+        localImportCount,
       ] =
         await Promise.all([
           get<SiteConfigRow>(
@@ -109,6 +110,7 @@ export async function GET() {
                LEFT JOIN gacha_profiles gp ON gp.user_id = u.id
               WHERE gp.user_id IS NULL OR gp.migrated_from_legacy_at IS NULL`,
           ),
+          get<CountRow>('SELECT COUNT(*) AS count FROM gacha_local_imports'),
         ]);
 
       if (!siteConfig) criticalFailures.push('site_config');
@@ -144,6 +146,7 @@ export async function GET() {
         users: Number(userCount?.count ?? 0),
         profiles: Number(gachaProfileCount?.count ?? 0),
         inventoryItems: Number(gachaInventoryCount?.count ?? 0),
+        localImports: Number(localImportCount?.count ?? 0),
         unmigratedUsers: unmigrated,
       };
       const backup = backupHealth(parseBackupManifest(lastBackup));

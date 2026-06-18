@@ -70,6 +70,7 @@ export const MIGRATION_FILES = [
   '202606160002_sessions_rate_limits.sql',
   '202606160003_bilibili_proxy_config.sql',
   '202606180001_gacha_server_state.sql',
+  '202606180002_gacha_local_imports.sql',
 ] as const;
 
 export const EXPECTED_MIGRATION_IDS = MIGRATION_FILES.map((file) => file.replace(/\.sql$/, ''));
