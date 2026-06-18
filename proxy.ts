@@ -11,7 +11,7 @@ const ALLOWED_INDEXABLE_PATHS = new Set([
   '/app.jpg',
 ]);
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const res = NextResponse.next();
   const { pathname } = req.nextUrl;
   const isNextStatic = pathname.startsWith('/_next/');

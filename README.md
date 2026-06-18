@@ -300,7 +300,7 @@ Next_UliUli/
 ├─ lib/mail-topics.ts                # 主题 CRUD + 状态派生 + 时间窗校验（Mail Topics 核心服务层）
 ├─ vendor/windchime-embed-0.3.1.tgz  # 本地 tarball，不发布到 npm
 ├─ bin/upgrade.sh                    # VPS 升级脚本（备份 DB + 生成 salt）
-└─ middleware.ts                     # /mail 路由密码保护
+└─ proxy.ts                          # SEO noindex 头控制
 ```
 
 ## 🏗 部署

@@ -81,7 +81,7 @@
 │                      Next.js App Router                       │
 ├─────────────────────────────────────────────────────────────┤
 │  - 路由系统 (文件系统路由)                                     │
-│  - 中间件 (middleware.ts - SEO 控制)                          │
+│  - Proxy (proxy.ts - SEO 控制)                                │
 │  - API Routes (app/api/*)                                    │
 └─────────────────────────────────────────────────────────────┘
                               ↓
@@ -229,7 +229,7 @@ Next_UliUli/
 - **人机校验**: Cloudflare Turnstile (可选)
 - **敏感词过滤**: 命中敏感词直接拒绝 (lib/db.ts: matchBlockedTerm)
 - **黑名单机制**: 支持按 senderFingerprint 和 IP 拉黑
-- **密码保护**: 中间件 + 请求头双重验证 (middleware.ts, lib/mail-auth.ts)
+- **密码保护**: HttpOnly Cookie session + 请求头兼容验证 (lib/admin-session.ts, lib/mail-auth.ts)
 
 #### 主题收件箱 (Mail Topics)
 
@@ -702,10 +702,10 @@ import Image from 'next/image';
 
 #### 1. HTTPS 强制
 
-**建议**: 在 middleware.ts 中强制 HTTPS
+**建议**: 在 proxy.ts 中强制 HTTPS
 
 ```typescript
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const url = req.nextUrl.clone();
   if (url.protocol === 'http:') {
     url.protocol = 'https:';
