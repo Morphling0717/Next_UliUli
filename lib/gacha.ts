@@ -165,15 +165,27 @@ function mapHistory(row: GiftCodeRow): GachaHistoryItem {
   };
 }
 
+let gachaTransactionTail: Promise<void> = Promise.resolve();
+
 async function transaction<T>(work: () => Promise<T>): Promise<T> {
-  await run('BEGIN IMMEDIATE TRANSACTION');
+  let releaseTurn!: () => void;
+  const previousTurn = gachaTransactionTail;
+  const currentTurn = new Promise<void>((resolve) => {
+    releaseTurn = resolve;
+  });
+  gachaTransactionTail = previousTurn.then(() => currentTurn, () => currentTurn);
+  await previousTurn.catch(() => {});
+
   try {
+    await run('BEGIN IMMEDIATE TRANSACTION');
     const result = await work();
     await run('COMMIT');
     return result;
   } catch (error) {
     await run('ROLLBACK').catch(() => {});
     throw error;
+  } finally {
+    releaseTurn();
   }
 }
 
