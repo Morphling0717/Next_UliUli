@@ -27,6 +27,8 @@ export type StatKey = 'atk' | 'def' | 'spd' | 'agl' | 'mag' | 'res' | 'wis';
 export interface StatusEntry {
   type: string;
   duration: number;
+  /** Engine turn when a globally-timed status was first observed. */
+  appliedTurn?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +136,8 @@ export interface Fighter {
 
   // ── Tokusatsu (Bujin) counter state ───────────────────────────────────
   counterUsed?: boolean;
+  hasUsedGreatMonsterVictory?: boolean;
+  hasUsedRainbowFever?: boolean;
   monsterTurns?: number;
   savedStats?: BaseStats;
 
@@ -223,11 +227,13 @@ export interface GachaEntry {
   mult?: number;
   hits?: number;
   ignoreDef?: boolean;
+  minDamagePct?: number;
   lifesteal?: number;
   status?: string;
   statBuff?: Partial<Record<StatKey | 'crit', number>>;
   cleanStatus?: boolean;
   selfDmgPct?: number;
+  selfDmgCanKill?: boolean;
   isSummon?: boolean;
   summonName?: string;
   summonJob?: string;
@@ -258,6 +264,7 @@ export interface SkillDefinition {
   mult?: number;
   hits?: number;
   ignoreDef?: boolean;
+  minDamagePct?: number;
   lifesteal?: number;
   status?: string;
   statBuff?: Partial<Record<StatKey | 'crit', number>>;
@@ -270,6 +277,7 @@ export interface SkillDefinition {
   alwaysHit?: boolean;
   cleanStatus?: boolean;
   selfDmgPct?: number;
+  selfDmgCanKill?: boolean;
   isSummon?: boolean;
   summonName?: string;
   summonJob?: string;
@@ -295,6 +303,7 @@ export interface BattleEngineData {
   SKILL_TAGS: Record<string, string>;
   GACHA_SSR_POOL: GachaEntry[];
   EXODIA_CARD: GachaEntry;
+  CHIMERA_PLUGIN_POOL?: GachaEntry[];
 }
 
 // ---------------------------------------------------------------------------

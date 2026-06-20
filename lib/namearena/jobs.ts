@@ -87,7 +87,7 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
   MIRACLE_MONSTER_BUJIN: {
     name: '奇迹怪兽武刃', icon: '🦖',
     hp: 4.0, atk: 6.0, def: 4.5, spd: 3.0, agl: 4.0, mag: 4.0, res: 4.0, wis: 3.0,
-    skills: ['monster_punch', 'bujin_slash', 'miracle_magic'],
+    skills: ['rainbow_fever', 'monster_punch', 'bujin_slash', 'miracle_magic'],
   },
 
   // ── 牢鳄系 ──────────────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
     skills: ['hero_slash', 'hero_guard'],
   },
   LEGEND_DRAGON:  { name: '传说之龙',  icon: '🐲', hp: 1.5, atk: 1.4, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.2, res: 1.2, wis: 1.0, skills: ['fireball'] },
-  ARKNIGHTS_OP:   { name: '干员',      icon: '♟️', hp: 0.8, atk: 1.6, def: 0.6, spd: 1.2, agl: 1.2, mag: 1.2, res: 0.8, wis: 1.2, skills: ['rush_b'] },
+  ARKNIGHTS_OP:   { name: '干员',      icon: '♟️', hp: 0.8, atk: 1.6, def: 0.6, spd: 1.2, agl: 1.2, mag: 1.2, res: 0.8, wis: 1.2, skills: ['surtr_laeva'] },
   WARRIOR:        { name: '战士',      icon: '⚔️', hp: 1.4, atk: 1.2, def: 1.3, spd: 0.9, agl: 0.8, mag: 0.5, res: 0.8, wis: 0.7, skills: ['bash', 'rage'] },
   MAGE:           { name: '法师',      icon: '🔮', hp: 0.8, atk: 0.6, def: 0.6, spd: 1.0, agl: 0.9, mag: 1.6, res: 1.4, wis: 1.3, skills: ['fireball', 'meteor'] },
   ARCHER:         { name: '游侠',      icon: '🏹', hp: 1.0, atk: 1.4, def: 0.8, spd: 1.4, agl: 1.3, mag: 0.6, res: 0.9, wis: 1.0, skills: ['aim_shot', 'multi_shot'] },

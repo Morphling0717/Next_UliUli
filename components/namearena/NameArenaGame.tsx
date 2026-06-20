@@ -2,16 +2,17 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { BattleEngine } from "@/lib/namearena/battleEngine";
+import { cloneFighters, isActiveCombatant } from "@/lib/namearena/combatState";
 import { namerenaCore } from "@/lib/namearena/core";
 import { namerenaData } from "@/lib/namearena/data";
+import { generateNameArenaFighter } from "@/lib/namearena/fighterFactory";
 import { namerenaJobs } from "@/lib/namearena/jobs";
 import { namerenaSkills } from "@/lib/namearena/skills";
+import type { Fighter, StatusEntry } from "@/lib/namearena/types";
 
 type BattleLogEntry = { type: string; text: string };
 
-/** Runtime fighter shape from legacy generator (matches original JS objects). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Fighter = any;
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function Icon({
   d,
@@ -67,8 +68,6 @@ function StatusIcon({ type }: { type: string }) {
   );
 }
 
-const getCore = () => namerenaCore;
-
 export function NameArenaGame() {
     const [inputNames, setInputNames] = useState('水人\n玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep');
     const [fighters, setFighters] = useState<Fighter[]>([]);
@@ -88,6 +87,7 @@ export function NameArenaGame() {
     const logsEndRef = useRef<HTMLDivElement | null>(null);
     const timerRef = useRef<number | null>(null);
     const battleSpeedRef = useRef(1500);
+    const battleTurnRef = useRef(0);
     const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1);
     const [isAutoScroll, setIsAutoScroll] = useState(true);
 
@@ -103,6 +103,7 @@ export function NameArenaGame() {
         setIsFullLogModalOpen(false);
         setShowMvp(false);
         spinalSwordRef.current = false;
+        battleTurnRef.current = 0;
         if (timerRef.current !== null) clearInterval(timerRef.current);
     };
 
@@ -128,76 +129,6 @@ export function NameArenaGame() {
         URL.revokeObjectURL(url);
     };
 
-    const generateFighter = (rawInputName: string) => {
-        const { SeededRNG, stringToSeed, generateUUID } = getCore();
-        const JOBS = namerenaJobs as Record<string, (typeof namerenaJobs)['WARRIOR']>;
-        const COLORS = namerenaData.COLORS || [];
-        if (!SeededRNG) return null;
-
-        const trimmedInput = rawInputName.trim();
-        const parts = trimmedInput.split('@');
-        const cleanName = parts[0].trim();
-        const teamName = parts.length > 1 ? parts[1].trim() : null;
-
-        const seed = stringToSeed(trimmedInput);
-        const rng = new SeededRNG(seed);
-        const jobRng = teamName ? new SeededRNG(stringToSeed(teamName)) : rng;
-
-	        const jobKey = cleanName === '水人' || cleanName === '水人Morphling' ? 'SLIME'
-            : cleanName === '玄凝' ? 'HIGH_END_GAMER'
-            : cleanName === '屑' || cleanName === '屯硬币的屑' ? 'JOKE_KING'
-            : (cleanName.toLowerCase() === 'm1a2_abrams_sep' || cleanName.toLowerCase() === 'm1' || cleanName.toLowerCase() === 'arams_sep') ? 'WT_GRINDER'
-            : cleanName === '刺猬人' || cleanName === '刺猬人chiray' ? 'TOKU_FAN'
-            : cleanName === '牢鳄' || cleanName === '鳄霸' ? 'GACHA_ADDICT'
-            : cleanName === '小汀' || cleanName === '小汀公本' ? 'RED_FURY_SAMURAI'
-            : cleanName === '克蕾儿丝菲尔' ? 'SUCCUBUS'
-            : cleanName === '丝瓜uli' || cleanName === '丝瓜' ? 'VIRTUAL_DIVA'
-            : cleanName === '兔卷卷' || cleanName === '兔卷卷curly' ? 'Q_BUNNY'
-            : rng.next() < 0.02
-              ? 'ONE_PUNCH'
-              : rng.next() < 0.05
-                ? 'HERO'
-                : jobRng.pick(['WARRIOR', 'MAGE', 'ARCHER', 'PRIEST']) ?? 'WARRIOR';
-
-        const resolvedJobKey = jobKey ?? 'WARRIOR';
-        const job = (JOBS[resolvedJobKey] ?? JOBS['WARRIOR'])!;
-        const isMorphling = resolvedJobKey === 'SLIME';
-        const baseHp = rng.nextInt(200, 300);
-        const finalStats: Record<string, number> = {};
-        ['atk', 'def', 'spd', 'agl', 'mag', 'res', 'wis'].forEach(
-            (k) =>
-                (finalStats[k] = Math.floor(
-                    rng.nextInt(10, 30) *
-                        ((job as unknown as Record<string, number>)[k] || 1.0) *
-                        (isMorphling ? 0.8 : 1.0),
-                )),
-        );
-
-        return {
-            id: generateUUID ? generateUUID() : `id-${Math.random()}`,
-            name: cleanName, displayName: trimmedInput, teamId: teamName,
-            job: resolvedJobKey, jobData: JSON.parse(JSON.stringify(job)),
-            maxHp: Math.floor(baseHp * (job.hp || 1) * (isMorphling ? 0.8 : 1.0)), currentHp: Math.floor(baseHp * (job.hp || 1) * (isMorphling ? 0.8 : 1.0)), hpPct: 1.0,
-            ...finalStats, critRate: rng.next() * 0.1 + 0.05,
-            color: COLORS.length > 0 ? (teamName ? jobRng.pick(COLORS) : rng.pick(COLORS)) : 'text-gray-500',
-            isDead: false, isDeadAnnounced: false, status: [],
-            stats: { kills: 0, dmgDealt: 0, dmgTaken: 0 },
-            isMorphling,
-            isGamer: resolvedJobKey === 'HIGH_END_GAMER',
-            isJoker: resolvedJobKey === 'JOKE_KING',
-            isTokusatsu: resolvedJobKey === 'TOKU_FAN',
-            isGacha: resolvedJobKey === 'GACHA_ADDICT',
-            isTing: resolvedJobKey === 'RED_FURY_SAMURAI',
-            isSuccubus: resolvedJobKey === 'SUCCUBUS',
-            isSigua: resolvedJobKey === 'VIRTUAL_DIVA',
-            isTuJuanJuan: resolvedJobKey === 'Q_BUNNY',
-            isWT: resolvedJobKey === 'WT_GRINDER',
-            transformed: false, resurrected: false, isSon: false, summonerId: null, isSummon: false, counterUsed: false, monsterTurns: 0, reviveTurns: 0, hasResurrected: false, hasDroppedSword: false, spinalSwordTurns: 0, hasSpinalSword: false, puppetId: null, hasSummonedPuppet: false, ultPoints: 0, economy: 0,
-            hasTriggeredSlacking: false,
-            isActing: false, isHit: false
-        };
-    };
-
     const battleStep = useCallback(() => {
         // Collect logs synchronously during the step so we can batch them with fighter state
         pendingLogsRef.current = [];
@@ -206,22 +137,18 @@ export function NameArenaGame() {
             pendingLogsRef.current.push(logEntry);
         };
 
-        const clonedFighters = fightersRef.current.map(f => ({
-            ...f,
-            jobData: f.jobData ? JSON.parse(JSON.stringify(f.jobData)) : {},
-            status: f.status.map((s: { type: string; duration?: number }) => ({ ...s })),
-            stats: { ...f.stats }
-        }));
+        const clonedFighters = cloneFighters(fightersRef.current);
 
         const engine = new BattleEngine(
             clonedFighters, batchedLog,
-            namerenaJobs, namerenaSkills, namerenaData, getCore()
+            namerenaJobs, namerenaSkills, namerenaData, namerenaCore, battleTurnRef.current
         );
 
         let isEnd = false;
         let nextFighters: Fighter[] = fightersRef.current;
         try {
             isEnd = engine.step(spinalSwordRef);
+            battleTurnRef.current = engine.turnCount;
             nextFighters = engine.fighters;
         } catch (error) {
             console.error("Game Loop Error:", error);
@@ -269,7 +196,7 @@ export function NameArenaGame() {
     };
 
     const names = fighters.map(f => f.name).filter(n => n.length > 0).sort((a,b) => b.length - a.length);
-    const nameRegex = names.length > 0 ? new RegExp(`(${names.map(n => n.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('|')})`, 'g') : null;
+    const nameRegex = names.length > 0 ? new RegExp(`(${names.map(escapeRegExp).join('|')})`, 'g') : null;
 
         const renderLogText = (l: BattleLogEntry, i: number) => {
         const parts = nameRegex ? l.text.split(nameRegex) : [l.text];
@@ -434,14 +361,15 @@ export function NameArenaGame() {
                                 </p>
                                 <textarea value={inputNames} onChange={(e) => setInputNames(e.target.value)} className="w-full h-32 md:h-48 bg-slate-950 border border-slate-800 rounded-xl p-4 text-slate-300 focus:ring-indigo-500 outline-none font-mono text-sm md:text-base shadow-inner" />
                                 <button onClick={() => {
-                                    const { SeededRNG } = getCore();
+                                    const { SeededRNG } = namerenaCore;
                                     if (!SeededRNG) return alert("核心组件未加载，请检查 1_core.js");
-                                    const list = inputNames.split('\n').filter(n=>n.trim());
+                                    const list = inputNames.split('\n').map(n => n.trim()).filter(Boolean);
                                     if(list.length<2) return alert("至少2人");
-                                    const f = list.map(generateFighter).filter(x => x !== null);
-                                    if (f.length < list.length) return alert("部分角色生成失败，请检查控制台");
+                                    const f = list.map(generateNameArenaFighter).filter((x): x is Fighter => x !== null);
+                                    if (f.length < list.length) return alert("存在空名字或角色生成失败，请检查输入");
 
                     fullLogsRef.current = []; setFullLogSnapshot([]); setDisplayLogs([]);
+                    battleTurnRef.current = 0;
                     fightersRef.current = f;
                     setFighters(f); addLog({type:'system', text:'⚔️ 战斗开始！'});
                     setGameState('FIGHTING'); spinalSwordRef.current = false; changeSpeed(1500);
@@ -455,7 +383,7 @@ export function NameArenaGame() {
                     <>
                         <section className="relative flex min-h-0 min-w-0 flex-1 flex-col border-slate-800 bg-slate-900/30 lg:border-r">
                             <div className="z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/50 p-3 shadow-sm backdrop-blur">
-                                <span className="text-sm font-bold tracking-wide">存活人数: <span className="text-indigo-400">{fighters.filter(f=>!f.isDead).length}</span></span>
+                                <span className="text-sm font-bold tracking-wide">存活人数: <span className="text-indigo-400">{fighters.filter(isActiveCombatant).length}</span></span>
                                 {(gameState === 'FIGHTING' || gameState === 'END') && (
                                     <button onClick={resetGame} className="bg-red-600/80 hover:bg-red-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 transition-colors shadow-md" title="重开一局">
                                         <Icons.RotateCcw size={14}/> <span className="hidden sm:inline">重置大厅</span>
@@ -473,7 +401,7 @@ export function NameArenaGame() {
                                         ${f.isDead ? 'scale-95 border-slate-800 bg-slate-900 opacity-40 grayscale-[0.8]' : 'shadow-md'}`}
                                     >
                                         <div className="flex gap-3 mb-2 relative">
-                                            <div className="absolute right-0 top-0 flex max-w-[55%] flex-wrap justify-end gap-1">{f.status.map((s: { type: string; duration?: number }, i: number) => (
+                                            <div className="absolute right-0 top-0 flex max-w-[55%] flex-wrap justify-end gap-1">{f.status.map((s: StatusEntry, i: number) => (
                                             <StatusIcon key={`${f.id}-${s.type}-${i}`} type={s.type} />
                                         ))}</div>
                                             <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${f.color} flex items-center justify-center text-2xl shrink-0 shadow-inner border border-white/10`}>{f.jobData?.icon || '❓'}</div>

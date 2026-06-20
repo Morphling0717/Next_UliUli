@@ -1,7 +1,6 @@
 import { ImageResponse } from "next/og";
 
 export const runtime = "edge";
-export const contentType = "image/png";
 
 const MIN_DIMENSION = 320;
 const MAX_DIMENSION = 3200;

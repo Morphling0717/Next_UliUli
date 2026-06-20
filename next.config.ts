@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
+  experimental: {
+    turbopackPluginRuntimeStrategy: "workerThreads",
+  },
   turbopack: {
     root: projectRoot,
   },

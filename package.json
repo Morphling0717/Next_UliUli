@@ -14,6 +14,7 @@
     "lint": "eslint",
     "db:migrate": "node scripts/migrate-db.js",
     "gacha:migrate": "npm run db:migrate && node scripts/migrate-gacha-data.js",
+    "test:namearena": "node scripts/namearena-regression-test.js",
     "db:backup": "node scripts/backup-db.js",
     "clean": "rimraf .next out build node_modules"
   },
