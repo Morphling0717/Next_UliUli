@@ -38,10 +38,26 @@ export const GLOBAL_TIMED_STATUS_TYPES: string[] = [
   'INVUL',
   'BKB',
   'ETHEREAL',
+  'SYNERGY_SLACKING',
 ];
 
 export const TRIGGER_TIMED_STATUS_TYPES: string[] = [
+  'AIM',
+  'COUNTER',
   'SPELL_BLOCK',
+  'VALO_HOLDING_ANGLE',
+  'WAIT_COUNTER',
+];
+
+export const PERMANENT_STATUS_TYPES: string[] = [
+  'LIQUID_BODY',
+  'PUPPET_MASTER',
+  'WT_ERA',
+];
+
+export const PERMANENT_STATUS_PREFIXES: string[] = [
+  'PLUG_',
+  'STYLE_',
 ];
 
 export const SLACKING_AWAY_STATUS_TYPES: string[] = [
@@ -72,4 +88,14 @@ export const REVIVE_CLEAN_STATUS_TYPES: string[] = [
 
 export function isStatusType(type: string, statusTypes: readonly string[]): boolean {
   return statusTypes.includes(type);
+}
+
+export type StatusTickMode = 'self' | 'global' | 'trigger' | 'permanent';
+
+export function getStatusTickMode(type: string): StatusTickMode {
+  if (PERMANENT_STATUS_PREFIXES.some((prefix) => type.startsWith(prefix))) return 'permanent';
+  if (isStatusType(type, PERMANENT_STATUS_TYPES)) return 'permanent';
+  if (isStatusType(type, TRIGGER_TIMED_STATUS_TYPES)) return 'trigger';
+  if (isStatusType(type, GLOBAL_TIMED_STATUS_TYPES)) return 'global';
+  return 'self';
 }

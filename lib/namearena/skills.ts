@@ -162,11 +162,7 @@ const SKILLS: Record<string, SkillDefinition> = {
         otherEnemies.forEach((e) => {
           const actualDmg = ctx.applyDamage(e, aoeDmg, 'skill');
           ctx.log('info', `💥 爆炸余波重创了 ${e.name}，造成了 ${actualDmg} 点伤害！`);
-          if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {
-            ctx.log('death', `💀 【范围击杀】${e.name} 被晚安火炮的余波炸碎了！`);
-            e.isDeadAnnounced = true;
-            ctx.user.stats.kills += 1;
-          }
+          if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【范围击杀】${e.name} 被晚安火炮的余波炸碎了！`, killer: ctx.user });
           const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
           if (idx !== -1) ctx.fighters[idx] = e;
         });
@@ -200,11 +196,7 @@ const SKILLS: Record<string, SkillDefinition> = {
           otherEnemies.forEach((e) => {
             const actualDmg = ctx.applyDamage(e, splashDmg, 'skill');
             ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，造成了 ${actualDmg} 点伤害！`);
-            if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {
-              ctx.log('death', `💀 【溅射击杀】${e.name} 被轨道炮的余波轰成了渣！`);
-              e.isDeadAnnounced = true;
-              ctx.user.stats.kills += 1;
-            }
+            if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【溅射击杀】${e.name} 被轨道炮的余波轰成了渣！`, killer: ctx.user });
             const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
             if (idx !== -1) ctx.fighters[idx] = e;
           });
@@ -423,11 +415,7 @@ const SKILLS: Record<string, SkillDefinition> = {
       ctx.target.status.push({ type: 'WATER_PRISON', duration: 3 });
       if (ctx.target.hpPct < 0.2) {
         setCurrentHp(ctx.target, 0);
-        if (!ctx.target.isDeadAnnounced && !ctx.target.isDead) {
-          ctx.user.stats.kills += 1; // Bug 3 fix: attribute kill before setting isDeadAnnounced
-          ctx.target.isDeadAnnounced = true;
-          ctx.log('death', `💀 【溺毙处决】${ctx.target.name} 在深渊水牢中彻底停止了呼吸...`);
-        }
+        ctx.markDefeated(ctx.target, { message: `💀 【溺毙处决】${ctx.target.name} 在深渊水牢中彻底停止了呼吸...`, killer: ctx.user, setHpZero: false });
       }
       return false;
     },
@@ -440,11 +428,7 @@ const SKILLS: Record<string, SkillDefinition> = {
       otherEnemies.forEach((e) => {
         const actualDmg = ctx.applyDamage(e, dmg, 'skill');
         ctx.log('info', `🌊 狂暴洪水吞噬了 ${e.name}，造成了 ${actualDmg} 点真实伤害！`);
-        if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {
-          ctx.log('death', `💀 【吞噬击杀】${e.name} 被狂暴的大洪水吞没溺毙！`);
-          e.isDeadAnnounced = true;
-          ctx.user.stats.kills += 1;
-        }
+        if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【吞噬击杀】${e.name} 被狂暴的大洪水吞没溺毙！`, killer: ctx.user });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
       });

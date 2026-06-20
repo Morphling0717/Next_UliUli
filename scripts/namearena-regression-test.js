@@ -25,7 +25,7 @@ const { namerenaJobs } = require(path.join(projectRoot, 'lib/namearena/jobs.ts')
 const { namerenaSkills } = require(path.join(projectRoot, 'lib/namearena/skills.ts'));
 const { namerenaData } = require(path.join(projectRoot, 'lib/namearena/data.ts'));
 const coreModule = require(path.join(projectRoot, 'lib/namearena/core.ts'));
-const { cloneFighters } = require(path.join(projectRoot, 'lib/namearena/combatState.ts'));
+const { cloneFighters, setCurrentHp } = require(path.join(projectRoot, 'lib/namearena/combatState.ts'));
 const { generateNameArenaFighter } = require(path.join(projectRoot, 'lib/namearena/fighterFactory.ts'));
 
 const namerenaCore = coreModule.namerenaCore ?? coreModule;
@@ -297,6 +297,260 @@ function runSlackingIsolation() {
   return cases;
 }
 
+function makeDeathEngine(fighters, logs = []) {
+  const cloned = cloneFighters(fighters);
+  return { engine: makeEngine(cloned, logs), logs };
+}
+
+function runDeathAccountingCases() {
+  const cases = [];
+
+  {
+    const attacker = makeFighter('死亡结算杀手@A');
+    const target = makeFighter('死亡结算靶子@B');
+    attacker.atk = 10000;
+    attacker.agl = 10000;
+    target.maxHp = 100;
+    setCurrentHp(target, 100);
+
+    const { engine, logs } = makeDeathEngine([attacker, target]);
+    engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
+    engine.handleDeathsAndRevives({ current: false });
+    engine.handleDeathsAndRevives({ current: false });
+
+    assert(engine.fighters[1].isDead, 'normal lethal hit should finalize target death');
+    assert(engine.fighters[0].stats.kills === 1, `normal lethal hit should award exactly one kill, got ${engine.fighters[0].stats.kills}`);
+    assert(logs.filter((l) => l.text.includes('无情抹杀')).length === 1, 'normal lethal hit should log one kill message');
+    cases.push('normal lethal hit awards exactly one kill');
+  }
+
+  {
+    const attacker = makeFighter('反伤测试攻击者@A');
+    const target = makeFighter('反伤测试目标@B');
+    attacker.maxHp = 100;
+    setCurrentHp(attacker, 100);
+    attacker.atk = 80;
+    attacker.agl = 10000;
+    target.maxHp = 10000;
+    setCurrentHp(target, 10000);
+    target.status.push({ type: 'COUNTER', duration: 3 });
+
+    const { engine, logs } = makeDeathEngine([attacker, target]);
+    engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
+    engine.handleDeathsAndRevives({ current: false });
+    engine.handleDeathsAndRevives({ current: false });
+
+    assert(engine.fighters[0].isDead, 'counter reflection should finalize attacker death');
+    assert(engine.fighters[1].stats.kills === 1, `counter reflection should award exactly one kill, got ${engine.fighters[1].stats.kills}`);
+    assert(logs.filter((l) => l.text.includes('反弹伤害反死')).length === 1, 'counter reflection should log one death message');
+    cases.push('counter reflection awards defender exactly one kill');
+  }
+
+  {
+    const attacker = makeFighter('再火击杀者@A');
+    const target = makeFighter('再火目标@B');
+    target.status.push({ type: 'VALO_ULT_RUN_IT_BACK', duration: 3 });
+
+    const { engine } = makeDeathEngine([attacker, target]);
+    engine.markDefeated(engine.fighters[1], { message: '💀 【测试】再火目标受到致命伤。', killer: engine.fighters[0] });
+    engine.handleDeathsAndRevives({ current: false });
+    engine.handleDeathsAndRevives({ current: false });
+
+    assert(!engine.fighters[1].isDead, 'run it back should prevent finalized death');
+    assert(!engine.fighters[1].isDeadAnnounced, 'run it back should clear death announcement');
+    assert(engine.fighters[1].currentHp === engine.fighters[1].maxHp, 'run it back should restore full HP');
+    assert(engine.fighters[0].stats.kills === 1, `run it back should not duplicate kill accounting, got ${engine.fighters[0].stats.kills}`);
+    cases.push('run it back restores target without duplicate accounting');
+  }
+
+  {
+    const attacker = makeFighter('脊髓剑击杀者@A');
+    const ting = makeFighter('小汀@B');
+    const spinalSwordRef = { current: false };
+    const { engine, logs } = makeDeathEngine([attacker, ting]);
+
+    engine.markDefeated(engine.fighters[1], { message: '💀 【测试】小汀受到致命伤。', killer: engine.fighters[0] });
+    engine.handleDeathsAndRevives(spinalSwordRef);
+    engine.handleDeathsAndRevives(spinalSwordRef);
+
+    assert(engine.fighters[1].isDead, 'Ting should remain dead after finalization');
+    assert(engine.fighters[1].hasDroppedSword, 'Ting should mark spinal sword as dropped');
+    assert(spinalSwordRef.current, 'Ting death should leave spinal sword on the field');
+    assert(engine.fighters[0].stats.kills === 1, `Ting death should award exactly one kill, got ${engine.fighters[0].stats.kills}`);
+    assert(logs.filter((l) => l.text.includes('脊髓剑')).length === 1, 'Ting should drop spinal sword exactly once');
+    cases.push('Ting death drops spinal sword exactly once');
+  }
+
+  {
+    const attacker = makeFighter('屑击杀者@A');
+    const teammate = makeFighter('屑队友@J');
+    const joker = makeFighter('屑@J');
+    attacker.maxHp = 200000;
+    setCurrentHp(attacker, 200000);
+    const spinalSwordRef = { current: false };
+    const { engine, logs } = makeDeathEngine([attacker, teammate, joker]);
+
+    engine.markDefeated(engine.fighters[2], { message: '💀 【测试】屑受到致命伤。', killer: engine.fighters[0] });
+    engine.handleDeathsAndRevives(spinalSwordRef);
+    assert(engine.fighters[2].isDead, 'Joker should be dead while revival countdown is active');
+    assert((engine.fighters[2].reviveTurns ?? 0) === 4, `Joker countdown should tick to 4 after first settlement, got ${engine.fighters[2].reviveTurns}`);
+    assert(engine.fighters[0].stats.kills === 1, `Joker initial death should award exactly one kill, got ${engine.fighters[0].stats.kills}`);
+
+    for (let i = 0; i < 4; i += 1) engine.handleDeathsAndRevives(spinalSwordRef);
+
+    assert(!engine.fighters[2].isDead, 'Joker should revive after countdown');
+    assert(engine.fighters[2].hasResurrected, 'Joker should mark resurrection as consumed');
+    assert(!engine.fighters[2].isDeadAnnounced, 'Joker revive should clear death announcement');
+    assert(engine.fighters[0].stats.kills === 1, `Joker settlement should not duplicate attacker kills, got ${engine.fighters[0].stats.kills}`);
+    assert(logs.filter((l) => l.text.includes('从地狱归来')).length === 1, 'Joker should revive exactly once');
+    cases.push('Joker death countdown revives without duplicate accounting');
+  }
+
+  return cases;
+}
+
+function runStatusClockCases() {
+  const cases = [];
+
+  {
+    const fighter = makeFighter('全局计时测试@A');
+    fighter.status = [{ type: 'INVUL', duration: 2, appliedTurn: 0 }];
+    const { engine } = makeDeathEngine([fighter, makeFighter('旁观者@B')]);
+    engine.turnCount = 1;
+    engine.advanceGlobalTimedStatuses();
+    assert(engine.fighters[0].status.find((s) => s.type === 'INVUL')?.duration === 1, 'global status should tick on global battle turns');
+    engine.turnCount = 2;
+    engine.advanceGlobalTimedStatuses();
+    assert(!engine.fighters[0].status.some((s) => s.type === 'INVUL'), 'global status should expire after its global duration');
+    cases.push('global statuses tick on battle turns');
+  }
+
+  {
+    const fighter = makeFighter('同回合全局测试@A');
+    fighter.status = [{ type: 'BKB', duration: 1 }];
+    const { engine } = makeDeathEngine([fighter, makeFighter('旁观者@B')]);
+    engine.turnCount = 7;
+    engine.advanceGlobalTimedStatuses();
+    const status = engine.fighters[0].status.find((s) => s.type === 'BKB');
+    assert(status && status.duration === 1 && status.appliedTurn === 7, 'global status should not tick on the same turn it is first observed');
+    engine.turnCount = 8;
+    engine.advanceGlobalTimedStatuses();
+    assert(!engine.fighters[0].status.some((s) => s.type === 'BKB'), 'global status should tick on the next battle turn');
+    cases.push('new global statuses skip their application turn');
+  }
+
+  {
+    const fighter = makeFighter('永久状态测试@A');
+    fighter.status = [
+      { type: 'STYLE_ANGRY', duration: 999 },
+      { type: 'PLUG_HEAD', duration: 999 },
+      { type: 'LIQUID_BODY', duration: 999 },
+      { type: 'WT_ERA', duration: 999 },
+    ];
+    const { engine } = makeDeathEngine([fighter, makeFighter('旁观者@B')]);
+    engine.processStatus(engine.fighters[0]);
+    engine.turnCount = 1;
+    engine.advanceGlobalTimedStatuses();
+    ['STYLE_ANGRY', 'PLUG_HEAD', 'LIQUID_BODY', 'WT_ERA'].forEach((type) => {
+      assert(engine.fighters[0].status.find((s) => s.type === type)?.duration === 999, `${type} should not tick down`);
+    });
+    cases.push('permanent statuses do not tick');
+  }
+
+  {
+    const fighter = makeFighter('触发状态测试@A');
+    fighter.status = [
+      { type: 'AIM', duration: 3 },
+      { type: 'COUNTER', duration: 2 },
+      { type: 'SPELL_BLOCK', duration: 1 },
+      { type: 'VALO_HOLDING_ANGLE', duration: 3 },
+      { type: 'WAIT_COUNTER', duration: 3 },
+    ];
+    const before = fighter.status.map((s) => `${s.type}:${s.duration}`).sort().join(',');
+    const { engine } = makeDeathEngine([fighter, makeFighter('旁观者@B')]);
+    engine.processStatus(engine.fighters[0]);
+    engine.turnCount = 1;
+    engine.advanceGlobalTimedStatuses();
+    const after = engine.fighters[0].status.map((s) => `${s.type}:${s.duration}`).sort().join(',');
+    assert(after === before, `trigger statuses should wait for their trigger, before=${before}, after=${after}`);
+    cases.push('trigger statuses do not tick down passively');
+  }
+
+  {
+    const fighter = makeFighter('个人计时测试@A');
+    fighter.status = [
+      { type: 'STUN', duration: 2 },
+      { type: 'POISON', duration: 2 },
+      { type: 'CTR_CHARM', duration: 5 },
+    ];
+    const { engine } = makeDeathEngine([fighter, makeFighter('旁观者@B')]);
+    const canAct = engine.processStatus(engine.fighters[0]);
+    assert(!canAct, 'control status should block the owner action while ticking');
+    assert(engine.fighters[0].status.find((s) => s.type === 'STUN')?.duration === 1, 'self-timed control should tick on owner turn');
+    assert(engine.fighters[0].status.find((s) => s.type === 'POISON')?.duration === 1, 'self-timed DoT should tick on owner turn');
+    assert(engine.fighters[0].status.find((s) => s.type === 'CTR_CHARM')?.duration === 4, 'non-passive counter stance should tick down if it is not triggered');
+    assert(engine.fighters[0].stats.dmgTaken > 0, 'self-timed DoT should apply damage on owner turn');
+    cases.push('self-timed statuses tick on owner turns');
+  }
+
+  {
+    const attacker = makeFighter('锁头攻击者@A');
+    const target = makeFighter('锁头靶子@B');
+    attacker.status.push({ type: 'AIM', duration: 3 });
+    attacker.atk = 100;
+    attacker.agl = 10000;
+    target.maxHp = 100000;
+    setCurrentHp(target, 100000);
+    const { engine } = makeDeathEngine([attacker, target]);
+    engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
+    assert(!engine.fighters[0].status.some((s) => s.type === 'AIM'), 'AIM should be consumed after an offensive action');
+    cases.push('AIM is consumed by the next offensive action');
+  }
+
+  {
+    const attacker = makeFighter('反击攻击者@A');
+    const target = makeFighter('反击持有者@B');
+    attacker.atk = 100;
+    attacker.agl = 10000;
+    attacker.maxHp = 100000;
+    setCurrentHp(attacker, 100000);
+    target.maxHp = 100000;
+    setCurrentHp(target, 100000);
+    target.status.push({ type: 'COUNTER', duration: 2 });
+    const { engine } = makeDeathEngine([attacker, target]);
+    engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
+    assert(!engine.fighters[1].status.some((s) => s.type === 'COUNTER'), 'COUNTER should be consumed after reflecting one physical hit');
+    cases.push('COUNTER is consumed by reflection');
+  }
+
+  {
+    const slacker = makeFighter('丝瓜uli@S');
+    const enemyA = makeFighter('摸鱼旁观A@A');
+    const enemyB = makeFighter('摸鱼旁观B@B');
+    slacker.wasSynergySlacking = true;
+    slacker.status = [
+      { type: 'SYNERGY_SLACKING', duration: 1, appliedTurn: 0 },
+      { type: 'INVUL', duration: 1, appliedTurn: 0 },
+      { type: 'BKB', duration: 1, appliedTurn: 0 },
+      { type: 'STUN', duration: 5 },
+      { type: 'SPELL_BLOCK', duration: 999 },
+    ];
+    const { engine } = makeDeathEngine([slacker, enemyA, enemyB]);
+    engine.turnCount = 1;
+    engine.finishStep({ current: false });
+    const returned = engine.fighters[0];
+    const remaining = returned.status.map((s) => s.type);
+    assert(!returned.wasSynergySlacking, 'slacking fighter should clear slacking marker after natural global expiry');
+    ['SYNERGY_SLACKING', 'INVUL', 'BKB', 'STUN', 'SPELL_BLOCK'].forEach((type) => {
+      assert(!remaining.includes(type), `${type} should be removed when slacking fighter returns`);
+    });
+    assert(returned.currentHp === returned.maxHp, 'slacking return should restore full HP');
+    cases.push('slacking global expiry triggers immediate clean return');
+  }
+
+  return cases;
+}
+
 function buildSpecs() {
   const specs = [];
   for (let i = 0; i < 12; i += 1) specs.push({ phase: 'all-special', label: `all-special-${i}`, names: SPECIALS, seed: 8000 + i });
@@ -330,6 +584,8 @@ function writeFailure(result, index) {
 function main() {
   assertFactoryMapping();
   const slackingCases = runSlackingIsolation();
+  const deathCases = runDeathAccountingCases();
+  const statusClockCases = runStatusClockCases();
   const specs = buildSpecs();
   const failures = [];
 
@@ -348,6 +604,8 @@ function main() {
   const summary = {
     ok: failures.length === 0,
     slackingCaseCount: slackingCases.length,
+    deathCaseCount: deathCases.length,
+    statusClockCaseCount: statusClockCases.length,
     battleCount: specs.length,
     failures: failures.map((f) => ({
       label: f.result.label,

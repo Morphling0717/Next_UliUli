@@ -175,6 +175,14 @@ export interface StatusEffectInfo {
 
 export type StatusEffectsMap = Record<string, StatusEffectInfo>;
 
+export interface DefeatOptions {
+  message?: string;
+  killer?: Fighter;
+  logType?: string;
+  awardKill?: boolean;
+  setHpZero?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Skill execution context — passed into skill onExecute / afterExecute
 // ---------------------------------------------------------------------------
@@ -191,6 +199,7 @@ export interface SkillContext {
     source: string,
     isTrueDamage?: boolean,
   ) => number;
+  markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   triggerDepth: number;
   executeSkillAction: (
     id: string | null,

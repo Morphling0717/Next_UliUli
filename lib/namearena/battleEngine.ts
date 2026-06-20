@@ -3,6 +3,7 @@ import type {
   JobDefinition,
   SkillDefinition,
   SkillContext,
+  DefeatOptions,
   GachaEntry,
   StatKey,
   SpinalSwordRef,
@@ -10,18 +11,28 @@ import type {
   BattleEngineCore,
   StatusEffectsMap,
 } from './types';
-import { cloneJobDefinition, healFighter, isActiveCombatant, syncHpPct } from './combatState';
+import { cloneJobDefinition, healFighter, isActiveCombatant, setCurrentHp, syncHpPct } from './combatState';
 import {
   BKB_BLOCKED_STATUS_TYPES,
   COMMON_NEGATIVE_STATUS_TYPES,
   CONTROL_STATUS_TYPES,
   DOT_STATUS_TYPES,
-  GLOBAL_TIMED_STATUS_TYPES,
   SLACKING_AWAY_STATUS_TYPES,
   SLACKING_RETURN_PROTECTION_STATUS_TYPES,
-  TRIGGER_TIMED_STATUS_TYPES,
+  getStatusTickMode,
   isStatusType,
 } from './statusRules';
+
+const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
+  chimera_devour: 'baby_feed',
+  chimera_execute: 'baby_laser',
+  chimera_funnels: 'baby_satellite',
+  chimera_reconstruct: 'baby_cheer',
+  chimera_petrify: 'baby_scan',
+  chimera_fortress: 'baby_shield',
+  chimera_warp: 'baby_speed',
+  chimera_plague: 'baby_poison',
+};
 
 export class BattleEngine {
   fighters: Fighter[];
@@ -135,6 +146,21 @@ export class BattleEngine {
     return amount;
   }
 
+  markDefeated(target: Fighter, options: DefeatOptions = {}): boolean {
+    if (target.isDead || target.isDeadAnnounced) return false;
+
+    if (options.setHpZero ?? true) setCurrentHp(target, 0);
+    if (options.message) this.log(options.logType ?? 'death', options.message);
+    target.isDeadAnnounced = true;
+
+    const shouldAwardKill = options.awardKill ?? true;
+    if (shouldAwardKill && options.killer && options.killer.id !== target.id) {
+      options.killer.stats.kills += 1;
+    }
+
+    return true;
+  }
+
   finalizeFighterDeath(
     f: Fighter,
     spinalSwordRef: SpinalSwordRef,
@@ -152,12 +178,8 @@ export class BattleEngine {
       return;
     }
 
-    f.currentHp = 0;
-    this.syncHpPct(f);
-    if (!f.isDeadAnnounced) {
-      this.log('death', deathMessage ?? `💀 ${f.name} 伤重不治倒下了...`);
-      f.isDeadAnnounced = true;
-      if (killer && killer.id !== f.id) killer.stats.kills += 1;
+    if (!this.markDefeated(f, { message: deathMessage ?? `💀 ${f.name} 伤重不治倒下了...`, killer })) {
+      setCurrentHp(f, 0);
     }
     f.isDead = true;
 
@@ -216,12 +238,6 @@ export class BattleEngine {
     return alive[0];
   }
 
-  getStatusTickMode(type: string): 'self' | 'global' | 'trigger' {
-    if (isStatusType(type, TRIGGER_TIMED_STATUS_TYPES)) return 'trigger';
-    if (isStatusType(type, GLOBAL_TIMED_STATUS_TYPES)) return 'global';
-    return 'self';
-  }
-
   handleSelfTimedStatusExpiry(actor: Fighter, type: string): void {
     if (type !== 'ZEROED' || !actor.baseStatsForZero) return;
 
@@ -238,7 +254,7 @@ export class BattleEngine {
       if (fighter.isDead) return;
 
       fighter.status = fighter.status.flatMap((status) => {
-        if (this.getStatusTickMode(status.type) !== 'global' || status.duration >= 999) {
+        if (getStatusTickMode(status.type) !== 'global' || status.duration >= 999) {
           return [status];
         }
 
@@ -258,6 +274,7 @@ export class BattleEngine {
   finishStep(spinalSwordRef: SpinalSwordRef): void {
     this.handleDeathsAndRevives(spinalSwordRef);
     this.advanceGlobalTimedStatuses();
+    this.resolveSlackingReentry();
   }
 
   advanceBunnyStyleClock(actor: Fighter): void {
@@ -378,9 +395,11 @@ export class BattleEngine {
         const dmgAmt = s.type === 'WATER_PRISON' ? Math.floor(actor.maxHp * 0.08) : Math.floor(actor.maxHp * 0.05);
         this.log('poison', `${this.STATUS_EFFECTS[s.type]?.icon ?? ''} ${actor.name} ${s.type === 'WATER_PRISON' ? '在深渊水牢中窒息' : '受到持续伤害'}，损失 ${dmgAmt} 点生命`);
         this.applyDamage(actor, dmgAmt, 'status', true);
-        if (actor.currentHp <= 0 && !actor.isDeadAnnounced && !actor.isDead) {
-          this.log('death', `💀 ${actor.name} 因${s.type === 'WATER_PRISON' ? '窒息' : '状态伤害'}而痛苦地倒下了！`);
-          actor.isDeadAnnounced = true;
+        if (actor.currentHp <= 0) {
+          this.markDefeated(actor, {
+            message: `💀 ${actor.name} 因${s.type === 'WATER_PRISON' ? '窒息' : '状态伤害'}而痛苦地倒下了！`,
+            awardKill: false,
+          });
         }
       }
       if (!isSlacking && ['PLUG_HEART', 'REGEN', 'STYLE_FAMILY'].includes(s.type) && actor.currentHp < actor.maxHp) {
@@ -392,7 +411,7 @@ export class BattleEngine {
           this.log('heal', `${this.STATUS_EFFECTS[s.type]?.icon ?? ''} ${actor.name} 自动回复了 ${healed} 点生命`);
         }
       }
-      const tickMode = this.getStatusTickMode(s.type);
+      const tickMode = getStatusTickMode(s.type);
       if (tickMode !== 'self') {
         newStatus.push(s);
       } else if (s.duration > 1) {
@@ -756,7 +775,10 @@ export class BattleEngine {
         return;
       }
       const sacrificed = potentialTributes.sort(() => 0.5 - Math.random()).slice(0, skill.tributes);
-      sacrificed.forEach((v) => { v.currentHp = 0; this.syncHpPct(v); v.isDeadAnnounced = true; v.isDead = true; });
+      sacrificed.forEach((v) => {
+        this.markDefeated(v, { awardKill: false });
+        v.isDead = true;
+      });
       this.log('death', `💀 献祭！${sacrificed.map((f) => f.name).join('、')} 化为了召唤 ${skill.summonName} 的祭品！`);
     }
     if (skill.summonName === '小汀(傀儡)') {
@@ -809,6 +831,7 @@ export class BattleEngine {
       log: (type, text) => this.log(type, text),
       getTeamId: (f) => this.getTeamId(f),
       applyDamage: (t, a, s, trueDmg) => this.applyDamage(t, a, s, trueDmg),
+      markDefeated: (target, options) => this.markDefeated(target, options),
       triggerDepth,
       executeSkillAction: (id, u, t, d) => this.executeSkillAction(id, u, t, d),
       STATUS_EFFECTS: this.STATUS_EFFECTS,
@@ -971,10 +994,11 @@ export class BattleEngine {
     const counterDmg = Math.floor(target.atk * 2.0);
     this.applyDamage(user, counterDmg, 'counter');
     this.log('crit', `💥 强力反击！${target.name} 对 ${user.name} 造成了 ${counterDmg} 点伤害！`);
-    if (user.currentHp <= 0 && !user.isDeadAnnounced && !user.isDead) {
-      this.log('death', `💀 ${user.name} 承受不住反击的威力，被直接击杀了！`);
-      user.isDeadAnnounced = true;
-      target.stats.kills += 1;
+    if (user.currentHp <= 0) {
+      this.markDefeated(user, {
+        message: `💀 ${user.name} 承受不住反击的威力，被直接击杀了！`,
+        killer: target,
+      });
     }
     return true;
   }
@@ -1003,9 +1027,8 @@ export class BattleEngine {
       this.log('heal', `🧛 ${target.name} 发动反击，试图吸取 ${user.name} 300 点生命！`);
       const drain = this.applyDamage(user, 300, 'counter', true);
       healFighter(target, drain);
-      if (user.currentHp <= 0 && !user.isDeadAnnounced && !user.isDead) {
-        this.log('death', `💀 ${user.name} 被吸干了生命！`);
-        user.isDeadAnnounced = true; target.stats.kills += 1;
+      if (user.currentHp <= 0) {
+        this.markDefeated(user, { message: `💀 ${user.name} 被吸干了生命！`, killer: target });
       }
     }
     if (counterType === 'CTR_POISON') user.status.push({ type: 'POISON', duration: 5 });
@@ -1014,18 +1037,15 @@ export class BattleEngine {
     if (counterType === 'CTR_VOID') {
       this.log('crit', `🌌 虚空反击陷阱启动！试图吞噬 ${user.name}，造成 500 真实伤害！`);
       this.applyDamage(user, 500, 'counter', true);
-      if (user.currentHp <= 0 && !user.isDeadAnnounced && !user.isDead) {
-        this.log('death', `💀 ${user.name} 跌入了虚空被粉碎！`);
-        user.isDeadAnnounced = true; target.stats.kills += 1;
+      if (user.currentHp <= 0) {
+        this.markDefeated(user, { message: `💀 ${user.name} 跌入了虚空被粉碎！`, killer: target });
       }
     }
     if (counterType === 'CTR_WEAK') { user.atk = Math.floor(user.atk * 0.5); this.log('info', `📉 ${user.name} 的攻击力大幅下降！`); }
     if (counterType === 'CTR_CONFUSE') { user.status.push({ type: 'CONFUSED', duration: 3 }); return true; }
     if (counterType === 'CTR_EXECUTE') {
       if (user.hpPct < 0.4) {
-        user.currentHp = 0; user.isDeadAnnounced = true; target.stats.kills += 1;
-        this.syncHpPct(user);
-        this.log('death', `☠️ 断头台落下！${user.name} 被直接处决！`);
+        this.markDefeated(user, { message: `☠️ 断头台落下！${user.name} 被直接处决！`, killer: target });
         return true;
       }
       this.log('info', `☠️ ${user.name} 生命值尚高，逃过一劫！`);
@@ -1176,6 +1196,100 @@ export class BattleEngine {
     target.status.push({ type: skill.status, duration: 2 });
   }
 
+  handleValorantWeaponDrop(target: Fighter, actualDmg: number): void {
+    if (target.job !== 'VALO_JUNIOR' || (target.economy ?? 0) < 6) return;
+
+    const isHeavyHit = actualDmg > target.maxHp * 0.2;
+    const isControlled = target.status.some((s) => ['STUN', 'FREEZE', 'CONFUSED', 'CHARMED'].includes(s.type));
+    if (!isHeavyHit && !isControlled) return;
+
+    target.economy = Math.max(0, (target.economy ?? 0) - 5);
+    if (target.savedSpd) {
+      target.spd = target.savedSpd;
+      target.agl = target.savedAgl ?? 0;
+      delete target.savedSpd;
+      delete target.savedAgl;
+    }
+    this.log('death', `💔 损失惨重！${target.name} 受到重创或被控，手中的【冥驹】掉落了！经济大幅衰退！`);
+  }
+
+  handlePhysicalCounterReflect(skill: SkillDefinition, user: Fighter, target: Fighter, actualDmg: number): void {
+    if (skill.tag !== this.SKILL_TAGS['PHYS'] || !target.status.some((s) => s.type === 'COUNTER')) return;
+
+    target.status = target.status.filter((s) => s.type !== 'COUNTER');
+    this.log('crit', `💢 ${target.name} 触发反击！将 ${actualDmg} 点伤害弹回给了 ${user.name}！`);
+    this.applyDamage(user, actualDmg, 'reflect');
+    if (user.currentHp <= 0) {
+      this.markDefeated(user, { message: `💀 ${user.name} 被自己造成的反弹伤害反死了！`, killer: target });
+    }
+  }
+
+  grantValorantKillRewards(user: Fighter): void {
+    if (user.job !== 'VALO_JUNIOR') return;
+
+    user.economy = (user.economy ?? 0) + 2;
+    user.ultPoints = (user.ultPoints ?? 0) + 1;
+    this.log('info', `💰 ${user.name} 拿到击杀！大招充能+1，经济大幅增长(+2)！`);
+  }
+
+  handlePrimaryTargetDefeat(user: Fighter, target: Fighter): void {
+    if (target.currentHp > 0) return;
+
+    const defeated = this.markDefeated(target, { message: `💀 【击杀】${target.name} 被 ${user.name} 的攻击无情抹杀！`, killer: user });
+    if (defeated) this.grantValorantKillRewards(user);
+  }
+
+  applyLifestealEffects(
+    user: Fighter,
+    skill: SkillDefinition,
+    actualDmg: number,
+    hpBeforeDamage: number,
+  ): void {
+    const lsPct =
+      (skill.lifesteal ?? 0) +
+      (user.status.some((s) => s.type === 'PLUG_HEAD') ? 0.25 : 0) +
+      (user.status.some((s) => s.type === 'VALO_ULT_EMPRESS') ? 1.0 : 0) +
+      (user.status.some((s) => s.type === 'STYLE_SMART' || s.type === 'STYLE_EMPEROR') ? 0.5 : 0);
+    if (lsPct <= 0 || actualDmg <= 0 || !this.isActiveCombatant(user)) return;
+
+    if (user.status.some((s) => s.type === 'NO_HEAL')) {
+      this.log('info', `🥀 ${user.name} 处于禁疗状态，无法触发吸血被动！`);
+      return;
+    }
+
+    const healBase = Math.min(hpBeforeDamage, actualDmg);
+    const healAmt = Math.floor(healBase * lsPct);
+    if (healAmt <= 0) return;
+
+    const healed = healFighter(user, healAmt);
+    if (healed > 0) this.log('heal', `💉 ${user.name} 触发吸血被动，恢复了 ${healed} 点生命！`);
+  }
+
+  consumeAimAfterAttack(user: Fighter, skill: SkillDefinition): void {
+    if (skill.tag === this.SKILL_TAGS['HEAL'] || skill.tag === this.SKILL_TAGS['BUFF']) return;
+    if (!user.status.some((s) => s.type === 'AIM')) return;
+
+    user.status = user.status.filter((s) => s.type !== 'AIM');
+  }
+
+  triggerSuccubusBabyFollowup(
+    user: Fighter,
+    target: Fighter,
+    skillId: string | null,
+    userTeamId: string,
+    triggerDepth: number,
+  ): void {
+    if (!user.isSuccubus || !user.transformed || !skillId?.startsWith('chimera_') || skillId === 'chimera_install') return;
+
+    const baby = this.fighters.find((f) => f.job === 'MY_BABY' && this.isActiveCombatant(f) && this.getTeamId(f) === userTeamId);
+    const syncSkillId = CHIMERA_BABY_SYNC_SKILLS[skillId];
+    if (!baby || !syncSkillId) return;
+
+    const syncSkill = this.SKILLS[syncSkillId];
+    const isHealOrBuff = syncSkill && (syncSkill.tag === this.SKILL_TAGS['HEAL'] || syncSkill.tag === this.SKILL_TAGS['BUFF']);
+    this.executeSkillAction(syncSkillId, baby, isHealOrBuff ? user : target, triggerDepth + 1);
+  }
+
   executeSkillAction(skId: string | null, usr: Fighter, forcedTarget: Fighter | null = null, triggerDepth = 0): void {
     if (triggerDepth > 5 || !usr || usr.isDead || usr.isDeadAnnounced || usr.currentHp <= 0) return;
 
@@ -1247,7 +1361,6 @@ export class BattleEngine {
       this.log('info', `💦 爆炸的冲击波被 ${tgt.name} 的液态身躯卸掉了大半伤害！`);
     }
 
-    const hpBeforeDamage = tgt.currentHp;
     let preMitigationDmg = isIntercepted ? Math.floor(dmg * 0.5) : dmg;
 
     if (preMitigationDmg >= tgt.currentHp && tgt.job === 'GOD_SLIME') {
@@ -1259,6 +1372,9 @@ export class BattleEngine {
         preMitigationDmg = Math.floor(dmg * 0.5);
       }
     }
+
+    skillCtx.target = tgt;
+    const hpBeforeDamage = tgt.currentHp;
 
     if (isIntercepted) {
       this.log('info', `🛡️ 【援护】小汀(傀儡) 冲了出来，替宿主挡下了 ${usr.name} 的攻击！预计受到 ${preMitigationDmg} 点伤害！(减伤50%)`);
@@ -1276,69 +1392,15 @@ export class BattleEngine {
 
     const actualDmg = this.applyDamage(tgt, preMitigationDmg, 'skill', !!ignoreDefOverride || sexyTrueDamage);
 
-    if (tgt.job === 'VALO_JUNIOR' && (tgt.economy ?? 0) >= 6 && (actualDmg > tgt.maxHp * 0.2 || tgt.status.some((s) => ['STUN', 'FREEZE', 'CONFUSED', 'CHARMED'].includes(s.type)))) {
-      tgt.economy = Math.max(0, (tgt.economy ?? 0) - 5);
-      if (tgt.savedSpd) { tgt.spd = tgt.savedSpd; tgt.agl = tgt.savedAgl ?? 0; delete tgt.savedSpd; delete tgt.savedAgl; }
-      this.log('death', `💔 损失惨重！${tgt.name} 受到重创或被控，手中的【冥驹】掉落了！经济大幅衰退！`);
-    }
-
-    if (sk.tag === this.SKILL_TAGS['PHYS'] && tgt.status.some((s) => s.type === 'COUNTER')) {
-      this.log('crit', `💢 ${tgt.name} 触发反击！将 ${actualDmg} 点伤害弹回给了 ${usr.name}！`);
-      this.applyDamage(usr, actualDmg, 'reflect');
-      if (usr.currentHp <= 0 && !usr.isDeadAnnounced && !usr.isDead) {
-        this.log('death', `💀 ${usr.name} 被自己造成的反弹伤害反死了！`);
-        usr.isDeadAnnounced = true;
-        tgt.stats.kills += 1;
-      }
-    }
+    this.handleValorantWeaponDrop(tgt, actualDmg);
+    this.handlePhysicalCounterReflect(sk, usr, tgt, actualDmg);
+    this.consumeAimAfterAttack(usr, sk);
 
     usr.stats.dmgDealt += actualDmg;
-    if (tgt.currentHp <= 0 && !tgt.isDeadAnnounced && !tgt.isDead) {
-      this.log('death', `💀 【击杀】${tgt.name} 被 ${usr.name} 的攻击无情抹杀！`);
-      tgt.isDeadAnnounced = true;
-      usr.stats.kills += 1;
-      if (usr.job === 'VALO_JUNIOR') {
-        usr.economy = (usr.economy ?? 0) + 2;
-        usr.ultPoints = (usr.ultPoints ?? 0) + 1;
-        this.log('info', `💰 ${usr.name} 拿到击杀！大招充能+1，经济大幅增长(+2)！`);
-      }
-    }
+    this.handlePrimaryTargetDefeat(usr, tgt);
 
-    const lsPct =
-      (sk.lifesteal ?? 0) +
-      (usr.status.some((s) => s.type === 'PLUG_HEAD') ? 0.25 : 0) +
-      (usr.status.some((s) => s.type === 'VALO_ULT_EMPRESS') ? 1.0 : 0) +
-      (usr.status.some((s) => s.type === 'STYLE_SMART' || s.type === 'STYLE_EMPEROR') ? 0.5 : 0);
-    if (lsPct > 0 && actualDmg > 0 && this.isActiveCombatant(usr)) {
-      if (usr.status.some((s) => s.type === 'NO_HEAL')) {
-        this.log('info', `🥀 ${usr.name} 处于禁疗状态，无法触发吸血被动！`);
-      } else {
-        const healBase = Math.min(hpBeforeDamage, actualDmg);
-        const healAmt = Math.floor(healBase * lsPct);
-        if (healAmt > 0) {
-          const healed = healFighter(usr, healAmt);
-          if (healed > 0) this.log('heal', `💉 ${usr.name} 触发吸血被动，恢复了 ${healed} 点生命！`);
-        }
-      }
-    }
-
-    if (usr.isSuccubus && usr.transformed && skId?.startsWith('chimera_') && skId !== 'chimera_install') {
-      const baby = this.fighters.find((f) => f.job === 'MY_BABY' && this.isActiveCombatant(f) && this.getTeamId(f) === userTeamId);
-      if (baby) {
-        const synMap: Record<string, string> = {
-          'chimera_devour': 'baby_feed', 'chimera_execute': 'baby_laser',
-          'chimera_funnels': 'baby_satellite', 'chimera_reconstruct': 'baby_cheer',
-          'chimera_petrify': 'baby_scan', 'chimera_fortress': 'baby_shield',
-          'chimera_warp': 'baby_speed', 'chimera_plague': 'baby_poison',
-        };
-        const synSkill = synMap[skId];
-        if (synSkill) {
-          const synSkillDef = this.SKILLS[synSkill];
-          const isHealOrBuff = synSkillDef && (synSkillDef.tag === this.SKILL_TAGS['HEAL'] || synSkillDef.tag === this.SKILL_TAGS['BUFF']);
-          this.executeSkillAction(synSkill, baby, isHealOrBuff ? usr : tgt, triggerDepth + 1);
-        }
-      }
-    }
+    this.applyLifestealEffects(usr, sk, actualDmg, hpBeforeDamage);
+    this.triggerSuccubusBabyFollowup(usr, tgt, skId, userTeamId, triggerDepth);
 
     // Transformation check fires immediately after damage so HP is restored at once
     this.handleTransformations(tgt);

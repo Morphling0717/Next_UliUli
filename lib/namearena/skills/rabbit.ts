@@ -147,9 +147,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       }
 
       if (ctx.target.currentHp <= 0 && !ctx.target.isDeadAnnounced && !ctx.target.isDead) {
-        ctx.log('death', `💀 【击杀】${ctx.target.name} 承受不住这极其离谱的计算器魔法，当场暴毙！`);
-        ctx.target.isDeadAnnounced = true;
-        ctx.user.stats.kills += 1;
+        ctx.markDefeated(ctx.target, { message: `💀 【击杀】${ctx.target.name} 承受不住这极其离谱的计算器魔法，当场暴毙！`, killer: ctx.user });
       }
 
       ctx.user.spd = Math.floor(ctx.user.spd * 1.15);
@@ -169,8 +167,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         const actualDmg = ctx.applyDamage(ctx.user, 9999, 'skill', true);
         ctx.log('win', `⚡ 【弑神反噬】警告！！${ctx.user.name} 试图篡改神明【${ctx.target.name}】的数据！\n神明的绝对威压免疫了归零，降下神罚之雷，造成了 ${actualDmg} 点真实伤害！`);
         if (ctx.user.currentHp <= 0) {
-          ctx.user.isDeadAnnounced = true;
-          ctx.log('death', `💀 【天谴】${ctx.user.name} 遭到反噬，被劈得灰飞烟灭！`);
+          ctx.markDefeated(ctx.user, { message: `💀 【天谴】${ctx.user.name} 遭到反噬，被劈得灰飞烟灭！`, awardKill: false });
         }
         return true;
       }
@@ -296,11 +293,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         !ctx.target.transformed
       ) {
         setCurrentHp(ctx.target, 0);
-        if (!ctx.target.isDeadAnnounced) {
-          ctx.target.isDeadAnnounced = true;
-          ctx.user.stats.kills += 1;
-          ctx.log('death', `☠️ 【斩杀处决】处于暴躁女人的极怒状态，${ctx.user.name} 用计算器将残血的 ${ctx.target.name} 直接砸成了肉泥！`);
-        }
+        ctx.markDefeated(ctx.target, { message: `☠️ 【斩杀处决】处于暴躁女人的极怒状态，${ctx.user.name} 用计算器将残血的 ${ctx.target.name} 直接砸成了肉泥！`, killer: ctx.user, setHpZero: false });
       }
     },
   },
@@ -357,9 +350,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           e.status.push({ type: 'STUN', duration: 1 });
         }
         if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {
-          ctx.log('death', `💀 【击杀】${e.name} 被魔音贯耳，大脑宕机而亡！`);
-          e.isDeadAnnounced = true;
-          ctx.user.stats.kills += 1;
+          ctx.markDefeated(e, { message: `💀 【击杀】${e.name} 被魔音贯耳，大脑宕机而亡！`, killer: ctx.user });
         }
       });
 

@@ -72,11 +72,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     afterExecute: (ctx) => {
       if (ctx.target.currentHp > 0 && ctx.target.hpPct < 0.35 && !ctx.target.transformed) {
         setCurrentHp(ctx.target, 0);
-        if (!ctx.target.isDeadAnnounced) {
-          ctx.target.isDeadAnnounced = true;
-          ctx.user.stats.kills += 1;
-          ctx.log('death', `☠️ 【弹药架殉爆】轰！！！T-58 的动能直接引爆了 ${ctx.target.name} 的弹药架！炮塔被炸飞了十几米高！完成极硬核斩杀！`);
-        }
+        ctx.markDefeated(ctx.target, { message: `☠️ 【弹药架殉爆】轰！！！T-58 的动能直接引爆了 ${ctx.target.name} 的弹药架！炮塔被炸飞了十几米高！完成极硬核斩杀！`, killer: ctx.user, setHpZero: false });
       }
     },
   },
@@ -116,17 +112,11 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         if (e.currentHp > 0 && e.hpPct < 0.3) {
           setCurrentHp(e, 0);
-          if (!e.isDeadAnnounced && !e.isDead) {
-            e.isDeadAnnounced = true;
-            ctx.user.stats.kills += 1;
-            ctx.log('death', `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`);
-          }
+          ctx.markDefeated(e, { message: `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`, killer: ctx.user, setHpZero: false });
         }
 
         if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {
-          ctx.log('death', `💀 【CAS击杀】${e.name} 被苏-30SM2的航弹炸回了机库！`);
-          e.isDeadAnnounced = true;
-          ctx.user.stats.kills += 1;
+          ctx.markDefeated(e, { message: `💀 【CAS击杀】${e.name} 被苏-30SM2的航弹炸回了机库！`, killer: ctx.user });
         }
       });
       return true;
