@@ -1,0 +1,52 @@
+import type { BattleEngineData, Fighter, GachaEntry, SkillDefinition } from './types';
+
+export interface SkillResolutionRuntime {
+  skills: Record<string, SkillDefinition>;
+  data: BattleEngineData;
+  log: (type: string, text: string) => void;
+}
+
+export function resolveSkillDefinition(
+  runtime: SkillResolutionRuntime,
+  skillId: string | null,
+  user: Fighter,
+): SkillDefinition {
+  let skill: SkillDefinition | null = skillId ? runtime.skills[skillId] : null;
+
+  if (skillId === 'chimera_install' && skill?.pool) {
+    const gachaPool = skill.pool as GachaEntry[];
+    const availablePlugs = gachaPool.filter((plug) => !plug.newSkill || !user.jobData.skills.includes(plug.newSkill));
+    if (availablePlugs.length > 0) {
+      skill = { ...skill, pool: availablePlugs };
+    } else {
+      user.jobData.skills = user.jobData.skills.filter((id) => id !== 'chimera_install');
+      skill = null;
+    }
+  }
+
+  if (!skill) {
+    skill = (user.mag > user.atk && Math.random() < (0.5 + user.wis * 0.002))
+      ? { name: '魔力攻击', tag: 'magical', mult: 1.0, text: '{USER} 凝聚魔力攻击 {TARGET}，造成 {VAL} 魔法伤害。' }
+      : { name: '普通攻击', tag: 'physical', mult: 1.0, text: '{USER} 攻击了 {TARGET}，造成 {VAL} 伤害。' };
+  }
+
+  if (skill.isGacha && skill.pool) {
+    const exodiaChance = user.jobData?.name === '欧皇' ? 0.05 : 0.006;
+    const pool = skill.pool as GachaEntry[];
+    if (pool === runtime.data.GACHA_SSR_POOL && Math.random() < exodiaChance) {
+      skill = { ...skill, ...runtime.data.EXODIA_CARD };
+      runtime.log('win', `👑 欧皇时刻！${user.name} 触发了 5% 的保底机制！`);
+    } else {
+      skill = { ...skill, ...pool[Math.floor(Math.random() * pool.length)] };
+    }
+  }
+
+  return skill;
+}
+
+export function formatSkillText(skill: SkillDefinition, text: string): string {
+  if (skill.name && skill.name !== '普通攻击' && skill.name !== '魔力攻击' && text && !text.includes('【')) {
+    return text.replace('{USER}', `【${skill.name}】{USER}`);
+  }
+  return text;
+}

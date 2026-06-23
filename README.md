@@ -19,7 +19,7 @@
 - 🔓 **隐藏内容解锁**：`DEV_UNLOCK_PASSWORD` 解锁后切换到隐藏视频 (`/video/2.mp4`) 和隐藏歌单。
 - 🛠 **Admin 后台**：`/admin` 登录后可编辑 SITE_CONFIG、歌单、上传图片到 `/public/memes`、`/public/pic`。
 - 🕹 **双游戏大厅**：`GameModal` 内置 **Name Arena** 与 **欲望大奖赛（DGP）** 两个入口，游戏大厅文案可在 Admin 的 `games` 配置中调整。
-- ⚔️ **Name Arena**：`lib/namearena/` 下的文字战斗引擎（battleEngine / skills / jobs / data，独立子系统）。
+- ⚔️ **Name Arena**：`lib/namearena/` 下的文字战斗引擎（battleEngine / skills / jobs / data，独立子系统）。维护入口见 [`docs/NAMEARENA_MAINTENANCE.md`](docs/NAMEARENA_MAINTENANCE.md)。
 - 🏁 **DGP（欲望大奖赛）**：`components/dgp/` + `lib/dgp/` 下的生存战斗模拟器，支持可选 `SIMULATION_SEED`；相同 seed + 相同初始阵容可复现同一场对局日志 / 回放。
 - 👥 **用户系统**：注册 / 登录（PBKDF2 + salt）、token 保存抽卡进度到 SQLite。
 - 📬 **匿名发信箱 MAIL_BOX**：基于 `@windchime/embed` 包集成的匿名留言系统。访客从主页左下 SpeedDial 投信，经 **Cloudflare Turnstile** 人机校验 + 前后端双层限流（fingerprint / IP）+ 敏感词过滤，进入后台 `/mail` 管理。所有访客可见文案可在 Admin `/admin · 发信箱` tab 自由编辑。
@@ -72,6 +72,9 @@ npm run dev
 | `npm run build`      | 生产构建                                                |
 | `npm run start`      | 启动生产服务（需先 `npm run build`）                    |
 | `npm run lint`       | ESLint 9 代码检查                                       |
+| `npm run test:namearena` | Name Arena 快速回归 + 规则契约校验                  |
+| `npm run test:namearena:stress` | Name Arena 大型特殊角色组合压力测试          |
+| `npm run test:namearena:compare` | Name Arena 重构前后 A/B 日志对比工具         |
 | `npm run clean`      | 清理 `.next` / `out` / `build` / `node_modules`         |
 
 ---

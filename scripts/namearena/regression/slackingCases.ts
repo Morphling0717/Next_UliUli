@@ -1,0 +1,82 @@
+import type { Fighter } from '../../../lib/namearena/types';
+import {
+  applySlacking,
+  assert,
+  assertUnchanged,
+  localProject,
+  makeEngine,
+  makeFighter,
+  snapshot,
+  withSeed,
+  type BattleEngineInstance,
+  type LogEntry,
+} from '../shared/harness';
+
+type SlackingAction = (engine: BattleEngineInstance, attacker: Fighter, sigua: Fighter) => void;
+
+export function runSlackingIsolation(): string[] {
+  const cases: string[] = [];
+
+  function actionCase(label: string, action: SlackingAction): void {
+    const logs: LogEntry[] = [];
+    const attacker = makeFighter('M1A2_abrams_sep@attacker');
+    const sigua = applySlacking(makeFighter('丝瓜uli@away'));
+    const bunny = applySlacking(makeFighter('兔卷卷@away'));
+    const dummy = makeFighter('测试靶子@away');
+    const fighters = localProject.cloneFighters([attacker, sigua, bunny, dummy]);
+    const before = snapshot(fighters.filter((fighter) => fighter.name === '丝瓜uli' || fighter.name === '兔卷卷'));
+    const engine = makeEngine(fighters, logs);
+    const siguaTarget = engine.fighters.find((fighter) => fighter.name === '丝瓜uli');
+    assert(siguaTarget, 'missing slacking sigua target');
+    action(engine, engine.fighters[0], siguaTarget);
+    assertUnchanged(before, engine.fighters, ['丝瓜uli', '兔卷卷']);
+    const joined = logs.map((entry) => entry.text).join('\n');
+    assert(!/丝瓜uli.*承受|兔卷卷.*承受|对 丝瓜uli|对 兔卷卷|攻击了 丝瓜uli|攻击了 兔卷卷/.test(joined), `${label} hit a slacking fighter:\n${joined}`);
+    cases.push(label);
+  }
+
+  actionCase('forced single-target skill cannot hit slacking target', (engine, attacker, sigua) => {
+    engine.executeSkillAction('wt_t58_knockup', attacker, sigua);
+  });
+  actionCase('su30 cas excludes slacking fighters', (engine, attacker) => {
+    engine.executeSkillAction('wt_su30_cas', attacker);
+  });
+  actionCase('megaphone excludes slacking fighters', (engine, attacker) => {
+    engine.executeSkillAction('v_rabbit_megaphone', attacker);
+  });
+
+  {
+    const logs: LogEntry[] = [];
+    const attacker = makeFighter('M1A2_abrams_sep@attacker');
+    const sigua = applySlacking(makeFighter('丝瓜uli@away'));
+    const bunny = applySlacking(makeFighter('兔卷卷@away'));
+    const fighters = localProject.cloneFighters([attacker, sigua, bunny]);
+    const before = snapshot(fighters.filter((fighter) => fighter.name === '丝瓜uli' || fighter.name === '兔卷卷'));
+    const engine = makeEngine(fighters, logs);
+    engine.executeSkillAction('wt_t58_knockup', engine.fighters[0], engine.fighters[1]);
+    assertUnchanged(before, engine.fighters, ['丝瓜uli', '兔卷卷']);
+    assert(logs.length === 0, `only slacking enemies should produce no attack logs:\n${logs.map((entry) => entry.text).join('\n')}`);
+    cases.push('only slacking enemies means no valid target');
+  }
+
+  ['丝瓜uli', '兔卷卷'].forEach((name, index) => {
+    const logs: LogEntry[] = [];
+    const away = applySlacking(makeFighter(`${name}@away`));
+    away.spd = 10000;
+    const enemyA = makeFighter(`测试敌人${index}A@a`);
+    const enemyB = makeFighter(`测试敌人${index}B@b`);
+    const fighters = localProject.cloneFighters([away, enemyA, enemyB]);
+    const before = snapshot([fighters[0]]);
+    withSeed(1, () => {
+      const engine = makeEngine(fighters, logs);
+      engine.step({ current: false });
+      assertUnchanged(before, engine.fighters, [name], { checkStatus: false });
+      const joined = logs.map((entry) => entry.text).join('\n');
+      assert(joined.includes(`${name} 正在场外OB摸鱼，暂时不参与战斗`), `${name} did not skip while slacking:\n${joined}`);
+      assert(!new RegExp(`${name}.*(攻击|凝聚魔力|计算器|萌兔出击|歌姬演唱)`).test(joined), `${name} acted while slacking:\n${joined}`);
+    });
+    cases.push(`${name} skips own turn while slacking`);
+  });
+
+  return cases;
+}
