@@ -120,6 +120,51 @@ export function runStatusClockCases(): string[] {
   }
 
   {
+    const counterCases = [
+      { type: 'CTR_CHARM', label: '魅惑反击', appliedStatus: 'CHARMED' },
+      { type: 'CTR_STUN', label: '震慑反击', appliedStatus: 'STUN' },
+      { type: 'CTR_DRAIN', label: '汲取反击' },
+      { type: 'CTR_POISON', label: '剧毒反击', appliedStatus: 'POISON' },
+      { type: 'CTR_BURN', label: '烈焰反击', appliedStatus: 'BURN' },
+      { type: 'CTR_FREEZE', label: '极寒反击', appliedStatus: 'FREEZE' },
+      { type: 'CTR_VOID', label: '虚空反击' },
+      { type: 'CTR_WEAK', label: '虚弱反击' },
+      { type: 'CTR_CONFUSE', label: '混乱反击', appliedStatus: 'CONFUSED' },
+      { type: 'CTR_EXECUTE', label: '断头反击' },
+    ];
+
+    counterCases.forEach((counterCase) => {
+      const attacker = makeFighter(`反击日志攻击者-${counterCase.type}@A`);
+      const target = makeFighter(`反击日志持有者-${counterCase.type}@B`);
+      attacker.atk = 100;
+      attacker.agl = 10000;
+      attacker.maxHp = 100000;
+      localProject.setCurrentHp(attacker, 100000);
+      target.maxHp = 100000;
+      localProject.setCurrentHp(target, 100000);
+      target.status.push({ type: counterCase.type, duration: 5 });
+
+      const { engine, logs } = makeDeathEngine([attacker, target]);
+      engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
+      const joinedLogs = logs.map((entry) => entry.text).join('\n');
+
+      assert(
+        joinedLogs.includes(`【${counterCase.label}】`) &&
+          joinedLogs.includes(engine.fighters[0].name) &&
+          joinedLogs.includes(engine.fighters[1].name),
+        `${counterCase.type} should log its concrete counter outcome with both fighters`,
+      );
+      if (counterCase.appliedStatus) {
+        assert(
+          engine.fighters[0].status.some((status) => status.type === counterCase.appliedStatus),
+          `${counterCase.type} should apply ${counterCase.appliedStatus} to the attacker`,
+        );
+      }
+    });
+    cases.push('CTR counter statuses log concrete outcomes');
+  }
+
+  {
     const slacker = makeFighter('丝瓜uli@S');
     const enemyA = makeFighter('摸鱼旁观A@A');
     const enemyB = makeFighter('摸鱼旁观B@B');
