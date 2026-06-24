@@ -46,7 +46,7 @@ yarn-error.log*
 next-env.d.ts
 
 # local runtime data
-data/
+/data/
 backups/
 codes.db
 *.db
