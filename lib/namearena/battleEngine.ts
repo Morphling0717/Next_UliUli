@@ -1,5 +1,6 @@
 import type {
   Fighter,
+  DamageApplicationOptions,
   JobDefinition,
   SkillDefinition,
   SkillContext,
@@ -107,6 +108,30 @@ import {
   triggerGachaDeathSave,
 } from './gachaMechanics';
 
+const DAMAGE_SOURCE_LABELS: Record<string, string> = {
+  skill: '技能伤害',
+  status: '状态伤害',
+  counter: '反击伤害',
+  reflect: '反弹伤害',
+  transfer: '转移伤害',
+};
+
+function getDamageSourceLabel(source: string): string {
+  return DAMAGE_SOURCE_LABELS[source] ?? `${source}伤害`;
+}
+
+function formatFallbackDeathMessage(fighter: Fighter): string {
+  const lastDamage = fighter.lastDamage;
+  if (!lastDamage || lastDamage.amount <= 0) {
+    return `💀 ${fighter.name} 生命归零，倒在了战场上！`;
+  }
+
+  const sourceText = lastDamage.attackerName
+    ? `${lastDamage.attackerName} 的${lastDamage.sourceLabel}`
+    : lastDamage.sourceLabel;
+  return `💀 ${fighter.name} 因 ${sourceText}（${lastDamage.amount}点）倒下了！`;
+}
+
 export class BattleEngine {
   fighters: Fighter[];
   addLogCallback: (e: { type: string; text: string }) => void;
@@ -117,6 +142,7 @@ export class BattleEngine {
   STATUS_EFFECTS: StatusEffectsMap;
   SKILL_TAGS: Record<string, string>;
   turnCount: number;
+  activeSpinalSwordRef?: SpinalSwordRef;
 
   constructor(
     fighters: Fighter[],
@@ -140,6 +166,22 @@ export class BattleEngine {
 
   log(type: string, text: string): void {
     this.addLogCallback({ type, text });
+  }
+
+  queueOrLogDamageEvent(target: Fighter, options: DamageApplicationOptions, type: string, text: string): void {
+    if (options.deferTransform) {
+      target.pendingDamageEvents = target.pendingDamageEvents ?? [];
+      target.pendingDamageEvents.push({ type, text });
+      return;
+    }
+    this.log(type, text);
+  }
+
+  flushDeferredDamageEvents(fighter: Fighter): void {
+    const pendingEvents = fighter.pendingDamageEvents ?? [];
+    delete fighter.pendingDamageEvents;
+    pendingEvents.forEach((event) => this.log(event.type, event.text));
+    this.handleTransformations(fighter);
   }
 
   syncHpPct(f: Fighter): void {
@@ -196,7 +238,14 @@ export class BattleEngine {
     return buildTurnFlowRuntime(this);
   }
 
-  applyDamage(target: Fighter, amount: number, source: string, isTrueDamage = false, attacker?: Fighter): number {
+  applyDamage(
+    target: Fighter,
+    amount: number,
+    source: string,
+    isTrueDamage = false,
+    attacker?: Fighter,
+    options: DamageApplicationOptions = {},
+  ): number {
     if (amount <= 0 || target.isDead || target.currentHp <= 0) return 0;
     if (target.status.some((s) => s.type === 'SYNERGY_SLACKING')) return 0;
 
@@ -211,7 +260,7 @@ export class BattleEngine {
         this.syncHpPct(target);
         return 0;
       }
-      this.log('info', `🛡️ ${target.name} 触发了锁血保护，强制保留最后 1 点生命！`);
+      this.queueOrLogDamageEvent(target, options, 'info', `🛡️ ${target.name} 触发了锁血保护，强制保留最后 1 点生命！`);
     }
 
     if (source !== 'transfer' && target.job === 'GOD_OF_TROLLS' && amount > 0 && Math.random() < 0.40) {
@@ -232,8 +281,16 @@ export class BattleEngine {
         if (enemies.length > 0) {
           const victim = enemies[Math.floor(Math.random() * enemies.length)];
           this.log('crit', `🎭 【随机恶作剧】${target.name} 施展魔术完美闪避！并将伤害转移给了倒霉的 ${victim.name}！`);
-          const transferredDmg = this.applyDamage(victim, originalAmount, 'transfer', isTrueDamage, attacker);
+          const transferredDmg = this.applyDamage(victim, originalAmount, 'transfer', isTrueDamage, attacker, { deferTransform: true });
           this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，实际承受 ${transferredDmg} 点伤害！`);
+          if (transferredDmg > 0) this.flushDeferredDamageEvents(victim);
+          if (victim.currentHp <= 0 && !victim.isDead && !victim.isDeadAnnounced) {
+            const transferKiller = attacker && attacker.id !== victim.id ? attacker : target;
+            this.markDefeated(victim, {
+              message: `💀 【伤害转移】${victim.name} 被 ${target.name} 的随机恶作剧转移来的 ${transferredDmg} 点伤害坑倒了！`,
+              killer: transferKiller,
+            });
+          }
         } else {
           this.log('info', `🎭 【随机恶作剧】${target.name} 像个泥鳅一样躲开了 ${originalAmount} 点伤害！`);
         }
@@ -243,6 +300,16 @@ export class BattleEngine {
     const hpBeforeDamage = target.currentHp;
     target.currentHp -= amount;
     target.stats.dmgTaken += amount;
+    if (amount > 0) {
+      target.lastDamage = {
+        amount,
+        source,
+        sourceLabel: getDamageSourceLabel(source),
+        attackerId: attacker?.id,
+        attackerName: attacker?.name,
+        turn: this.turnCount,
+      };
+    }
     if (isLuckEmperor(target) && amount > 0) {
       if (amount >= target.maxHp * 0.2) {
         grantGachaLuck(target, 1, (type, text) => this.log(type, text), '承受重创');
@@ -280,9 +347,7 @@ export class BattleEngine {
     this.syncHpPct(target);
     if (amount > 0) {
       target.isHit = true;
-      // Check transformation immediately after every damage application so it fires
-      // regardless of which code path (onExecute skill, counter, reflect, DoT, etc.) caused the damage.
-      this.handleTransformations(target);
+      if (!options.deferTransform) this.handleTransformations(target);
     }
     return amount;
   }
@@ -294,6 +359,7 @@ export class BattleEngine {
     if (options.setHpZero ?? true) setCurrentHp(target, 0);
     if (options.message) this.log(options.logType ?? 'death', options.message);
     target.isDeadAnnounced = true;
+    this.runDefeatHooksOnce(target);
 
     const shouldAwardKill = options.awardKill ?? true;
     if (shouldAwardKill && options.killer && options.killer.id !== target.id) {
@@ -301,6 +367,16 @@ export class BattleEngine {
     }
 
     return true;
+  }
+
+  runDefeatHooksOnce(fighter: Fighter, spinalSwordRef = this.activeSpinalSwordRef): void {
+    if (!spinalSwordRef || fighter.defeatHooksResolved) return;
+    fighter.defeatHooksResolved = true;
+    runCharacterDefeatHooks({
+      fighter,
+      runtime: this.createCharacterHookRuntime(),
+      spinalSwordRef,
+    });
   }
 
   finalizeFighterDeath(
@@ -320,14 +396,16 @@ export class BattleEngine {
       return;
     }
 
-    if (!this.markDefeated(f, { message: deathMessage ?? `💀 ${f.name} 伤重不治倒下了...`, killer })) {
+    if (!this.markDefeated(f, { message: deathMessage ?? formatFallbackDeathMessage(f), killer })) {
       setCurrentHp(f, 0);
     }
     f.isDead = true;
+    this.runDefeatHooksOnce(f, spinalSwordRef);
 
     const MORPHLING_SON = this.JOBS['MORPHLING_SON'];
     if (f.isGamer && !f.resurrected && this.fighters.some((cf) => cf.isMorphling && this.isActiveCombatant(cf)) && MORPHLING_SON) {
       f.isDead = false;
+      f.defeatHooksResolved = false;
       f.resurrected = true;
       f.isSon = true;
       f.jobData = cloneJobDefinition(MORPHLING_SON);
@@ -341,13 +419,6 @@ export class BattleEngine {
       f.status = [];
       f.isDeadAnnounced = false;
       this.log('buff', `👶 ${f.name} 并没有死！他被水人救起，清除了负面状态并转职为【${MORPHLING_SON.name}】！`);
-    }
-    if (f.isDead) {
-      runCharacterDefeatHooks({
-        fighter: f,
-        runtime: this.createCharacterHookRuntime(),
-        spinalSwordRef,
-      });
     }
   }
 
@@ -677,6 +748,7 @@ export class BattleEngine {
   }
 
   step(spinalSwordRef: SpinalSwordRef): boolean {
+    this.activeSpinalSwordRef = spinalSwordRef;
     this.fighters.forEach((f) => { f.isActing = false; f.isHit = false; });
 
     const alive = this.fighters.filter((f) => this.isActiveCombatant(f));

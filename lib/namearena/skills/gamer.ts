@@ -96,6 +96,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
         } else {
           ctx.log('info', `🎮 连招扫到 ${enemy.name}，但没有造成实际伤害！`);
         }
+        ctx.flushDeferredDamageEvents?.();
         if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
           ctx.markDefeated(enemy, { message: `💀 【团战收割】${enemy.name} 被玄凝的多线操作打崩了！`, killer: ctx.user });
         }
@@ -124,6 +125,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       } else {
         ctx.log('info', `🎮 【处决QTE】${ctx.user.name} 消耗 4 APM 打出完美输入，但 ${ctx.target.name} 没有承受实际伤害！`);
       }
+      ctx.flushDeferredDamageEvents?.();
       if (ctx.target.currentHp <= 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
         ctx.markDefeated(ctx.target, { message: `💀 【QTE处决】${ctx.target.name} 被玄凝一套操作带走！`, killer: ctx.user });
       }
@@ -170,6 +172,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       const healText = healed > 0 ? `恢复 ${healed} 点生命` : '治疗溢出';
       const damageText = actualDmg > 0 ? `并对 ${ctx.target.name} 打出 ${actualDmg} 点真实反打伤害` : `但没有对 ${ctx.target.name} 造成实际伤害`;
       ctx.log(actualDmg > 0 ? 'crit' : 'info', `🏅 【1vX残局】${ctx.user.name} 消耗 3 APM 清掉异常、${healText}，${damageText}！`);
+      ctx.flushDeferredDamageEvents?.();
       if (ctx.target.currentHp <= 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
         ctx.markDefeated(ctx.target, { message: `💀 【残局收割】${ctx.target.name} 被玄凝的残局处理带走！`, killer: ctx.user });
       }
@@ -191,6 +194,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       } else {
         ctx.log('info', `🏆 【世界赛名场面】${ctx.user.name} 消耗 6 APM 打出高光操作，但 ${ctx.target.name} 没有承受实际伤害！`);
       }
+      ctx.flushDeferredDamageEvents?.();
       const splash = Math.floor(primary * 0.25);
       (ctx.currentTargets ?? [])
         .filter((enemy) => enemy.id !== ctx.target.id && enemy.currentHp > 0)
@@ -203,6 +207,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
           } else {
             ctx.log('info', `🏆 名场面余波波及 ${enemy.name}，但没有造成实际伤害！`);
           }
+          ctx.flushDeferredDamageEvents?.();
           if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
             ctx.markDefeated(enemy, { message: `💀 【名场面收割】${enemy.name} 被玄凝的世界赛操作带走！`, killer: ctx.user });
           }

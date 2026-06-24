@@ -77,6 +77,10 @@ export function executeSkillAction(
     isActiveCombatant: runtime.isActiveCombatant,
     log: (type, text) => runtime.log(type, text),
   }, skillId, user);
+  const incomingActionName = skill.name ?? '攻击';
+  if (isIntercepted) {
+    interceptionLabel = `【援护】${target.name} 冲了出来，替宿主挡下了 ${user.name} 的【${incomingActionName}】`;
+  }
   const formatText = (text: string): string => formatSkillText(skill, text);
 
   if (skillId === 'bujin_chair' && !user.isTokusatsu) {
@@ -94,8 +98,32 @@ export function executeSkillAction(
     return;
   }
 
-  const skillCtx = createSkillContext(runtime, user, target, currentTargets, triggerDepth);
-  if (skill.onExecute && skill.onExecute(skillCtx)) return;
+  const deferredTransformTargets: Fighter[] = [];
+  const trackDeferredDamageTarget = (fighter: Fighter) => {
+    if (!deferredTransformTargets.some((targetCandidate) => targetCandidate.id === fighter.id)) {
+      deferredTransformTargets.push(fighter);
+    }
+  };
+  const flushDeferredDamageEvents = () => {
+    while (deferredTransformTargets.length > 0) {
+      const damagedTarget = deferredTransformTargets.shift();
+      if (damagedTarget) runtime.flushDeferredDamageEvents(damagedTarget);
+    }
+  };
+
+  const skillCtx = createSkillContext(
+    runtime,
+    user,
+    target,
+    currentTargets,
+    triggerDepth,
+    trackDeferredDamageTarget,
+    flushDeferredDamageEvents,
+  );
+  if (skill.onExecute && skill.onExecute(skillCtx)) {
+    flushDeferredDamageEvents();
+    return;
+  }
 
   if (skill.tag !== runtime.skillTags.HEAL && skill.tag !== runtime.skillTags.BUFF && target.status.some((status) => status.type === 'SPELL_BLOCK')) {
     target.status = target.status.filter((status) => status.type !== 'SPELL_BLOCK');
@@ -137,7 +165,7 @@ export function executeSkillAction(
       runtime.log('info', `🛡️ 致命一击袭来！但在命中的瞬间，${target.name} 与【水人的好大儿】互换了位置！好大儿化作一滩清水替水神挡下了必杀！`);
       target = sonProtector;
       isIntercepted = true;
-      interceptionLabel = `【换位援护】${target.name} 化作一滩清水，替水神挡下了 ${user.name} 的攻击`;
+      interceptionLabel = `【换位援护】${target.name} 化作一滩清水，替水神挡下了 ${user.name} 的【${incomingActionName}】`;
       preMitigationDmg = Math.floor(dmg * 0.5);
     }
   }
@@ -146,7 +174,7 @@ export function executeSkillAction(
   const hpBeforeDamage = target.currentHp;
 
   if (isIntercepted) {
-    runtime.log('info', `🛡️ ${interceptionLabel}！预计受到 ${preMitigationDmg} 点伤害！(减伤50%)`);
+    runtime.log('info', `🛡️ ${interceptionLabel}！准备承受 ${preMitigationDmg} 点伤害！(减伤50%)`);
   } else {
     let msg = formatText(skill.text ?? '');
     if (skill.isRandomText && skill.pool) {
@@ -163,7 +191,18 @@ export function executeSkillAction(
   applyAttackerStyleEffects(runtime, user, target);
   applySkillStatusEffect(runtime, skill, target);
 
-  const actualDmg = runtime.applyDamage(target, preMitigationDmg, 'skill', !!ignoreDefOverride || sexyTrueDamage, user);
+  const actualDmg = runtime.applyDamage(
+    target,
+    preMitigationDmg,
+    'skill',
+    !!ignoreDefOverride || sexyTrueDamage,
+    user,
+    isIntercepted ? { deferTransform: true } : undefined,
+  );
+  if (isIntercepted) {
+    runtime.log('info', `🛡️ ${interceptionLabel}，实际承受 ${actualDmg} 点伤害！`);
+    if (actualDmg > 0) runtime.flushDeferredDamageEvents(target);
+  }
   if (preMitigationDmg > 0 && actualDmg !== preMitigationDmg && runtime.isActiveCombatant(target)) {
     runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
   }
@@ -181,5 +220,8 @@ export function executeSkillAction(
   // Transformation check fires immediately after damage so HP is restored at once
   runtime.handleTransformations(target);
   runtime.handleTransformations(user);
-  if (skill.afterExecute) skill.afterExecute(skillCtx, actualDmg, hpBeforeDamage);
+  if (skill.afterExecute) {
+    skill.afterExecute(skillCtx, actualDmg, hpBeforeDamage);
+    flushDeferredDamageEvents();
+  }
 }

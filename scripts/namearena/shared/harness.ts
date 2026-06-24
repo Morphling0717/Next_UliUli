@@ -282,21 +282,134 @@ export function sanitizeFileName(text: string): string {
 export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] = []): LogIssue[] {
   const issues: LogIssue[] = [];
   const activeSlacking = new Set<string>();
-  const names = [...new Set([...rosterNames, '小汀(傀儡)', '史瓦罗', '克拉拉', '钟离'])];
+  const names = [...new Set([...rosterNames, ...SPECIALS, '小汀(傀儡)', '史瓦罗', '克拉拉', '钟离'])];
+  const orderedNames = [...names].sort((a, b) => b.length - a.length);
+  const mentionedName = (value: string): string | undefined => orderedNames.find((name) => value.includes(name));
+  const parseDeathVictim = (value: string): string | undefined => {
+    const match = value.match(/^(?:💀|☠️) (?:【[^】]+】)?(.+?) (?:被|因|承受不住|遭到|跌入|化为|化为了)/);
+    if (!match?.[1]) return undefined;
+    return orderedNames.find((name) => match[1]?.includes(name));
+  };
   const patterns: Array<[string, RegExp]> = [
     ['nan-or-undefined', /\b(?:NaN|undefined|null)\b/],
     ['negative-number-log', /(?:造成|承受|恢复|损失)了? -\d/],
     ['zero-damage-control', /(?:承受了|造成了|实际造成) 0 点.*(?:并被|并深度|并使其|并施加|眩晕|魅惑|击飞|中毒|灼烧|沉默|混乱)/],
     ['duplicate-damage-type', /物理\(物理\)|魔法\(魔法\)/],
+    ['legacy-generic-death', /伤重不治倒下了/],
+    ['death-without-cause', /生命归零，倒在了战场上/],
+    ['legacy-ting-double-death-text', /倒下了，但他拔出了/],
   ];
   let expectWaterSonInterceptLine = 0;
+  const pendingCounterOutcomes: Array<{ counterName: string; line: number; text: string; deadline: number }> = [];
+  const pendingInterceptions: Array<{ targetName: string; line: number; text: string; deadline: number }> = [];
+  const recentDeaths: Array<{ name: string; line: number; text: string; deadline: number }> = [];
 
   logs.forEach((entry, index) => {
     const line = index + 1;
     const text = entry.text;
+    for (let i = recentDeaths.length - 1; i >= 0; i -= 1) {
+      const recentDeath = recentDeaths[i];
+      if (!recentDeath) continue;
+      const namePattern = escapeRegExp(recentDeath.name);
+      if (text.includes(recentDeath.name) && /复活|从地狱归来|并没有死|浴火重生/.test(text)) {
+        recentDeaths.splice(i, 1);
+      } else if (line <= recentDeath.deadline && new RegExp(`${namePattern} (?:受到持续伤害|在深渊水牢中窒息)`).test(text)) {
+        issues.push({ label, line, type: 'status-tick-after-death', text: `${recentDeath.text}\nNEXT: ${text}`, name: recentDeath.name });
+        recentDeaths.splice(i, 1);
+      } else if (line > recentDeath.deadline) {
+        recentDeaths.splice(i, 1);
+      }
+    }
+    for (let i = pendingInterceptions.length - 1; i >= 0; i -= 1) {
+      const pending = pendingInterceptions[i];
+      if (!pending) continue;
+      if (new RegExp(`${escapeRegExp(pending.targetName)}.*实际承受`).test(text)) {
+        pendingInterceptions.splice(i, 1);
+      } else if (line > pending.deadline) {
+        issues.push({ label, line: pending.line, type: 'intercept-without-actual-damage', text: pending.text });
+        pendingInterceptions.splice(i, 1);
+      }
+    }
+    for (let i = pendingCounterOutcomes.length - 1; i >= 0; i -= 1) {
+      const pending = pendingCounterOutcomes[i];
+      if (!pending) continue;
+      const resolved = text.includes(`【${pending.counterName}】`) && !/触发了【[^】]+反击】/.test(text);
+      if (resolved) {
+        pendingCounterOutcomes.splice(i, 1);
+      } else if (line > pending.deadline) {
+        issues.push({ label, line: pending.line, type: 'counter-trigger-without-outcome', text: pending.text });
+        pendingCounterOutcomes.splice(i, 1);
+      }
+    }
+
     patterns.forEach(([type, regex]) => {
       if (regex.test(text)) issues.push({ label, line, type, text });
     });
+
+    const counterTrigger = text.match(/触发了【([^】]+反击)】！/);
+    if (counterTrigger?.[1]) {
+      pendingCounterOutcomes.push({
+        counterName: counterTrigger[1],
+        line,
+        text,
+        deadline: line + 3,
+      });
+    }
+
+    if (entry.type === 'death' && !/脊髓剑遗留/.test(text)) {
+      const deathName = parseDeathVictim(text);
+      if (deathName) {
+        recentDeaths.push({
+          name: deathName,
+          line,
+          text,
+          deadline: line + 4,
+        });
+      }
+    }
+
+    const interceptStart = text.match(/🛡️ (?:【(?:换位援护|援护)】)?(.+?) (?:化作一滩清水|冲了出来)，.*准备承受 \d+ 点伤害/);
+    if (interceptStart?.[1]) {
+      pendingInterceptions.push({
+        targetName: interceptStart[1],
+        line,
+        text,
+        deadline: line + 3,
+      });
+    }
+
+    const nextText = logs[index + 1]?.text ?? '';
+    const currentEventName = mentionedName(text);
+    const nextTargetsCurrent = currentEventName
+      ? new RegExp(
+        `(?:对 ${escapeRegExp(currentEventName)} (?:实际)?造成|命中 ${escapeRegExp(currentEventName)}|吞噬了 ${escapeRegExp(currentEventName)}|` +
+          `${escapeRegExp(currentEventName)} (?:承受|实际承受|受到|损失))`,
+      ).test(nextText)
+      : false;
+    const previousExplainsTransform = currentEventName
+      ? logs
+        .slice(Math.max(0, index - 3), index)
+        .some((previousEntry) =>
+          previousEntry.text.includes(currentEventName) &&
+          /(?:造成|受到|承受|损失|命中|攻击了|击中|贯穿|吞噬|波及|反弹伤害)/.test(previousEntry.text),
+        )
+      : false;
+    if (
+      (entry.type === 'transform' || /触发了锁血保护/.test(text)) &&
+      /实际(?:造成|承受)/.test(nextText) &&
+      !/📌 实际结算/.test(nextText) &&
+      !/反弹伤害|触发反击/.test(nextText) &&
+      currentEventName &&
+      nextTargetsCurrent &&
+      !previousExplainsTransform
+    ) {
+      issues.push({ label, line, type: 'transform-before-hit-result', text: `${text}\nNEXT: ${nextText}` });
+    }
+
+    if (/被提前枪截停/.test(text) && /被 .* 的【提前枪】击败/.test(logs[index - 1]?.text ?? '')) {
+      issues.push({ label, line, type: 'prefire-interrupt-after-death', text });
+    }
+
     if (expectWaterSonInterceptLine > 0 && line <= expectWaterSonInterceptLine && /【援护】小汀\(傀儡\) 冲了出来/.test(text)) {
       issues.push({ label, line, type: 'water-son-intercept-mislabeled-as-puppet', text });
     }
@@ -346,6 +459,13 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
         issues.push({ label, line, type: 'zero-damage-status-inline', text, name });
       }
     });
+  });
+
+  pendingCounterOutcomes.forEach((pending) => {
+    issues.push({ label, line: pending.line, type: 'counter-trigger-without-outcome', text: pending.text });
+  });
+  pendingInterceptions.forEach((pending) => {
+    issues.push({ label, line: pending.line, type: 'intercept-without-actual-damage', text: pending.text });
   });
 
   return issues;

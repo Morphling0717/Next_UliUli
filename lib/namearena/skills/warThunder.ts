@@ -104,12 +104,18 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         const actualDmg = ctx.applyDamage(e, baseDmg, 'skill', true);
         const airborneImmune = e.status.some((s) => s.type === 'BKB' || s.type === 'INVUL');
+        let shouldApplyAirborne = false;
         if (actualDmg <= 0) {
           ctx.log('info', `💥 轰炸冲击被化解！${e.name} 没有承受实际伤害，也没有被【击飞】！`);
         } else if (airborneImmune) {
           ctx.log('crit', `💥 轰炸波及！${e.name} 承受了 ${actualDmg} 点真实伤害，但免疫了【击飞】！`);
         } else {
           ctx.log('crit', `💥 轰炸波及！${e.name} 承受了 ${actualDmg} 点真实伤害并被【击飞】！`);
+          shouldApplyAirborne = true;
+        }
+
+        ctx.flushDeferredDamageEvents?.();
+        if (shouldApplyAirborne && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
           e.status.push({ type: 'WT_AIRBORNE', duration: 2 });
         }
 

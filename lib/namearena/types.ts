@@ -40,6 +40,24 @@ export interface FighterStats {
   dmgTaken: number;
 }
 
+export interface LastDamageRecord {
+  amount: number;
+  source: string;
+  sourceLabel: string;
+  attackerId?: string;
+  attackerName?: string;
+  turn: number;
+}
+
+export interface DamageApplicationOptions {
+  deferTransform?: boolean;
+}
+
+export interface PendingDamageEvent {
+  type: string;
+  text: string;
+}
+
 // ---------------------------------------------------------------------------
 // Job / class definition loaded from namerenaJobs
 // ---------------------------------------------------------------------------
@@ -118,6 +136,9 @@ export interface Fighter {
   transformed?: boolean;
   isActing?: boolean;
   isHit?: boolean;
+  defeatHooksResolved?: boolean;
+  lastDamage?: LastDamageRecord;
+  pendingDamageEvents?: PendingDamageEvent[];
 
   // ── Joker resurrection ─────────────────────────────────────────────────
   hasResurrected?: boolean;
@@ -208,8 +229,10 @@ export interface SkillContext {
     source: string,
     isTrueDamage?: boolean,
     attacker?: Fighter,
+    options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
+  flushDeferredDamageEvents?: () => void;
   triggerDepth: number;
   executeSkillAction: (
     id: string | null,

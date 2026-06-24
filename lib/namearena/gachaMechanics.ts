@@ -219,6 +219,7 @@ export const GACHA_CEILING_EXCHANGE_CARD: GachaEntry = {
     } else {
       ctx.log('info', `💰 【天井兑换】${ctx.user.name} 砸出了 ${power} 点欧气，但 ${ctx.target.name} 没有承受实际伤害！`);
     }
+    ctx.flushDeferredDamageEvents?.();
     if (actualDmg > 0) {
       const healed = healFighter(ctx.user, Math.floor(actualDmg * 0.45));
       if (healed > 0) ctx.log('heal', `💰 天井返利！${ctx.user.name} 恢复了 ${healed} 点生命！`);
@@ -255,6 +256,7 @@ export const GACHA_TEN_PULL_GOLD_CARD: GachaEntry = {
       } else {
         ctx.log('info', `🌈 金光扫过 ${enemy.name}，但没有造成实际伤害！`);
       }
+      ctx.flushDeferredDamageEvents?.();
       if (enemy.currentHp <= 0) {
         ctx.markDefeated(enemy, { message: `💀 【十连金光】${enemy.name} 被 ${ctx.user.name} 的满屏金光砸没了！`, killer: ctx.user });
       }

@@ -28,7 +28,10 @@ export function handleValorantPreFire(
   runtime.log('skill', `🔭 【受击截停】${preFirer.name} 提前预瞄了 ${user.name} 的位置，强制先手开火拦截！`);
   preFirer.status = preFirer.status.filter((status) => status.type !== 'VALO_HOLDING_ANGLE');
   runtime.executeSkillAction('valo_pre_fire', preFirer, user, triggerDepth + 1);
-  if (user.isDead || user.status.some((status) => status.type === 'VALO_AIM_PUNCH')) {
+  if (user.isDead || user.isDeadAnnounced || user.currentHp <= 0) {
+    return true;
+  }
+  if (user.status.some((status) => status.type === 'VALO_AIM_PUNCH')) {
     runtime.log('info', `🎯 ${user.name} 被提前枪截停（Aim Punch），原有的攻击动作被打断！`);
     return true;
   }

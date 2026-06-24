@@ -23,12 +23,13 @@ export function handleWaitCounter(
   runtime.log('skill', `🪑 ${target.name} 从借来的椅子上跃起，触发了等待反击！`);
   runtime.log('info', `🚫 ${user.name} 的攻击被打断了！`);
   const counterDmg = Math.floor(target.atk * 2.0);
-  const actualCounterDmg = runtime.applyDamage(user, counterDmg, 'counter', false, target);
+  const actualCounterDmg = runtime.applyDamage(user, counterDmg, 'counter', false, target, { deferTransform: true });
   if (actualCounterDmg > 0) {
     runtime.log('crit', `💥 强力反击！${target.name} 对 ${user.name} 实际造成 ${actualCounterDmg} 点伤害！`);
   } else {
     runtime.log('info', `💥 强力反击被化解，${user.name} 没有承受实际伤害！`);
   }
+  if (actualCounterDmg > 0) runtime.flushDeferredDamageEvents(user);
   if (user.currentHp <= 0) {
     runtime.markDefeated(user, {
       message: `💀 ${user.name} 承受不住反击的威力，被直接击杀了！`,
@@ -76,7 +77,7 @@ export function handleCounterStatus(
     return true;
   }
   if (counterType === 'CTR_DRAIN') {
-    const drain = runtime.applyDamage(user, 300, 'counter', true, target);
+    const drain = runtime.applyDamage(user, 300, 'counter', true, target, { deferTransform: true });
     const healed = healFighter(target, drain);
     if (drain <= 0) {
       runtime.log('info', `🧛 【汲取反击】${target.name} 试图吸取 ${user.name} 的生命，但没有吸到有效生命！`);
@@ -85,6 +86,7 @@ export function handleCounterStatus(
     } else {
       runtime.log('info', `🧛 【汲取反击】${target.name} 吸取 ${user.name}，${user.name} 实际损失 ${drain} 点生命，但 ${target.name} 生命已满，治疗溢出！`);
     }
+    if (drain > 0) runtime.flushDeferredDamageEvents(user);
     if (user.currentHp <= 0) {
       runtime.markDefeated(user, { message: `💀 ${user.name} 被吸干了生命！`, killer: target });
     }
@@ -103,12 +105,13 @@ export function handleCounterStatus(
     return true;
   }
   if (counterType === 'CTR_VOID') {
-    const actualDmg = runtime.applyDamage(user, 500, 'counter', true, target);
+    const actualDmg = runtime.applyDamage(user, 500, 'counter', true, target, { deferTransform: true });
     if (actualDmg > 0) {
       runtime.log('crit', `🌌 【虚空反击】${target.name} 打开虚空陷阱吞噬 ${user.name}，实际造成 ${actualDmg} 点真实伤害！`);
     } else {
       runtime.log('info', `🌌 【虚空反击】${target.name} 打开虚空陷阱，但 ${user.name} 没有承受实际伤害！`);
     }
+    if (actualDmg > 0) runtime.flushDeferredDamageEvents(user);
     if (user.currentHp <= 0) {
       runtime.markDefeated(user, { message: `💀 ${user.name} 跌入了虚空被粉碎！`, killer: target });
     }

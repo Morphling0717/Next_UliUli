@@ -58,6 +58,7 @@ export const jokerHook: CharacterHook = {
     if ((fighter.reviveTurns ?? 0) > 0) return true;
 
     fighter.isDead = false;
+    fighter.defeatHooksResolved = false;
     fighter.hasResurrected = true;
     fighter.isDeadAnnounced = false;
     const GOD_OF_TROLLS = runtime.jobs.GOD_OF_TROLLS;
@@ -85,12 +86,13 @@ export const jokerHook: CharacterHook = {
       const aoeDmg = Math.floor(fighter.mag * 2.0);
       runtime.log('skill', `💥 【谢幕返场】${fighter.name} 的地狱笑话席卷 ${enemies.length} 名敌人：${enemies.map((enemy) => enemy.name).join('、')}！`);
       enemies.forEach((enemy) => {
-        const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter);
+        const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter, { deferTransform: true });
         if (actualDmg > 0) {
           runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害，并施加【混乱】！`);
         } else {
           runtime.log('info', `💥 地狱笑话扫过 ${enemy.name}，但没有造成实际伤害，【混乱】没有生效！`);
         }
+        if (actualDmg > 0) runtime.flushDeferredDamageEvents(enemy);
         if (enemy.currentHp <= 0 && !enemy.isDead) {
           runtime.finalizeFighterDeath(enemy, spinalSwordRef, `💀 【击杀】${enemy.name} 被地狱笑话震死了！`, fighter);
         }

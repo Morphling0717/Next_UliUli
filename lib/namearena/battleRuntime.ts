@@ -1,6 +1,7 @@
 import type {
   BattleEngineCore,
   BattleEngineData,
+  DamageApplicationOptions,
   DefeatOptions,
   Fighter,
   JobDefinition,
@@ -37,6 +38,7 @@ export interface BattleRuntimeHost {
     source: string,
     isTrueDamage?: boolean,
     attacker?: Fighter,
+    options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   calculateDamage: (
@@ -59,6 +61,7 @@ export interface BattleRuntimeHost {
   ) => void;
   formatSkillText: (skill: SkillDefinition, text: string) => string;
   handleTransformations: (fighter: Fighter) => void;
+  flushDeferredDamageEvents: (fighter: Fighter) => void;
   isPassiveCharmCounter: (fighter: Fighter, counterType: string) => boolean;
   spreadDivaSupport: (skill: SkillDefinition, user: Fighter, userTeamId: string) => void;
   syncPuppetMasterStatus: (fighter: Fighter) => void;
@@ -72,7 +75,9 @@ export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHoo
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text) => host.log(type, text),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
-    applyDamage: (target, amount, source, isTrueDamage, attacker) => host.applyDamage(target, amount, source, isTrueDamage, attacker),
+    applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+    handleTransformations: (fighter) => host.handleTransformations(fighter),
+    flushDeferredDamageEvents: (fighter) => host.flushDeferredDamageEvents(fighter),
     executeSkillAction: (id, user, target, depth) => host.executeSkillAction(id, user, target, depth),
     finalizeFighterDeath: (fighter, spinalSwordRef, deathMessage, killer) =>
       host.finalizeFighterDeath(fighter, spinalSwordRef, deathMessage, killer),
@@ -104,7 +109,7 @@ export function buildStatusProcessingRuntime(host: BattleRuntimeHost): StatusPro
     statusEffects: host.STATUS_EFFECTS,
     turnCount: host.turnCount,
     log: (type, text) => host.log(type, text),
-    applyDamage: (target, amount, source, isTrueDamage, attacker) => host.applyDamage(target, amount, source, isTrueDamage, attacker),
+    applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     markDefeated: (target, options) => host.markDefeated(target, options),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
@@ -150,11 +155,12 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text) => host.log(type, text),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
-    applyDamage: (target, amount, source, isTrueDamage, attacker) => host.applyDamage(target, amount, source, isTrueDamage, attacker),
+    applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     markDefeated: (target, options) => host.markDefeated(target, options),
     calculateDamage: (user, target, skill, userTeamId, usedSkillId) =>
       host.calculateDamage(user, target, skill, userTeamId, usedSkillId),
     handleTransformations: (fighter) => host.handleTransformations(fighter),
+    flushDeferredDamageEvents: (fighter) => host.flushDeferredDamageEvents(fighter),
     executeSkillAction: (skillId, user, forcedTarget, triggerDepth) =>
       host.executeSkillAction(skillId, user, forcedTarget, triggerDepth),
     executeSummonSkill: (skill, user, userTeamId) => host.executeSummonSkill(skill, user, userTeamId),

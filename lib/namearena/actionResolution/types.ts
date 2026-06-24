@@ -1,5 +1,6 @@
 import type {
   BattleEngineData,
+  DamageApplicationOptions,
   DefeatOptions,
   Fighter,
   SkillDefinition,
@@ -24,6 +25,7 @@ export interface ActionResolutionRuntime {
     source: string,
     isTrueDamage?: boolean,
     attacker?: Fighter,
+    options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   calculateDamage: (
@@ -34,6 +36,7 @@ export interface ActionResolutionRuntime {
     usedSkillId: string | null,
   ) => DamageResult;
   handleTransformations: (fighter: Fighter) => void;
+  flushDeferredDamageEvents: (fighter: Fighter) => void;
   executeSkillAction: (
     skillId: string | null,
     user: Fighter,

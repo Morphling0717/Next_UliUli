@@ -1,4 +1,4 @@
-import type { DefeatOptions, Fighter, SpinalSwordRef, StatusEffectsMap } from './types';
+import type { DamageApplicationOptions, DefeatOptions, Fighter, SpinalSwordRef, StatusEffectsMap } from './types';
 import { healFighter } from './combatState';
 import {
   BKB_BLOCKED_STATUS_TYPES,
@@ -19,6 +19,7 @@ export interface StatusProcessingRuntime {
     source: string,
     isTrueDamage?: boolean,
     attacker?: Fighter,
+    options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   syncHpPct: (fighter: Fighter) => void;
@@ -67,17 +68,23 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
   const newStatus: typeof actor.status = [];
   const isSlacking = actor.status.some((status) => status.type === 'SYNERGY_SLACKING');
 
-  actor.status.forEach((status) => {
+  for (const status of actor.status) {
+    if (actor.currentHp <= 0 || actor.isDead || actor.isDeadAnnounced) break;
+
     if (isStatusType(status.type, CONTROL_STATUS_TYPES)) canAct = false;
     if (!isSlacking && isStatusType(status.type, DOT_STATUS_TYPES)) {
       const dmgAmt = status.type === 'WATER_PRISON' ? Math.floor(actor.maxHp * 0.08) : Math.floor(actor.maxHp * 0.05);
-      runtime.log('poison', `${runtime.statusEffects[status.type]?.icon ?? ''} ${actor.name} ${status.type === 'WATER_PRISON' ? '在深渊水牢中窒息' : '受到持续伤害'}，损失 ${dmgAmt} 点生命`);
-      runtime.applyDamage(actor, dmgAmt, 'status', true);
+      const statusInfo = runtime.statusEffects[status.type];
+      const statusCause = status.type === 'WATER_PRISON' ? '深渊水牢窒息' : (statusInfo?.name ?? '持续伤害');
+      runtime.log('poison', `${statusInfo?.icon ?? ''} ${actor.name} ${status.type === 'WATER_PRISON' ? '在深渊水牢中窒息' : '受到持续伤害'}，损失 ${dmgAmt} 点生命`);
+      const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true);
       if (actor.currentHp <= 0) {
         runtime.markDefeated(actor, {
-          message: `💀 ${actor.name} 因${status.type === 'WATER_PRISON' ? '窒息' : '状态伤害'}而痛苦地倒下了！`,
+          message: `💀 ${actor.name} 因${statusCause}（${actualDmg}点）倒下了！`,
           awardKill: false,
         });
+        canAct = false;
+        break;
       }
     }
     if (!isSlacking && ['PLUG_HEART', 'REGEN', 'STYLE_FAMILY'].includes(status.type) && actor.currentHp < actor.maxHp) {
@@ -99,7 +106,7 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
     } else if (status.duration <= 1) {
       handleSelfTimedStatusExpiry(runtime, actor, status.type);
     }
-  });
+  }
   actor.status = newStatus;
   syncSpinalSwordState(runtime, actor, true);
 

@@ -60,6 +60,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         } else {
           ctx.log('info', `🧙‍♂️ 黑暗大法师的怒火扫过 ${enemy.name}，但没有造成实际伤害！`);
         }
+        ctx.flushDeferredDamageEvents?.();
         if (enemy.currentHp > 0 && enemy.hpPct <= 0.18) {
           ctx.markDefeated(enemy, { message: `☠️ 【封印处决】${enemy.name} 被黑暗大法师的禁忌力量彻底抹除！`, killer: ctx.user, setHpZero: false });
         } else if (enemy.currentHp <= 0) {
@@ -96,6 +97,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
           } else {
             ctx.log('info', `🌪️ 白龙扫射的余波擦过 ${enemy.name}，但没有造成实际伤害！`);
           }
+          ctx.flushDeferredDamageEvents?.();
           if (enemy.currentHp <= 0) {
             ctx.markDefeated(enemy, { message: `💀 【白龙扫射】${enemy.name} 被青眼白龙的龙息余波击落！`, killer: ctx.user });
           }

@@ -107,5 +107,6 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     hasTriggeredSlacking: false,
     isActing: false,
     isHit: false,
+    defeatHooksResolved: false,
   };
 }

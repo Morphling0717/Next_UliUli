@@ -38,6 +38,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
         } else {
           ctx.log('info', `🌊 狂暴洪水卷过 ${e.name}，但没有造成实际伤害！`);
         }
+        ctx.flushDeferredDamageEvents?.();
         if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【吞噬击杀】${e.name} 被狂暴的大洪水吞没溺毙！`, killer: ctx.user });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;

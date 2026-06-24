@@ -107,6 +107,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           ctx.log('skill', `🧮 滴—— 1 1 4 5 1 4... ${ctx.user.name} 播放了极其生草的恶臭数字，但 ${ctx.target.name} 没有受到实际伤害，中毒没有生效！`);
         } else {
           ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(dmg)));
+          ctx.flushDeferredDamageEvents?.();
           ctx.target.status = ctx.target.status ?? [];
           ctx.target.status.push({ type: 'POISON', duration: 3 });
         }
@@ -124,6 +125,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         } else {
           ctx.log('info', `🧮 滴—— 6 6 6 6 6 6... 弹幕狂潮扫过 ${ctx.target.name}，但没有造成实际伤害！`);
         }
+        ctx.flushDeferredDamageEvents?.();
       } else if (roll.type === '888888') {
         ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name));
         const allies = (ctx.fighters ?? []).filter(
@@ -158,6 +160,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           ctx.log('skill', `🧮 滴—— 5 2 0 1 3 1 4... ${ctx.user.name} 发射了极致的爱心飞吻，但 ${ctx.target.name} 没有受到实际伤害，魅惑没有生效！`);
         } else {
           ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(dmg)));
+          ctx.flushDeferredDamageEvents?.();
           ctx.target.status = ctx.target.status ?? [];
           ctx.target.status.push({ type: 'CHARMED', duration: 3 });
         }
@@ -171,6 +174,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           ctx.log('skill', `🧮 滴—— 9 9 6 0 0 7... ${ctx.user.name} 试图强迫 ${ctx.target.name} 无休加班，但没有造成实际伤害，灼烧和减速没有生效！`);
         } else {
           ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(dmg)));
+          ctx.flushDeferredDamageEvents?.();
           ctx.target.status = ctx.target.status ?? [];
           ctx.target.status.push({ type: 'BURN', duration: 3 });
           ctx.target.spd = Math.max(1, Math.floor(ctx.target.spd * 0.5));
@@ -201,6 +205,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         } else {
           ctx.log('info', `⚡ 【弑神反噬】警告！！${ctx.user.name} 试图篡改神明【${ctx.target.name}】的数据，但神罚没有造成实际伤害！`);
         }
+        ctx.flushDeferredDamageEvents?.();
         if (ctx.user.currentHp <= 0) {
           ctx.markDefeated(ctx.user, { message: `💀 【天谴】${ctx.user.name} 遭到反噬，被劈得灰飞烟灭！`, awardKill: false });
         }
@@ -385,12 +390,17 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         const actualDmg = ctx.applyDamage(e, dmg, 'skill', true);
         ctx.user.stats.dmgDealt += actualDmg;
         const controlImmune = (e.status ?? []).some((s) => ['BKB', 'STYLE_FOOL', 'STYLE_EMPEROR'].includes(s.type));
+        let shouldStun = false;
         if (actualDmg <= 0) {
           ctx.log('info', `🔊 刺耳魔音擦身而过！${e.name} 没有承受实际伤害，也没有被眩晕！`);
         } else if (controlImmune) {
           ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 承受了 ${actualDmg} 点真实精神伤害，但免疫了眩晕！`);
         } else {
           ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 承受了 ${actualDmg} 点真实精神伤害并被眩晕！`);
+          shouldStun = true;
+        }
+        ctx.flushDeferredDamageEvents?.();
+        if (shouldStun && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
           e.status = e.status ?? [];
           e.status.push({ type: 'STUN', duration: 1 });
         }

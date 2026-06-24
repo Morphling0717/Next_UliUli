@@ -103,12 +103,13 @@ export function handlePhysicalCounterReflect(
   if (skill.tag !== runtime.skillTags.PHYS || !target.status.some((status) => status.type === 'COUNTER')) return;
 
   target.status = target.status.filter((status) => status.type !== 'COUNTER');
-  const reflectedDmg = runtime.applyDamage(user, actualDmg, 'reflect', false, target);
+  const reflectedDmg = runtime.applyDamage(user, actualDmg, 'reflect', false, target, { deferTransform: true });
   if (reflectedDmg > 0) {
     runtime.log('crit', `💢 ${target.name} 触发反击！将伤害弹回给了 ${user.name}，实际造成 ${reflectedDmg} 点反弹伤害！`);
   } else {
     runtime.log('info', `💢 ${target.name} 触发反击，但反弹没有对 ${user.name} 造成实际伤害！`);
   }
+  if (reflectedDmg > 0) runtime.flushDeferredDamageEvents(user);
   if (user.currentHp <= 0) {
     runtime.markDefeated(user, { message: `💀 ${user.name} 被自己造成的反弹伤害反死了！`, killer: target });
   }

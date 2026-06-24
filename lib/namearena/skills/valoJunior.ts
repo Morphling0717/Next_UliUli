@@ -39,6 +39,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
           } else {
             ctx.log('info', `💥 爆炸余波扫过 ${e.name}，但没有造成实际伤害！`);
           }
+          ctx.flushDeferredDamageEvents?.();
           if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【范围击杀】${e.name} 被晚安火炮的余波炸碎了！`, killer: ctx.user });
           const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
           if (idx !== -1) ctx.fighters[idx] = e;
@@ -77,6 +78,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
             } else {
               ctx.log('info', `🔥 轨道炮余波溅射到了 ${e.name}，但没有造成实际伤害！`);
             }
+            ctx.flushDeferredDamageEvents?.();
             if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【溅射击杀】${e.name} 被轨道炮的余波轰成了渣！`, killer: ctx.user });
             const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
             if (idx !== -1) ctx.fighters[idx] = e;
