@@ -127,9 +127,18 @@ export interface Fighter {
   hasSpinalSword?: boolean;
   spinalSwordTurns?: number;
   hasDroppedSword?: boolean;
+  hasTriggeredTingDefiance?: boolean;
 
   // ── Gamer death / water-team resurrection ─────────────────────────────
   resurrected?: boolean;
+  apm?: number;
+
+  // ── Gacha addict / Luck Emperor pity system ───────────────────────────
+  gachaLuck?: number;
+  gachaPityPower?: number;
+  hasUsedGachaDeathSave?: boolean;
+  gachaSummonLifestealPct?: number;
+  hasUsedExodiaObliterate?: boolean;
 
   // ── Chimera / Succubus ultimate evolution ─────────────────────────────
   hasUltimateEvolved?: boolean;
@@ -198,6 +207,7 @@ export interface SkillContext {
     amount: number,
     source: string,
     isTrueDamage?: boolean,
+    attacker?: Fighter,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   triggerDepth: number;
@@ -252,6 +262,11 @@ export interface GachaEntry {
   triggerAgain?: number;
   newSkill?: string;
   onExecute?: (ctx: SkillContext) => boolean;
+  afterExecute?: (
+    ctx: SkillContext,
+    dmg: number,
+    hpBeforeDamage?: number,
+  ) => void;
 }
 
 // ---------------------------------------------------------------------------

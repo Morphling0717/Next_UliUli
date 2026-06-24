@@ -15,7 +15,12 @@ export interface TurnFlowRuntime {
 
 export function determineActor(alive: Fighter[]): Fighter | null {
   if (alive.length === 0) return null;
-  const actionWeight = (fighter: Fighter) => Math.max(1, fighter.spd);
+  const actionWeight = (fighter: Fighter) => {
+    let multiplier = 1;
+    if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.15;
+    if (fighter.status.some((status) => status.type === 'RABBIT_ZERO_HASTE')) multiplier *= 1.3;
+    return Math.max(1, Math.floor(fighter.spd * multiplier));
+  };
   let ticket = Math.random() * alive.reduce((sum, fighter) => sum + actionWeight(fighter), 0);
   for (const fighter of alive) {
     ticket -= actionWeight(fighter);
@@ -35,9 +40,14 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
   }
 
   if (activeTeams.size <= 1 && !preventEnd) {
-    const winners = aliveCombatants.map((fighter) => fighter.name).join(' & ');
+    const winners = aliveCombatants.map((fighter) => {
+      if (!fighter.isSummon || !fighter.summonerId) return fighter.name;
+      const summoner = runtime.fighters.find((candidate) => candidate.id === fighter.summonerId);
+      return summoner ? `${fighter.name}（${summoner.name}召唤）` : fighter.name;
+    }).join(' & ');
     const winTeam = aliveCombatants.length > 0 ? (aliveCombatants[0].teamId ? `【${aliveCombatants[0].teamId}】` : '') : '';
-    runtime.log('win', `🏆 最终胜者：${winTeam} ${winners || '无（同归于尽）'}！`);
+    const winnerLabel = [winTeam, winners || '无（同归于尽）'].filter(Boolean).join(' ');
+    runtime.log('win', `🏆 最终胜者：${winnerLabel}！`);
     return true;
   }
   return false;

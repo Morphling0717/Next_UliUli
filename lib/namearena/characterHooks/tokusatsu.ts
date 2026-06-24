@@ -34,7 +34,7 @@ export const tokusatsuHook: CharacterHook = {
     target.monsterTurns = 0;
     delete target.savedStats;
     target.hasUsedRainbowFever = false;
-    runtime.log('win', `🦖 ${target.name} 受到攻击，触发反击！\n"DUAL ON！GREAT！MONSTER！Ready Fight."\n数值暴涨！永久进化为【奇迹怪兽武刃】！`);
+    runtime.log('buff', `🦖 ${target.name} 受到攻击，触发反击！\n"DUAL ON！GREAT！MONSTER！Ready Fight."\n数值暴涨！永久进化为【奇迹怪兽武刃】！`);
     runtime.log('info', `🚫 ${user.name} 的攻击被 ${target.name} 的怪兽形态打断了！`);
     runtime.executeSkillAction('great_monster_victory', target, user, triggerDepth + 1);
     return true;

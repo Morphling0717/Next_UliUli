@@ -31,7 +31,13 @@ export interface BattleRuntimeHost {
   getFatigueDamageBonus: () => number;
   log: (type: string, text: string) => void;
   syncHpPct: (fighter: Fighter) => void;
-  applyDamage: (target: Fighter, amount: number, source: string, isTrueDamage?: boolean) => number;
+  applyDamage: (
+    target: Fighter,
+    amount: number,
+    source: string,
+    isTrueDamage?: boolean,
+    attacker?: Fighter,
+  ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   calculateDamage: (
     user: Fighter,
@@ -66,7 +72,7 @@ export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHoo
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text) => host.log(type, text),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
-    applyDamage: (target, amount, source, isTrueDamage) => host.applyDamage(target, amount, source, isTrueDamage),
+    applyDamage: (target, amount, source, isTrueDamage, attacker) => host.applyDamage(target, amount, source, isTrueDamage, attacker),
     executeSkillAction: (id, user, target, depth) => host.executeSkillAction(id, user, target, depth),
     finalizeFighterDeath: (fighter, spinalSwordRef, deathMessage, killer) =>
       host.finalizeFighterDeath(fighter, spinalSwordRef, deathMessage, killer),
@@ -98,7 +104,7 @@ export function buildStatusProcessingRuntime(host: BattleRuntimeHost): StatusPro
     statusEffects: host.STATUS_EFFECTS,
     turnCount: host.turnCount,
     log: (type, text) => host.log(type, text),
-    applyDamage: (target, amount, source, isTrueDamage) => host.applyDamage(target, amount, source, isTrueDamage),
+    applyDamage: (target, amount, source, isTrueDamage, attacker) => host.applyDamage(target, amount, source, isTrueDamage, attacker),
     markDefeated: (target, options) => host.markDefeated(target, options),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
@@ -144,7 +150,7 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text) => host.log(type, text),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
-    applyDamage: (target, amount, source, isTrueDamage) => host.applyDamage(target, amount, source, isTrueDamage),
+    applyDamage: (target, amount, source, isTrueDamage, attacker) => host.applyDamage(target, amount, source, isTrueDamage, attacker),
     markDefeated: (target, options) => host.markDefeated(target, options),
     calculateDamage: (user, target, skill, userTeamId, usedSkillId) =>
       host.calculateDamage(user, target, skill, userTeamId, usedSkillId),

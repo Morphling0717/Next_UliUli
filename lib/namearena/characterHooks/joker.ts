@@ -78,18 +78,23 @@ export const jokerHook: CharacterHook = {
     }
     runtime.syncHpPct(fighter);
     fighter.status = [];
-    runtime.log('win', `🤡 ${fighter.name} 从地狱归来！转职为【${GOD_OF_TROLLS ? GOD_OF_TROLLS.name : '乐子人'}】！\n"接下来，是我的谢幕演出！"`);
+    runtime.log('buff', `🤡 ${fighter.name} 从地狱归来！转职为【${GOD_OF_TROLLS ? GOD_OF_TROLLS.name : '乐子人'}】！\n"接下来，是我的谢幕演出！"`);
 
     const enemies = runtime.fighters.filter((enemy) => runtime.isActiveCombatant(enemy) && runtime.getTeamId(enemy) !== myTeamId);
     if (enemies.length > 0) {
       const aoeDmg = Math.floor(fighter.mag * 2.0);
-      runtime.log('skill', `💥 【谢幕返场】${fighter.name} 的地狱笑话对全场敌人造成了 ${aoeDmg} 点魔法伤害，并施加了【混乱】！`);
+      runtime.log('skill', `💥 【谢幕返场】${fighter.name} 的地狱笑话席卷 ${enemies.length} 名敌人：${enemies.map((enemy) => enemy.name).join('、')}！`);
       enemies.forEach((enemy) => {
-        runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill');
+        const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter);
+        if (actualDmg > 0) {
+          runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害，并施加【混乱】！`);
+        } else {
+          runtime.log('info', `💥 地狱笑话扫过 ${enemy.name}，但没有造成实际伤害，【混乱】没有生效！`);
+        }
         if (enemy.currentHp <= 0 && !enemy.isDead) {
           runtime.finalizeFighterDeath(enemy, spinalSwordRef, `💀 【击杀】${enemy.name} 被地狱笑话震死了！`, fighter);
         }
-        if (runtime.isActiveCombatant(enemy)) {
+        if (actualDmg > 0 && runtime.isActiveCombatant(enemy)) {
           enemy.status.push({ type: 'CONFUSED', duration: 1 });
         }
       });

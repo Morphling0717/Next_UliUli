@@ -100,6 +100,12 @@ import {
   buildTargetingRuntime,
   buildTurnFlowRuntime,
 } from './battleRuntime';
+import {
+  applyGachaSummonLifesteal,
+  grantGachaLuck,
+  isLuckEmperor,
+  triggerGachaDeathSave,
+} from './gachaMechanics';
 
 export class BattleEngine {
   fighters: Fighter[];
@@ -190,7 +196,7 @@ export class BattleEngine {
     return buildTurnFlowRuntime(this);
   }
 
-  applyDamage(target: Fighter, amount: number, source: string, isTrueDamage = false): number {
+  applyDamage(target: Fighter, amount: number, source: string, isTrueDamage = false, attacker?: Fighter): number {
     if (amount <= 0 || target.isDead || target.currentHp <= 0) return 0;
     if (target.status.some((s) => s.type === 'SYNERGY_SLACKING')) return 0;
 
@@ -226,15 +232,51 @@ export class BattleEngine {
         if (enemies.length > 0) {
           const victim = enemies[Math.floor(Math.random() * enemies.length)];
           this.log('crit', `🎭 【随机恶作剧】${target.name} 施展魔术完美闪避！并将伤害转移给了倒霉的 ${victim.name}！`);
-          this.applyDamage(victim, originalAmount, 'transfer', isTrueDamage);
+          const transferredDmg = this.applyDamage(victim, originalAmount, 'transfer', isTrueDamage, attacker);
+          this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，实际承受 ${transferredDmg} 点伤害！`);
         } else {
           this.log('info', `🎭 【随机恶作剧】${target.name} 像个泥鳅一样躲开了 ${originalAmount} 点伤害！`);
         }
       }
     }
 
+    const hpBeforeDamage = target.currentHp;
     target.currentHp -= amount;
     target.stats.dmgTaken += amount;
+    if (isLuckEmperor(target) && amount > 0) {
+      if (amount >= target.maxHp * 0.2) {
+        grantGachaLuck(target, 1, (type, text) => this.log(type, text), '承受重创');
+      }
+      if (attacker?.isTing) {
+        grantGachaLuck(target, 1, (type, text) => this.log(type, text), '被小汀针对');
+      }
+    }
+    applyGachaSummonLifesteal({
+      fighters: this.fighters,
+      isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
+      log: (type, text) => this.log(type, text),
+    }, attacker, Math.min(hpBeforeDamage, amount));
+    if (target.currentHp <= 0 && triggerGachaDeathSave(target, (type, text) => this.log(type, text), (fighter) => this.syncHpPct(fighter))) {
+      return amount;
+    }
+    if (target.currentHp <= 0 && target.isTing && target.transformed && !target.isDead && !target.isDeadAnnounced) {
+      const hasActiveDefiance = target.status.some((status) => status.type === 'TING_DEFIANCE');
+      if (hasActiveDefiance || !target.hasTriggeredTingDefiance) {
+        target.currentHp = 1;
+        if (!hasActiveDefiance) {
+          target.status.push({ type: 'TING_DEFIANCE', duration: 3 });
+        }
+        if (!target.hasTriggeredTingDefiance) {
+          target.hasTriggeredTingDefiance = true;
+          target.atk = Math.floor(target.atk * 1.2);
+          target.mag = Math.floor(target.mag * 1.2);
+          target.spd = Math.floor(target.spd * 1.15);
+          this.log('buff', `🩸 【不甘倒下】${target.name} 被怨念强行钉在 1 点生命，拒绝退场！`);
+        } else {
+          this.log('info', `🩸 ${target.name} 仍处于【不甘倒下】，硬是撑住了致命伤！`);
+        }
+      }
+    }
     this.syncHpPct(target);
     if (amount > 0) {
       target.isHit = true;
@@ -247,6 +289,7 @@ export class BattleEngine {
 
   markDefeated(target: Fighter, options: DefeatOptions = {}): boolean {
     if (target.isDead || target.isDeadAnnounced) return false;
+    if (triggerGachaDeathSave(target, (type, text) => this.log(type, text), (fighter) => this.syncHpPct(fighter))) return false;
 
     if (options.setHpZero ?? true) setCurrentHp(target, 0);
     if (options.message) this.log(options.logType ?? 'death', options.message);
@@ -273,7 +316,7 @@ export class BattleEngine {
       this.syncHpPct(f);
       f.status = f.status.filter((s) => s.type !== 'VALO_ULT_RUN_IT_BACK');
       f.isDeadAnnounced = false;
-      this.log('win', `🔥 浴火重生！${f.name} 受到致命伤，触发【再火一回】，原地满血复活！`);
+      this.log('heal', `🔥 浴火重生！${f.name} 受到致命伤，触发【再火一回】，原地满血复活！`);
       return;
     }
 
@@ -284,13 +327,20 @@ export class BattleEngine {
 
     const MORPHLING_SON = this.JOBS['MORPHLING_SON'];
     if (f.isGamer && !f.resurrected && this.fighters.some((cf) => cf.isMorphling && this.isActiveCombatant(cf)) && MORPHLING_SON) {
-      f.isDead = false; f.resurrected = true; f.isSon = true;
+      f.isDead = false;
+      f.resurrected = true;
+      f.isSon = true;
       f.jobData = cloneJobDefinition(MORPHLING_SON);
-      f.maxHp = Math.floor(f.maxHp * 6); f.currentHp = f.maxHp;
-      f.atk *= 6; f.mag *= 6; f.wis = Math.floor(f.wis * 4.0); f.spd = 100;
+      f.maxHp = Math.floor(f.maxHp * 6);
+      f.currentHp = f.maxHp;
+      f.atk *= 6;
+      f.mag *= 6;
+      f.wis = Math.floor(f.wis * 4.0);
+      f.spd = 100;
       this.syncHpPct(f);
-      f.status = []; f.isDeadAnnounced = false;
-      this.log('win', `👶 ${f.name} 并没有死！他被水人救起，清除了负面状态并转职为【${MORPHLING_SON.name}】！`);
+      f.status = [];
+      f.isDeadAnnounced = false;
+      this.log('buff', `👶 ${f.name} 并没有死！他被水人救起，清除了负面状态并转职为【${MORPHLING_SON.name}】！`);
     }
     if (f.isDead) {
       runCharacterDefeatHooks({
@@ -325,10 +375,11 @@ export class BattleEngine {
 
   advanceBunnyStyleClock(actor: Fighter): void {
     if (actor.isDead || actor.job !== 'VERSATILE_RABBIT') return;
+    if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) return;
     actor.styleTurnCounter = (actor.styleTurnCounter ?? 0) + 1;
     if (actor.styleTurnCounter >= 4) {
       actor.styleTurnCounter = 0;
-      this.log('win', `⏰ 【人设时钟】第 4 回合已到！${actor.name} 准时开启了新一轮的【光速换装】！`);
+      this.log('skill', `⏰ 【人设时钟】第 4 回合已到！${actor.name} 准时开启了新一轮的【光速换装】！`);
       this.executeSkillAction('v_rabbit_style_switch', actor, null, 1);
     }
   }
@@ -343,7 +394,7 @@ export class BattleEngine {
       tgt.job = jobKey;
       buffFn();
       this.syncHpPct(tgt);
-      this.log('win', msg);
+      this.log('transform', msg);
     };
 
     runCharacterTransformHooks({
@@ -465,6 +516,9 @@ export class BattleEngine {
     return resolveSkillDefinition({
       skills: this.SKILLS,
       data: this.Data,
+      fighters: this.fighters,
+      getTeamId: (fighter) => this.getTeamId(fighter),
+      isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
       log: (type, text) => this.log(type, text),
     }, skillId, user);
   }
@@ -630,7 +684,7 @@ export class BattleEngine {
 
     this.turnCount += 1;
     if (this.turnCount === 501) {
-      this.log('win', '⏳ 久战不决，战场进入疲劳阶段！所有伤害会随回合推进逐步提高，防止战斗无限拖延。');
+      this.log('info', '⏳ 久战不决，战场进入疲劳阶段！所有伤害会随回合推进逐步提高，防止战斗无限拖延。');
     }
 
     const actor = this.determineActor(alive);
@@ -657,6 +711,10 @@ export class BattleEngine {
       logWaitingCounter(this.createTurnFlowRuntime(), actor, waitingCounter);
       this.finishStep(spinalSwordRef);
       return false;
+    }
+
+    if (isLuckEmperor(actor) && actor.hpPct <= 0.35) {
+      grantGachaLuck(actor, 1, (type, text) => this.log(type, text), '残血仍然行动');
     }
 
     const skId = this.selectSkill(actor);

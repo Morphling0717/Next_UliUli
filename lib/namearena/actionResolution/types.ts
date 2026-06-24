@@ -18,7 +18,13 @@ export interface ActionResolutionRuntime {
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;
   syncHpPct: (fighter: Fighter) => void;
-  applyDamage: (target: Fighter, amount: number, source: string, isTrueDamage?: boolean) => number;
+  applyDamage: (
+    target: Fighter,
+    amount: number,
+    source: string,
+    isTrueDamage?: boolean,
+    attacker?: Fighter,
+  ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   calculateDamage: (
     user: Fighter,

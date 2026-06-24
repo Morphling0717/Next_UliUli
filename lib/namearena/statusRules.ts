@@ -39,6 +39,7 @@ export const GLOBAL_TIMED_STATUS_TYPES: string[] = [
   'BKB',
   'ETHEREAL',
   'SYNERGY_SLACKING',
+  'TING_DEFIANCE',
 ];
 
 export const TRIGGER_TIMED_STATUS_TYPES: string[] = [

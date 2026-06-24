@@ -28,12 +28,16 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
   },
   apocalyptic_flood: {
     name: '神罚·灭世大洪水', tag: SKILL_TAGS.MAG, mult: 4.0, ignoreDef: true,
-    text: '🌊🌊🌊 【神罚·灭世大洪水】！天地倒转，万物归虚！{USER} 掀起吞噬整个战场的狂潮！全场所有敌人在洪水中受到无差别的 {VAL} 点真实伤害！',
+    text: '🌊🌊🌊 【神罚·灭世大洪水】！天地倒转，万物归虚！{USER} 掀起吞噬战场的狂潮，先将 {TARGET} 卷入洪峰，造成 {VAL} 点真实伤害！',
     afterExecute: (ctx, dmg) => {
       const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead);
       otherEnemies.forEach((e) => {
         const actualDmg = ctx.applyDamage(e, dmg, 'skill');
-        ctx.log('info', `🌊 狂暴洪水吞噬了 ${e.name}，造成了 ${actualDmg} 点真实伤害！`);
+        if (actualDmg > 0) {
+          ctx.log('info', `🌊 狂暴洪水吞噬了 ${e.name}，实际造成 ${actualDmg} 点真实伤害！`);
+        } else {
+          ctx.log('info', `🌊 狂暴洪水卷过 ${e.name}，但没有造成实际伤害！`);
+        }
         if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【吞噬击杀】${e.name} 被狂暴的大洪水吞没溺毙！`, killer: ctx.user });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;

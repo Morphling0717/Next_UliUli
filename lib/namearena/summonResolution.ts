@@ -5,7 +5,8 @@ import type {
   JobDefinition,
   SkillDefinition,
 } from './types';
-import { cloneJobDefinition } from './combatState';
+import { cloneJobDefinition, healFighter } from './combatState';
+import { grantGachaLuck, isLuckEmperor } from './gachaMechanics';
 
 export interface SummonResolutionRuntime {
   fighters: Fighter[];
@@ -36,6 +37,19 @@ export function executeSummonSkill(
     );
     if (potentialTributes.length < (skill.tributes ?? 0)) {
       runtime.log('info', `🚫 ${user.name} 试图召唤 ${skill.summonName}，但场上祭品不足！`);
+      if (isLuckEmperor(user)) {
+        grantGachaLuck(user, 1, runtime.log, '献祭失败');
+        const shield = user.status.find((status) => status.type === 'SPELL_BLOCK');
+        if (shield) {
+          shield.duration = Math.max(shield.duration, 2);
+        } else {
+          user.status.push({ type: 'SPELL_BLOCK', duration: 2 });
+        }
+        if (!user.status.some((status) => status.type === 'NO_HEAL')) {
+          const healed = healFighter(user, Math.floor(user.maxHp * 0.1));
+          if (healed > 0) runtime.log('heal', `🍀 祭品不足反而歪出补偿，${user.name} 恢复了 ${healed} 点生命并获得法术抵挡！`);
+        }
+      }
       return;
     }
     const sacrificed = potentialTributes.sort(() => 0.5 - Math.random()).slice(0, skill.tributes);
@@ -86,7 +100,9 @@ export function executeSummonSkill(
     stats: { kills: 0, dmgDealt: 0, dmgTaken: 0 },
     summonerId: user.id,
     isSummon: true,
+    hasUsedExodiaObliterate: false,
   });
   if (skill.summonName === '小汀(傀儡)') runtime.syncPuppetMasterStatus(user);
-  runtime.log('skill', runtime.formatSkillText(skill, skill.text ?? '').replace(/{USER}/g, user.name));
+  const summonText = runtime.formatSkillText(skill, skill.text ?? '').replace(/{USER}/g, user.name);
+  runtime.log('skill', `${summonText}\n✨ 【召唤成功】${user.name} 召唤出了 ${summonName}！`);
 }

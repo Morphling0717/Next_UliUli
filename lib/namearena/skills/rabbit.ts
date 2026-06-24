@@ -4,6 +4,15 @@ import { healFighter, setCurrentHp } from '../combatState';
 
 const { SKILL_TAGS } = Data;
 
+function refreshStatus(userStatus: { type: string; duration: number }[], type: string, duration: number): void {
+  const existing = userStatus.find((status) => status.type === type);
+  if (existing) {
+    existing.duration = Math.max(existing.duration, duration);
+  } else {
+    userStatus.push({ type, duration });
+  }
+}
+
 export const rabbitSkills: Record<string, SkillDefinition> = {
   q_bunny_idol: {
     name: '偶像打歌', tag: SKILL_TAGS.HEAL, mult: 1.2, text: '🎵 {USER} 开始了爱豆Live！歌声治愈了大家...',
@@ -12,9 +21,15 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         (f) => !f.isDead && ctx.getTeamId(f) === ctx.getTeamId(ctx.user) && !(f.status ?? []).some((s) => s.type === 'SYNERGY_SLACKING'),
       );
       const healAmt = Math.floor(ctx.user.mag * 1.5);
+      let totalHealed = 0;
+      const healedNames: string[] = [];
       allies.forEach((a) => {
         if (!(a.status ?? []).some((s) => s.type === 'NO_HEAL')) {
-          healFighter(a, healAmt);
+          const healed = healFighter(a, healAmt);
+          if (healed > 0) {
+            totalHealed += healed;
+            healedNames.push(a.name);
+          }
         }
         a.status = a.status ?? [];
         const existing = a.status.find((s) => s.type === 'Q_BUNNY_IDOL_AGL');
@@ -24,7 +39,10 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           a.status.push({ type: 'Q_BUNNY_IDOL_AGL', duration: 3 });
         }
       });
-      ctx.log('heal', `🎵 【偶像打歌】可爱的歌声治愈了全队 (各恢复了 ${healAmt} 点生命) 并附加了 3 回合闪避加成！`);
+      const healText = totalHealed > 0
+        ? `治疗 ${healedNames.length} 名队友：${healedNames.join('、')}，总计恢复 ${totalHealed} 点生命`
+        : '治疗被禁疗或满血溢出';
+      ctx.log('heal', `🎵 【偶像打歌】可爱的歌声治愈全队，${healText}，并附加 3 回合闪避加成！`);
       return true;
     },
   },
@@ -101,7 +119,11 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
             totalDmg += doDamage(segDmg);
           }
         }
-        ctx.log('crit', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(totalDmg)));
+        if (totalDmg > 0) {
+          ctx.log('crit', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(totalDmg)));
+        } else {
+          ctx.log('info', `🧮 滴—— 6 6 6 6 6 6... 弹幕狂潮扫过 ${ctx.target.name}，但没有造成实际伤害！`);
+        }
       } else if (roll.type === '888888') {
         ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name));
         const allies = (ctx.fighters ?? []).filter(
@@ -109,16 +131,25 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         );
         const healAmt = Math.floor(ctx.user.mag * 2.0);
         const boostedValoNames: string[] = [];
+        let totalHealed = 0;
+        const healedNames: string[] = [];
         allies.forEach((a) => {
           if (!(a.status ?? []).some((s) => s.type === 'NO_HEAL')) {
-            healFighter(a, healAmt);
+            const healed = healFighter(a, healAmt);
+            if (healed > 0) {
+              totalHealed += healed;
+              healedNames.push(a.name);
+            }
           }
           if (a.job === 'VALO_JUNIOR') {
             a.economy = (a.economy ?? 0) + 3;
             boostedValoNames.push(a.name);
           }
         });
-        let logMsg = `✨ 【全队福利】发发发！我方全体各恢复了 ${healAmt} 点生命！`;
+        const healText = totalHealed > 0
+          ? `治疗 ${healedNames.length} 名队友：${healedNames.join('、')}，总计恢复 ${totalHealed} 点生命`
+          : '治疗被禁疗或满血溢出';
+        let logMsg = `✨ 【全队福利】发发发！${healText}！`;
         if (boostedValoNames.length > 0) logMsg += `\n💰 联动彩蛋触发：队里的瓦学妹【${boostedValoNames.join('、')}】顺手狂赚了 3 点经济！`;
         ctx.log('heal', logMsg);
       } else if (roll.type === '5201314') {
@@ -150,9 +181,9 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         ctx.markDefeated(ctx.target, { message: `💀 【击杀】${ctx.target.name} 承受不住这极其离谱的计算器魔法，当场暴毙！`, killer: ctx.user });
       }
 
-      ctx.user.spd = Math.floor(ctx.user.spd * 1.15);
-      if (ctx.user.baseStatsForStyle) ctx.user.baseStatsForStyle.spd = Math.floor((ctx.user.baseStatsForStyle.spd ?? ctx.user.spd) * 1.15);
-      ctx.log('info', `⚡ 伴随着按键的残影，${ctx.user.name} 的运算速度（出手频率）永久提升了 15%！`);
+      ctx.user.status = ctx.user.status ?? [];
+      refreshStatus(ctx.user.status, 'RABBIT_CALC_HASTE', 3);
+      ctx.log('info', `⚡ 伴随着按键的残影，${ctx.user.name} 进入【计算超频】状态，接下来 3 次自身行动出手频率提升 15%！`);
 
       return true;
     },
@@ -165,7 +196,11 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
 
       if (ctx.target.job === 'GOD_SLIME') {
         const actualDmg = ctx.applyDamage(ctx.user, 9999, 'skill', true);
-        ctx.log('win', `⚡ 【弑神反噬】警告！！${ctx.user.name} 试图篡改神明【${ctx.target.name}】的数据！\n神明的绝对威压免疫了归零，降下神罚之雷，造成了 ${actualDmg} 点真实伤害！`);
+        if (actualDmg > 0) {
+          ctx.log('crit', `⚡ 【弑神反噬】警告！！${ctx.user.name} 试图篡改神明【${ctx.target.name}】的数据！\n神明的绝对威压免疫了归零，降下神罚之雷，实际造成 ${actualDmg} 点真实伤害！`);
+        } else {
+          ctx.log('info', `⚡ 【弑神反噬】警告！！${ctx.user.name} 试图篡改神明【${ctx.target.name}】的数据，但神罚没有造成实际伤害！`);
+        }
         if (ctx.user.currentHp <= 0) {
           ctx.markDefeated(ctx.user, { message: `💀 【天谴】${ctx.user.name} 遭到反噬，被劈得灰飞烟灭！`, awardKill: false });
         }
@@ -195,10 +230,10 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       }
 
       ctx.target.wasZeroed = true;
-      ctx.user.spd = Math.floor(ctx.user.spd * 1.30);
-      if (ctx.user.baseStatsForStyle) ctx.user.baseStatsForStyle.spd = Math.floor((ctx.user.baseStatsForStyle.spd ?? ctx.user.spd) * 1.30);
+      ctx.user.status = ctx.user.status ?? [];
+      refreshStatus(ctx.user.status, 'RABBIT_ZERO_HASTE', 2);
 
-      ctx.log('skill', `🧮 【归零】降维打击！${ctx.target.name} 的所有正面状态被强行清空，攻击、防御、魔抗在接下来的回合内暴跌至 10%！\n✨ 同时 ${ctx.user.name} 吸收了算力，自身速度永久暴增 30%！`);
+      ctx.log('skill', `🧮 【归零】降维打击！${ctx.target.name} 的所有正面状态被强行清空，攻击、防御、魔抗在接下来的回合内暴跌至 10%！\n✨ 同时 ${ctx.user.name} 吸收了算力，进入【归零超频】状态，接下来 2 次自身行动出手频率提升 30%！`);
 
       return true;
     },
@@ -212,7 +247,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
 
       if ((ctx.user.status ?? []).some((s) => s.type === 'STYLE_EMPEROR')) {
         ctx.log('info', `👑 ${ctx.user.name} 已登基为王，不再需要切换人设！`);
-        ctx.log('win', `⚡ 帝皇不可阻挡！${ctx.user.name} 立即发起了无情追击！`);
+        ctx.log('skill', `⚡ 帝皇不可阻挡！${ctx.user.name} 立即发起了无情追击！`);
         const followUpSkills = ['v_rabbit_calc_rng', 'v_rabbit_calc_smash', 'v_rabbit_zero', 'v_rabbit_megaphone'];
         ctx.executeSkillAction(followUpSkills[Math.floor(Math.random() * followUpSkills.length)], ctx.user, ctx.target, ctx.triggerDepth + 1);
         return true;
@@ -273,7 +308,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         ctx.log('buff', selectedStyle.text.replace(/{USER}/g, ctx.user.name) + descStr);
       }
 
-      ctx.log('win', `⚡ 【光速切片】换装完毕的 ${ctx.user.name} 并没有浪费回合，立刻无缝衔接了下一次攻击！`);
+      ctx.log('skill', `⚡ 【光速切片】换装完毕的 ${ctx.user.name} 并没有浪费回合，立刻无缝衔接了下一次攻击！`);
       const followUpSkills = ['v_rabbit_calc_rng', 'v_rabbit_calc_smash', 'v_rabbit_zero', 'v_rabbit_megaphone'];
       ctx.executeSkillAction(followUpSkills[Math.floor(Math.random() * followUpSkills.length)], ctx.user, ctx.target, ctx.triggerDepth + 1);
       return true;
@@ -307,6 +342,8 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         (f) => !f.isDead && ctx.getTeamId(f) === ctx.getTeamId(ctx.user) && !(f.status ?? []).some((s) => s.type === 'SYNERGY_SLACKING'),
       );
       const healAmt = Math.floor(ctx.user.mag * 2.0);
+      let totalHealed = 0;
+      const healedNames: string[] = [];
       allies.forEach((a) => {
         a.status = (a.status ?? []).filter((s) => {
           if (s.type === 'ZEROED' && a.baseStatsForZero) {
@@ -319,12 +356,19 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           return !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'NEURAL_THEFT_DEBUFF', 'ZEROED'].includes(s.type);
         });
         if (!(a.status ?? []).some((s) => s.type === 'NO_HEAL')) {
-          healFighter(a, healAmt);
+          const healed = healFighter(a, healAmt);
+          if (healed > 0) {
+            totalHealed += healed;
+            healedNames.push(a.name);
+          }
         }
       });
-      ctx.log('heal', `✨ 【CE清除】战局强行回溯！${ctx.user.name} 驱散了我方全员的负面异常状态，并恢复了大量生命（各 ${healAmt} 点）！`);
+      const healText = totalHealed > 0
+        ? `治疗 ${healedNames.length} 名队友：${healedNames.join('、')}，总计恢复 ${totalHealed} 点生命`
+        : '治疗被禁疗或满血溢出';
+      ctx.log('heal', `✨ 【CE清除】战局强行回溯！${ctx.user.name} 驱散了我方全员的负面异常状态，${healText}！`);
 
-      ctx.log('win', `⏪ 时间轴回拨！${ctx.user.name} 白嫖了一个行动回合，立即再次出手！`);
+      ctx.log('skill', `⏪ 时间轴回拨！${ctx.user.name} 白嫖了一个行动回合，立即再次出手！`);
       ctx.executeSkillAction('v_rabbit_calc_rng', ctx.user, ctx.target, ctx.triggerDepth + 1);
       return true;
     },
@@ -335,7 +379,8 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const enemies = ctx.currentTargets ?? [];
       const dmg = Math.floor(ctx.user.mag * 2.5);
-      ctx.log('skill', `🔊 【扩音处刑】大喇叭里传出放大了十倍的魔音："【6666...归零！】" 极其刺耳的电子魔音对全场敌人造成真实魔法伤害并强制眩晕！`);
+      const enemyNames = enemies.map((enemy) => enemy.name).join('、') || '无';
+      ctx.log('skill', `🔊 【扩音处刑】大喇叭里传出放大了十倍的魔音："【6666...归零！】" 刺向 ${enemies.length} 名敌人：${enemyNames}！`);
       enemies.forEach((e) => {
         const actualDmg = ctx.applyDamage(e, dmg, 'skill', true);
         ctx.user.stats.dmgDealt += actualDmg;

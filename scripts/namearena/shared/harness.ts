@@ -286,9 +286,10 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
   const patterns: Array<[string, RegExp]> = [
     ['nan-or-undefined', /\b(?:NaN|undefined|null)\b/],
     ['negative-number-log', /(?:造成|承受|恢复|损失)了? -\d/],
-    ['zero-damage-control', /(?:承受了|造成了) 0 点.*(?:并被|并深度|并使其|眩晕|魅惑|击飞|中毒|灼烧|沉默)/],
+    ['zero-damage-control', /(?:承受了|造成了|实际造成) 0 点.*(?:并被|并深度|并使其|并施加|眩晕|魅惑|击飞|中毒|灼烧|沉默|混乱)/],
     ['duplicate-damage-type', /物理\(物理\)|魔法\(魔法\)/],
   ];
+  let expectWaterSonInterceptLine = 0;
 
   logs.forEach((entry, index) => {
     const line = index + 1;
@@ -296,6 +297,20 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     patterns.forEach(([type, regex]) => {
       if (regex.test(text)) issues.push({ label, line, type, text });
     });
+    if (expectWaterSonInterceptLine > 0 && line <= expectWaterSonInterceptLine && /【援护】小汀\(傀儡\) 冲了出来/.test(text)) {
+      issues.push({ label, line, type: 'water-son-intercept-mislabeled-as-puppet', text });
+    }
+    if (/与【水人的好大儿】互换了位置/.test(text)) {
+      expectWaterSonInterceptLine = line + 2;
+    } else if (expectWaterSonInterceptLine > 0 && line > expectWaterSonInterceptLine) {
+      expectWaterSonInterceptLine = 0;
+    }
+    if (
+      /(全场敌人|所有敌人|敌方全体).*(眩晕|魅惑|击飞|中毒|灼烧|沉默|混乱|致盲|弱点暴露)/.test(text) &&
+      !/(?:\d+ 名敌人：|敌人：)/.test(text)
+    ) {
+      issues.push({ label, line, type: 'blanket-status-without-target-list', text });
+    }
 
     const pair = parseSlackingPair(text);
     if (pair) pair.forEach((name) => activeSlacking.add(name));

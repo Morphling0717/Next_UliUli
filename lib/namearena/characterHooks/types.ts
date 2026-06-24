@@ -7,7 +7,13 @@ export interface CharacterHookRuntime {
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;
   syncHpPct: (fighter: Fighter) => void;
-  applyDamage: (target: Fighter, amount: number, source: string, isTrueDamage?: boolean) => number;
+  applyDamage: (
+    target: Fighter,
+    amount: number,
+    source: string,
+    isTrueDamage?: boolean,
+    attacker?: Fighter,
+  ) => number;
   executeSkillAction: (id: string | null, user: Fighter, target: Fighter | null, depth: number) => void;
   finalizeFighterDeath: (
     fighter: Fighter,

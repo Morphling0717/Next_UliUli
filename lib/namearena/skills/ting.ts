@@ -14,6 +14,7 @@ export const tingSkills: Record<string, SkillDefinition> = {
   blood_mist: {
     name: '血雾爆发', tag: SKILL_TAGS.MAG, mult: 3.0, lifesteal: 1.0,
     text: '🌫️ {USER} 引爆了脊髓剑中的血液！对 {TARGET} 造成 {VAL} 伤害并大量吸血！脊髓剑随之破碎！',
+    condition: (user) => !!user.hasSpinalSword || user.status.some((s) => s.type === 'SPINAL_SWORD'),
     onExecute: (ctx) => {
       ctx.user.hasSpinalSword = false;
       ctx.user.spinalSwordTurns = 0;
@@ -24,7 +25,45 @@ export const tingSkills: Record<string, SkillDefinition> = {
       return false;
     },
   },
-  suicide_bomb: { name: '自爆', tag: SKILL_TAGS.PHYS, mult: 8.0, ignoreDef: true, selfDmgPct: 1.0, selfDmgCanKill: true, text: '💣 {USER} 扑向了 {TARGET}，启动了自毁程序！"我和你爆了！！" 造成 {VAL} 真实伤害！' },
+  grudge_rend: {
+    name: '怨念裂斩',
+    tag: SKILL_TAGS.PHYS,
+    mult: 4.2,
+    minDamagePct: 0.25,
+    lifesteal: 0.25,
+    text: '🦴 {USER} 把怨气缠上脊髓剑，撕开 {TARGET} 的防线，造成 {VAL} 伤害！',
+  },
+  grudge_blood_feast: {
+    name: '血怨吞噬',
+    tag: SKILL_TAGS.MAG,
+    mult: 3.8,
+    lifesteal: 0.75,
+    text: '🩸 {USER} 将战场血雾卷回体内，吞噬 {TARGET} 的生命，造成 {VAL} 伤害！',
+  },
+  grudge_wail: {
+    name: '怨灵尖啸',
+    tag: SKILL_TAGS.DEBUFF,
+    mult: 2.4,
+    status: 'WEAK',
+    lifesteal: 0.25,
+    text: '👻 {USER} 发出刺耳尖啸，震碎 {TARGET} 的斗志，造成 {VAL} 伤害并附加虚弱！',
+  },
+  bone_guard: {
+    name: '骨血架势',
+    tag: SKILL_TAGS.BUFF,
+    status: 'COUNTER',
+    text: '🦴 {USER} 用骨血摆出反击架势，下一次受到物理攻击会立刻反弹！',
+  },
+  suicide_bomb: {
+    name: '自爆',
+    tag: SKILL_TAGS.PHYS,
+    mult: 3.6,
+    ignoreDef: true,
+    selfDmgPct: 0.9,
+    selfDmgCanKill: false,
+    condition: (user) => user.hpPct > 0.35,
+    text: '💣 {USER} 扑向了 {TARGET}，启动了自毁程序！"我和你爆了！！" 爆炸造成 {VAL} 真实伤害，自己也被反冲炸到濒死！',
+  },
   grudge_curse: { name: '怨念诅咒', tag: SKILL_TAGS.DEBUFF, status: 'WEAK', text: '👻 {USER} 发出凄厉的哀嚎，{TARGET} 受到诅咒，攻击力大幅下降！' },
   summon_puppet_ting: { name: '召唤小汀', tag: SKILL_TAGS.SPECIAL, isSummon: true, summonName: '小汀(傀儡)', summonJob: 'WARRIOR', stats: { hp: 5000, atk: 100, def: 500 }, text: '🩸 {USER} 将脊髓剑插入地面... 鲜血汇聚，召唤出了一具名为【小汀(傀儡)】的无意识肉身保护自己！' },
 };

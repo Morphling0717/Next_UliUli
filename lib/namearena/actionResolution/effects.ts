@@ -24,8 +24,13 @@ export function applySelfDamage(
   if (!skill.selfDmgPct) return;
 
   const selfDamageFloor = skill.selfDmgCanKill ? 0 : 1;
+  const beforeHp = user.currentHp;
   user.currentHp = Math.max(selfDamageFloor, user.currentHp - Math.floor(user.maxHp * skill.selfDmgPct));
   runtime.syncHpPct(user);
+  const actualSelfDmg = Math.max(0, beforeHp - user.currentHp);
+  if (actualSelfDmg > 0) {
+    runtime.log('info', `🩸 ${user.name} 因【${skill.name}】反噬，实际损失 ${actualSelfDmg} 点生命！`);
+  }
 }
 
 export function applyAttackerStyleEffects(
@@ -85,7 +90,7 @@ export function handleValorantWeaponDrop(
     delete target.savedSpd;
     delete target.savedAgl;
   }
-  runtime.log('death', `💔 损失惨重！${target.name} 受到重创或被控，手中的【冥驹】掉落了！经济大幅衰退！`);
+  runtime.log('info', `💔 损失惨重！${target.name} 受到重创或被控，手中的【冥驹】掉落了！经济大幅衰退！`);
 }
 
 export function handlePhysicalCounterReflect(
@@ -98,8 +103,12 @@ export function handlePhysicalCounterReflect(
   if (skill.tag !== runtime.skillTags.PHYS || !target.status.some((status) => status.type === 'COUNTER')) return;
 
   target.status = target.status.filter((status) => status.type !== 'COUNTER');
-  runtime.log('crit', `💢 ${target.name} 触发反击！将 ${actualDmg} 点伤害弹回给了 ${user.name}！`);
-  runtime.applyDamage(user, actualDmg, 'reflect');
+  const reflectedDmg = runtime.applyDamage(user, actualDmg, 'reflect', false, target);
+  if (reflectedDmg > 0) {
+    runtime.log('crit', `💢 ${target.name} 触发反击！将伤害弹回给了 ${user.name}，实际造成 ${reflectedDmg} 点反弹伤害！`);
+  } else {
+    runtime.log('info', `💢 ${target.name} 触发反击，但反弹没有对 ${user.name} 造成实际伤害！`);
+  }
   if (user.currentHp <= 0) {
     runtime.markDefeated(user, { message: `💀 ${user.name} 被自己造成的反弹伤害反死了！`, killer: target });
   }
@@ -120,10 +129,12 @@ export function handlePrimaryTargetDefeat(
   runtime: ActionResolutionRuntime,
   user: Fighter,
   target: Fighter,
+  skill?: SkillDefinition,
 ): void {
   if (target.currentHp > 0) return;
 
-  const defeated = runtime.markDefeated(target, { message: `💀 【击杀】${target.name} 被 ${user.name} 的攻击无情抹杀！`, killer: user });
+  const skillName = skill?.name && !['普通攻击', '魔力攻击'].includes(skill.name) ? `【${skill.name}】` : '攻击';
+  const defeated = runtime.markDefeated(target, { message: `💀 【击杀】${target.name} 被 ${user.name} 的${skillName}击败！`, killer: user });
   if (defeated) grantValorantKillRewards(runtime, user);
 }
 
@@ -134,8 +145,10 @@ export function applyLifestealEffects(
   actualDmg: number,
   hpBeforeDamage: number,
 ): void {
+  const tingBloodthirst = user.isTing ? (user.transformed ? 0.4 : 0.2) : 0;
   const lsPct =
     (skill.lifesteal ?? 0) +
+    tingBloodthirst +
     (user.status.some((status) => status.type === 'PLUG_HEAD') ? 0.25 : 0) +
     (user.status.some((status) => status.type === 'VALO_ULT_EMPRESS') ? 1.0 : 0) +
     (user.status.some((status) => status.type === 'STYLE_SMART' || status.type === 'STYLE_EMPEROR') ? 0.5 : 0);

@@ -1,8 +1,16 @@
 import type { BattleEngineData, Fighter, GachaEntry, SkillDefinition } from './types';
+import {
+  grantGachaLuck,
+  isLuckEmperor,
+  resolveLuckEmperorSsrDraw,
+} from './gachaMechanics';
 
 export interface SkillResolutionRuntime {
   skills: Record<string, SkillDefinition>;
   data: BattleEngineData;
+  fighters?: Fighter[];
+  getTeamId?: (fighter: Fighter) => string;
+  isActiveCombatant?: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;
 }
 
@@ -33,11 +41,19 @@ export function resolveSkillDefinition(
   if (skill.isGacha && skill.pool) {
     const exodiaChance = user.jobData?.name === '欧皇' ? 0.05 : 0.006;
     const pool = skill.pool as GachaEntry[];
-    if (pool === runtime.data.GACHA_SSR_POOL && Math.random() < exodiaChance) {
+    const isSsrPool = pool === runtime.data.GACHA_SSR_POOL;
+    if (isSsrPool && isLuckEmperor(user) && (user.gachaLuck ?? 0) >= 3) {
+      skill = { ...skill, ...resolveLuckEmperorSsrDraw(runtime, user, pool) };
+    } else if (isSsrPool && Math.random() < exodiaChance) {
       skill = { ...skill, ...runtime.data.EXODIA_CARD };
-      runtime.log('win', `👑 欧皇时刻！${user.name} 触发了 5% 的保底机制！`);
+      runtime.log('buff', `👑 欧皇时刻！${user.name} 触发了 5% 的保底机制！`);
+    } else if (isSsrPool && isLuckEmperor(user)) {
+      skill = { ...skill, ...resolveLuckEmperorSsrDraw(runtime, user, pool) };
     } else {
       skill = { ...skill, ...pool[Math.floor(Math.random() * pool.length)] };
+    }
+    if (!isSsrPool) {
+      grantGachaLuck(user, 1, runtime.log, '抽到低收益牌');
     }
   }
 

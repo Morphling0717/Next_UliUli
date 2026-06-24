@@ -65,10 +65,16 @@ export function executeSkillAction(
   const targetSelection = resolveTarget(createTargetingRuntime(runtime), user, forcedTarget, currentTargets);
   if (!targetSelection) return;
   let { target, isIntercepted } = targetSelection;
+  let interceptionLabel = isIntercepted
+    ? `【援护】${target.name} 冲了出来，替宿主挡下了 ${user.name} 的攻击`
+    : '';
 
   const skill = resolveSkillDefinition({
     skills: runtime.skills,
     data: runtime.data,
+    fighters: runtime.fighters,
+    getTeamId: runtime.getTeamId,
+    isActiveCombatant: runtime.isActiveCombatant,
     log: (type, text) => runtime.log(type, text),
   }, skillId, user);
   const formatText = (text: string): string => formatSkillText(skill, text);
@@ -93,13 +99,15 @@ export function executeSkillAction(
 
   if (skill.tag !== runtime.skillTags.HEAL && skill.tag !== runtime.skillTags.BUFF && target.status.some((status) => status.type === 'SPELL_BLOCK')) {
     target.status = target.status.filter((status) => status.type !== 'SPELL_BLOCK');
-    healFighter(target, Math.floor(target.maxHp * 0.15));
-    return runtime.log('info', `🔵 庇护之音！林肯法球(或特种装甲)的光幕为 ${target.name} 挡下了 ${user.name} 的攻击，并恢复了部分生命！`);
+    const healed = healFighter(target, Math.floor(target.maxHp * 0.15));
+    const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
+    return runtime.log('info', `🔵 庇护之音！林肯法球(或特种装甲)的光幕为 ${target.name} 挡下了 ${user.name} 的【${skill.name}】${healText}！`);
   }
 
-  runtime.spreadDivaSupport(skill, user, userTeamId);
-
-  if (runtime.executeSupportSkill(skill, user, forcedTarget, userTeamId)) return;
+  if (runtime.executeSupportSkill(skill, user, forcedTarget, userTeamId)) {
+    runtime.spreadDivaSupport(skill, user, userTeamId);
+    return;
+  }
 
   if (missesSkill(user, target, skill, isIntercepted)) {
     return runtime.log('info', `💨 ${user.name} 的 ${skill.name ?? '攻击'} 被 ${target.name} 闪避了！`);
@@ -115,9 +123,6 @@ export function executeSkillAction(
   const damageResult = runtime.calculateDamage(user, target, skill, userTeamId, skillId);
   let { dmg } = damageResult;
   const { logType, ignoreDefOverride, sexyTrueDamage } = damageResult;
-  applySelfDamage(runtime, user, skill);
-  applyAttackerStyleEffects(runtime, user, target);
-  applySkillStatusEffect(runtime, skill, target);
 
   if (skillId === 'suicide_bomb' && target.status.some((status) => status.type === 'LIQUID_BODY')) {
     dmg = Math.floor(dmg * 0.3);
@@ -132,6 +137,7 @@ export function executeSkillAction(
       runtime.log('info', `🛡️ 致命一击袭来！但在命中的瞬间，${target.name} 与【水人的好大儿】互换了位置！好大儿化作一滩清水替水神挡下了必杀！`);
       target = sonProtector;
       isIntercepted = true;
+      interceptionLabel = `【换位援护】${target.name} 化作一滩清水，替水神挡下了 ${user.name} 的攻击`;
       preMitigationDmg = Math.floor(dmg * 0.5);
     }
   }
@@ -140,7 +146,7 @@ export function executeSkillAction(
   const hpBeforeDamage = target.currentHp;
 
   if (isIntercepted) {
-    runtime.log('info', `🛡️ 【援护】小汀(傀儡) 冲了出来，替宿主挡下了 ${user.name} 的攻击！预计受到 ${preMitigationDmg} 点伤害！(减伤50%)`);
+    runtime.log('info', `🛡️ ${interceptionLabel}！预计受到 ${preMitigationDmg} 点伤害！(减伤50%)`);
   } else {
     let msg = formatText(skill.text ?? '');
     if (skill.isRandomText && skill.pool) {
@@ -153,14 +159,21 @@ export function executeSkillAction(
     runtime.log(logType, (logType === 'crit' ? '💥 暴击！' : '') + msg.replace(/{USER}/g, user.name).replace(/{TARGET}/g, target.name).replace(/{VAL}/g, String(preMitigationDmg)));
   }
 
-  const actualDmg = runtime.applyDamage(target, preMitigationDmg, 'skill', !!ignoreDefOverride || sexyTrueDamage);
+  applySelfDamage(runtime, user, skill);
+  applyAttackerStyleEffects(runtime, user, target);
+  applySkillStatusEffect(runtime, skill, target);
+
+  const actualDmg = runtime.applyDamage(target, preMitigationDmg, 'skill', !!ignoreDefOverride || sexyTrueDamage, user);
+  if (preMitigationDmg > 0 && actualDmg !== preMitigationDmg && runtime.isActiveCombatant(target)) {
+    runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
+  }
 
   handleValorantWeaponDrop(runtime, target, actualDmg);
   handlePhysicalCounterReflect(runtime, skill, user, target, actualDmg);
   consumeAimAfterAttack(runtime, user, skill);
 
   user.stats.dmgDealt += actualDmg;
-  handlePrimaryTargetDefeat(runtime, user, target);
+  handlePrimaryTargetDefeat(runtime, user, target, skill);
 
   applyLifestealEffects(runtime, user, skill, actualDmg, hpBeforeDamage);
   triggerSuccubusBabyFollowup(runtime, user, target, skillId, userTeamId, triggerDepth);

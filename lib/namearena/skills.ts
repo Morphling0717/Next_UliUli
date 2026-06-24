@@ -2,6 +2,7 @@ import type { SkillDefinition } from './types';
 import { babySkills } from './skills/baby';
 import { baseJobSkills } from './skills/baseJobs';
 import { chimeraSkills } from './skills/chimera';
+import { duelMonsterSkills } from './skills/duelMonster';
 import { gachaSkills } from './skills/gacha';
 import { gamerSkills } from './skills/gamer';
 import { jokerSkills } from './skills/joker';
@@ -23,6 +24,7 @@ const SKILLS: Record<string, SkillDefinition> = {
   ...jokerSkills,
   ...succubusSkills,
   ...chimeraSkills,
+  ...duelMonsterSkills,
   ...gachaSkills,
   ...tokusatsuSkills,
   ...morphlingSkills,

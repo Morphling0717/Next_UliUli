@@ -36,7 +36,7 @@ export function runDeathAccountingCases(): string[] {
 
     assert(engine.fighters[1].isDead, 'normal lethal hit should finalize target death');
     assert(engine.fighters[0].stats.kills === 1, `normal lethal hit should award exactly one kill, got ${engine.fighters[0].stats.kills}`);
-    assert(logs.filter((entry) => entry.text.includes('无情抹杀')).length === 1, 'normal lethal hit should log one kill message');
+    assert(logs.filter((entry) => entry.text.includes('【击杀】') && entry.text.includes('击败')).length === 1, 'normal lethal hit should log one kill message');
     cases.push('normal lethal hit awards exactly one kill');
   }
 

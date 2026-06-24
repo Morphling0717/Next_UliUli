@@ -5,6 +5,8 @@ import {
   isStatusType,
 } from '../statusRules';
 import type { CharacterHook } from './types';
+import { selectBabySupportSkill } from './sigua';
+import { selectValorantSkill } from './valoJunior';
 
 function isSiguaFighter(fighter: Fighter): boolean {
   return !!fighter.isSigua ||
@@ -66,7 +68,7 @@ export function executeSlackingSynergy(ctx: SkillContext): boolean {
       if (Math.random() < 0.15) {
         ctx.user.hasTriggeredSlacking = true;
         partner.hasTriggeredSlacking = true;
-        ctx.log('win', `✨ 【摸鱼伙伴羁绊】触发！战斗进行到一半，${ctx.user.name} 和 ${partner.name} 突然对视了一眼，达成了某种默契...`);
+        ctx.log('skill', `✨ 【摸鱼伙伴羁绊】触发！战斗进行到一半，${ctx.user.name} 和 ${partner.name} 突然对视了一眼，达成了某种默契...`);
         ctx.log('skill', `⛺ 两人以极快的速度手牵手脱离了战场，去外边悠闲地喝奶茶了！(进入场外OB状态，绝对无敌且无法被选中，5回合后回归)`);
 
         const applySynergy = (participant: Fighter) => {
@@ -91,41 +93,18 @@ export function executeSlackingSynergy(ctx: SkillContext): boolean {
   if (ctx.user.job === 'VIRTUAL_DIVA') {
     fallback = 'diva_song';
   } else if (ctx.user.job === 'VALO_JUNIOR') {
-    ctx.user.ultPoints = (ctx.user.ultPoints ?? 0) + 1;
-    ctx.user.economy = (ctx.user.economy ?? 0) + 1;
-    if (ctx.user.ultPoints >= 5) {
-      let validUlts = [
-        'valo_ult_showstopper', 'valo_ult_blade_storm', 'valo_ult_cosmic_divide',
-        'valo_ult_resurrection', 'valo_ult_lockdown', 'valo_ult_vipers_pit',
-        'valo_ult_empress', 'valo_ult_hunters_fury', 'valo_ult_null_cmd',
-        'valo_ult_run_it_back', 'valo_ult_orbital_strike', 'valo_ult_neural_theft',
-      ];
-      if (!ctx.fighters.some((fighter) => fighter.isDead && ctx.getTeamId(fighter) === ctx.getTeamId(ctx.user) && fighter.id !== ctx.user.id)) {
-        validUlts = validUlts.filter((ult) => ult !== 'valo_ult_resurrection');
-      }
-      ctx.user.ultPoints = 0;
-      fallback = validUlts[Math.floor(Math.random() * validUlts.length)];
-      ctx.log('win', `✨ 大招充能完毕！${ctx.user.name} 准备释放终极技能！`);
-    } else if ((ctx.user.economy ?? 0) >= 6) {
-      if (!ctx.user.savedSpd) {
-        ctx.user.savedSpd = ctx.user.spd;
-        ctx.user.savedAgl = ctx.user.agl;
-        ctx.user.spd = Math.floor(ctx.user.spd * 0.5);
-        ctx.user.agl = 0;
-        ctx.log('win', `🔭 资金充足！${ctx.user.name} 起了一把【冥驹 (Operator)】！进入架枪姿态，速度和闪避大幅降低！`);
-      }
-      fallback = 'valo_operator_shot';
-    } else {
-      if (ctx.user.savedSpd) {
-        ctx.user.spd = ctx.user.savedSpd;
-        ctx.user.agl = ctx.user.savedAgl ?? 0;
-        delete ctx.user.savedSpd;
-        delete ctx.user.savedAgl;
-      }
-      fallback = (ctx.user.economy ?? 0) >= 2 ? 'valo_vandal_shot' : 'valo_classic_shot';
-    }
+    fallback = selectValorantSkill(ctx.user, {
+      fighters: ctx.fighters,
+      getTeamId: ctx.getTeamId,
+      isActiveCombatant: (fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
+      log: ctx.log,
+    });
   } else if (ctx.user.job === 'MY_BABY') {
-    fallback = 'baby_cheer';
+    fallback = selectBabySupportSkill(ctx.user, {
+      fighters: ctx.fighters,
+      getTeamId: ctx.getTeamId,
+      isActiveCombatant: (fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
+    });
   } else if (ctx.user.job === 'Q_BUNNY') {
     fallback = 'q_bunny_attack';
   } else if (ctx.user.job === 'VERSATILE_RABBIT') {
@@ -159,7 +138,7 @@ export const slackingBondHook: CharacterHook = {
     );
 
     if (currentlySlacking.length > 0 && (activeTeams <= 1 || activeFighters.length <= 1)) {
-      runtime.log('win', `🚨 【突发状况】打工的队友快死光了！（场外判定：仅存 ${activeTeams} 支队伍/阵营）`);
+      runtime.log('info', `🚨 【突发状况】打工的队友快死光了！（场外判定：仅存 ${activeTeams} 支队伍/阵营）`);
       currentlySlacking.forEach((participant) => {
         participant.status = participant.status.filter((status) => !isStatusType(status.type, SLACKING_AWAY_STATUS_TYPES));
         participant.currentHp = participant.maxHp;

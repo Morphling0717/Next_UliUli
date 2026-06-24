@@ -89,7 +89,7 @@ export function handleChimeraUltimateEvolution(
   target.maxHp = Math.floor(target.maxHp * 1.8);
   target.currentHp = target.maxHp;
   runtime.syncHpPct(target);
-  runtime.log('win', `🧬 警告！${target.name} 已完成究极进化！全插件安装完毕！\n封印解除，全属性引发恐怖的裂变！化身为最高级别的神级灾厄！`);
+  runtime.log('buff', `🧬 警告！${target.name} 已完成究极进化！全插件安装完毕！\n封印解除，全属性引发恐怖的裂变！化身为最高级别的神级灾厄！`);
 }
 
 export function executeSupportSkill(
@@ -114,6 +114,11 @@ export function executeSupportSkill(
     const heal = Math.floor(Math.max(user.atk, user.mag) * (skill.mult ?? 1));
     const healed = healFighter(targetForBuff, heal);
     if (skill.cleanStatus) cleanseCommonNegativeStatuses(targetForBuff);
+    if (healed <= 0) {
+      const cleanText = skill.cleanStatus ? '，并清除了异常状态' : '';
+      runtime.log('heal', `✨ 【${skill.name}】${user.name} 试图治疗 ${targetForBuff.name}，但生命已满，治疗溢出${cleanText}。`);
+      return true;
+    }
     let healMessage = runtime.formatSkillText(skill, skill.text ?? '');
     if (!healMessage.includes('{VAL}')) healMessage += ` (恢复 {VAL} 点生命)`;
     runtime.log('heal', healMessage.replace(/{USER}/g, user.name).replace(/{TARGET}/g, targetForBuff.name).replace(/{VAL}/g, String(healed)));

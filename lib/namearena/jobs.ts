@@ -7,6 +7,13 @@ const gamer_skills: string[] = [
   'kamehameha', 'zonia', 'aim_bot', 'lag_switch', 'roll_dodge', 'tp_scroll', 'warcry_dota',
 ];
 
+const all_platform_gamer_skills: string[] = [
+  'gamer_headshot_line', 'gamer_perfect_parry', 'gamer_estus_cancel',
+  'gamer_tactical_pause', 'gamer_wombo_combo', 'gamer_qte_execute',
+  'gamer_speedrun_route', 'gamer_read_inputs', 'gamer_world_combo',
+  'awp_shot', 'waterfowl', 'bkb_dota', 'judgment_cut', 'zonia',
+];
+
 // God Slime full skill pool
 const god_slime_skills: string[] = [
   'liquid_mirage', 'divine_shift', 'abyssal_prison', 'apocalyptic_flood',
@@ -72,6 +79,11 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
     hp: 1.2, atk: 1.5, def: 1.0, spd: 1.5, agl: 1.5, mag: 1.5, res: 1.0, wis: 2.0,
     skills: gamer_skills,
   },
+  ALL_PLATFORM_CHAMPION: {
+    name: '全平台制霸者', icon: '🏆',
+    hp: 3.0, atk: 3.2, def: 2.4, spd: 2.6, agl: 2.8, mag: 3.2, res: 2.4, wis: 3.5,
+    skills: all_platform_gamer_skills,
+  },
 
   // ── 刺猬人系 ────────────────────────────────────────────────────────────
   TOKU_FAN: {
@@ -111,12 +123,12 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
   EXPLOSIVE_ANTI_CROC: {
     name: '爆鳄狂人', icon: '💥',
     hp: 2.5, atk: 5.0, def: 1.0, spd: 2.5, agl: 2.0, mag: 1.0, res: 1.0, wis: 0.5,
-    skills: ['spinal_slash', 'suicide_bomb', 'suicide_rng'],
+    skills: ['spinal_slash', 'suicide_bomb', 'grudge_rend', 'bone_guard', 'suicide_rng'],
   },
   GRUDGE_SUICIDER: {
     name: '怨念恶灵', icon: '👻',
     hp: 2.0, atk: 3.0, def: 1.5, spd: 2.0, agl: 1.5, mag: 2.5, res: 1.5, wis: 1.0,
-    skills: ['spinal_slash', 'grudge_curse', 'suicide_rng'],
+    skills: ['spinal_slash', 'grudge_rend', 'grudge_blood_feast', 'grudge_wail', 'bone_guard', 'grudge_curse', 'suicide_rng'],
   },
 
   // ── 克蕾儿系 ────────────────────────────────────────────────────────────
@@ -175,6 +187,8 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
 
   // Summon-only jobs (never assigned to player-fighters)
   DUEL_MONSTER:   { name: '决斗怪兽',  icon: '🃏', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
+  EXODIA_INCARNATE: { name: '黑暗大法师', icon: '🧙‍♂️', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['exodia_obliterate', 'exodia_forbidden_blast', 'exodia_seal_chains'] },
+  BLUE_EYES_WHITE_DRAGON: { name: '青眼白龙', icon: '🐲', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['blue_eyes_burst_stream', 'blue_eyes_sweeping_breath', 'blue_eyes_dragon_roar'] },
   GENSHIN_ARCHON: { name: '璃月七神',  icon: '🛡️', hp: 1.0, atk: 1.0, def: 2.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
   FATE_SERVANT:   { name: '从者',      icon: '🗡️', hp: 1.0, atk: 1.5, def: 1.0, spd: 1.5, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
   HSR_HUNTER:     { name: '星穹铁道猎人', icon: '🤖', hp: 1.0, atk: 1.2, def: 1.0, spd: 1.5, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },

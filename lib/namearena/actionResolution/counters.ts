@@ -20,11 +20,15 @@ export function handleWaitCounter(
     triggerDepth,
   })) return true;
 
-  runtime.log('win', `🪑 ${target.name} 从借来的椅子上跃起，触发了等待反击！`);
+  runtime.log('skill', `🪑 ${target.name} 从借来的椅子上跃起，触发了等待反击！`);
   runtime.log('info', `🚫 ${user.name} 的攻击被打断了！`);
   const counterDmg = Math.floor(target.atk * 2.0);
-  runtime.applyDamage(user, counterDmg, 'counter');
-  runtime.log('crit', `💥 强力反击！${target.name} 对 ${user.name} 造成了 ${counterDmg} 点伤害！`);
+  const actualCounterDmg = runtime.applyDamage(user, counterDmg, 'counter', false, target);
+  if (actualCounterDmg > 0) {
+    runtime.log('crit', `💥 强力反击！${target.name} 对 ${user.name} 实际造成 ${actualCounterDmg} 点伤害！`);
+  } else {
+    runtime.log('info', `💥 强力反击被化解，${user.name} 没有承受实际伤害！`);
+  }
   if (user.currentHp <= 0) {
     runtime.markDefeated(user, {
       message: `💀 ${user.name} 承受不住反击的威力，被直接击杀了！`,
@@ -63,9 +67,15 @@ export function handleCounterStatus(
   if (counterType === 'CTR_CHARM') { user.status.push({ type: 'CHARMED', duration: 2 }); runtime.log('info', `😍 ${user.name} 被魅惑了，停止了攻击！`); return true; }
   if (counterType === 'CTR_STUN') { user.status.push({ type: 'STUN', duration: 2 }); runtime.log('info', `💫 ${user.name} 被震慑眩晕，攻击中断！`); return true; }
   if (counterType === 'CTR_DRAIN') {
-    runtime.log('heal', `🧛 ${target.name} 发动反击，试图吸取 ${user.name} 300 点生命！`);
-    const drain = runtime.applyDamage(user, 300, 'counter', true);
-    healFighter(target, drain);
+    const drain = runtime.applyDamage(user, 300, 'counter', true, target);
+    const healed = healFighter(target, drain);
+    if (drain <= 0) {
+      runtime.log('info', `🧛 ${target.name} 发动汲取反击，但没有从 ${user.name} 身上吸到有效生命！`);
+    } else if (healed > 0) {
+      runtime.log('heal', `🧛 ${target.name} 发动汲取反击，${user.name} 实际损失 ${drain} 点生命，${target.name} 恢复了 ${healed} 点生命！`);
+    } else {
+      runtime.log('info', `🧛 ${target.name} 发动汲取反击，${user.name} 实际损失 ${drain} 点生命，但 ${target.name} 生命已满，治疗溢出！`);
+    }
     if (user.currentHp <= 0) {
       runtime.markDefeated(user, { message: `💀 ${user.name} 被吸干了生命！`, killer: target });
     }
@@ -74,8 +84,12 @@ export function handleCounterStatus(
   if (counterType === 'CTR_BURN') user.status.push({ type: 'BURN', duration: 5 });
   if (counterType === 'CTR_FREEZE') { user.status.push({ type: 'FREEZE', duration: 2 }); return true; }
   if (counterType === 'CTR_VOID') {
-    runtime.log('crit', `🌌 虚空反击陷阱启动！试图吞噬 ${user.name}，造成 500 真实伤害！`);
-    runtime.applyDamage(user, 500, 'counter', true);
+    const actualDmg = runtime.applyDamage(user, 500, 'counter', true, target);
+    if (actualDmg > 0) {
+      runtime.log('crit', `🌌 虚空反击陷阱启动！吞噬 ${user.name}，实际造成 ${actualDmg} 点真实伤害！`);
+    } else {
+      runtime.log('info', `🌌 虚空反击陷阱启动，但 ${user.name} 没有承受实际伤害！`);
+    }
     if (user.currentHp <= 0) {
       runtime.markDefeated(user, { message: `💀 ${user.name} 跌入了虚空被粉碎！`, killer: target });
     }

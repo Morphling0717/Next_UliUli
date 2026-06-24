@@ -10,6 +10,7 @@ import type {
 } from './characterHooks/types';
 import { bunnyHook } from './characterHooks/bunny';
 import { gachaHook } from './characterHooks/gacha';
+import { gamerHook } from './characterHooks/gamer';
 import { jokerHook } from './characterHooks/joker';
 import { morphlingHook } from './characterHooks/morphling';
 import { siguaHook } from './characterHooks/sigua';
@@ -38,6 +39,7 @@ const CHARACTER_HOOKS: CharacterHook[] = [
   morphlingHook,
   slackingBondHook,
   valoJuniorHook,
+  gamerHook,
   jokerHook,
   tingHook,
   tokusatsuHook,

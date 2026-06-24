@@ -78,5 +78,28 @@ export function runSlackingIsolation(): string[] {
     cases.push(`${name} skips own turn while slacking`);
   });
 
+  {
+    const logs: LogEntry[] = [];
+    const bunny = applySlacking(makeFighter('兔卷卷@away'));
+    bunny.job = 'VERSATILE_RABBIT';
+    bunny.jobData.name = '百变兔娘';
+    bunny.styleTurnCounter = 3;
+    bunny.status.push({ type: 'STYLE_FOOL', duration: 999 });
+    bunny.spd = 10000;
+    const enemyA = makeFighter('测试敌人A@a');
+    const enemyB = makeFighter('测试敌人B@b');
+    const fighters = localProject.cloneFighters([bunny, enemyA, enemyB]);
+    const before = snapshot([fighters[0]]);
+    withSeed(1, () => {
+      const engine = makeEngine(fighters, logs);
+      engine.step({ current: false });
+      assertUnchanged(before, engine.fighters, ['兔卷卷'], { checkStatus: false });
+      const joined = logs.map((entry) => entry.text).join('\n');
+      assert(joined.includes('兔卷卷 正在场外OB摸鱼，暂时不参与战斗'), `slacking versatile bunny did not skip:\n${joined}`);
+      assert(!/人设时钟|光速换装|光速切片|计算器/.test(joined), `slacking versatile bunny advanced style clock or acted:\n${joined}`);
+    });
+    cases.push('slacking versatile bunny cannot act through style fool or style clock');
+  }
+
   return cases;
 }

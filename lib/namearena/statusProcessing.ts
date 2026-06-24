@@ -13,7 +13,13 @@ export interface StatusProcessingRuntime {
   statusEffects: StatusEffectsMap;
   turnCount: number;
   log: (type: string, text: string) => void;
-  applyDamage: (target: Fighter, amount: number, source: string, isTrueDamage?: boolean) => number;
+  applyDamage: (
+    target: Fighter,
+    amount: number,
+    source: string,
+    isTrueDamage?: boolean,
+    attacker?: Fighter,
+  ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   syncHpPct: (fighter: Fighter) => void;
   isActiveCombatant: (fighter: Fighter) => boolean;
@@ -80,7 +86,9 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
       } else {
         const heal = Math.floor(actor.maxHp * 0.05);
         const healed = healFighter(actor, heal);
-        runtime.log('heal', `${runtime.statusEffects[status.type]?.icon ?? ''} ${actor.name} 自动回复了 ${healed} 点生命`);
+        if (healed > 0) {
+          runtime.log('heal', `${runtime.statusEffects[status.type]?.icon ?? ''} ${actor.name} 自动回复了 ${healed} 点生命`);
+        }
       }
     }
     const tickMode = getStatusTickMode(status.type);
@@ -94,6 +102,10 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
   });
   actor.status = newStatus;
   syncSpinalSwordState(runtime, actor, true);
+
+  if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
+    return false;
+  }
 
   if (actor.status.some((status) => status.type === 'BKB') && !actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
     const hadBlocked = actor.status.some((status) => isStatusType(status.type, BKB_BLOCKED_STATUS_TYPES));

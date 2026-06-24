@@ -1,8 +1,12 @@
-import type { SkillDefinition } from '../types';
+import type { Fighter, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
 import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
 
 const { SKILL_TAGS } = Data;
+
+function namesOf(fighters: Fighter[]): string {
+  return fighters.map((fighter) => fighter.name).join('、') || '无';
+}
 
 export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_classic_shot: {
@@ -21,13 +25,20 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_ult_showstopper: {
     name: '晚安火炮', tag: SKILL_TAGS.PHYS, mult: 3.0, text: '🚀 {USER} 掏出火箭筒："FIRE IN THE HOLE！" 轰炸了 {TARGET}，造成 {VAL} 毁灭伤害！',
     afterExecute: (ctx, dmg) => {
-      const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead).sort(() => 0.5 - Math.random()).slice(0, 2);
+      const otherEnemies = (ctx.currentTargets ?? [])
+        .filter((f) => f.id !== ctx.target.id && !f.isDead && !f.isDeadAnnounced && f.currentHp > 0)
+        .sort(() => 0.5 - Math.random())
+        .slice(0, 2);
       if (otherEnemies.length > 0) {
-        ctx.log('skill', `🚀 【晚安火炮】爆炸波及了周围的敌人！造成大量范围伤害！`);
+        ctx.log('skill', `🚀 【晚安火炮】爆炸波及 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`);
         const aoeDmg = Math.floor(dmg * 0.8);
         otherEnemies.forEach((e) => {
           const actualDmg = ctx.applyDamage(e, aoeDmg, 'skill');
-          ctx.log('info', `💥 爆炸余波重创了 ${e.name}，造成了 ${actualDmg} 点伤害！`);
+          if (actualDmg > 0) {
+            ctx.log('info', `💥 爆炸余波重创了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
+          } else {
+            ctx.log('info', `💥 爆炸余波扫过 ${e.name}，但没有造成实际伤害！`);
+          }
           if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【范围击杀】${e.name} 被晚安火炮的余波炸碎了！`, killer: ctx.user });
           const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
           if (idx !== -1) ctx.fighters[idx] = e;
@@ -40,7 +51,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     name: '飓刃', tag: SKILL_TAGS.PHYS, mult: 2.0, ignoreDef: true, text: '🔪 {USER} 召唤出环绕的飓刃！飞刀贯穿了 {TARGET}，造成 {VAL} 真实伤害！',
     afterExecute: (ctx) => {
       if (ctx.target.currentHp <= 0 && !ctx.target.isDead) {
-        ctx.log('win', `🔪 【飓刃】收割！${ctx.user.name} 拿到击杀，刷新行动条，立即再次出手！`);
+        ctx.log('skill', `🔪 【飓刃】收割！${ctx.user.name} 拿到击杀，刷新行动条，立即再次出手！`);
         ctx.executeSkillAction('valo_ult_blade_storm', ctx.user, null, ctx.triggerDepth + 1);
       }
     },
@@ -55,13 +66,17 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     afterExecute: (ctx, dmg, hpBeforeDamage) => {
       if (dmg > (hpBeforeDamage ?? 0)) {
         const overflow = dmg - (hpBeforeDamage ?? 0);
-        const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead);
+        const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead && !f.isDeadAnnounced && f.currentHp > 0);
         if (otherEnemies.length > 0) {
-          ctx.log('crit', `🛰️ 【天降以此】火力过剩！溢出的 ${overflow} 点伤害溅射给了其他敌人！`);
+          ctx.log('crit', `🛰️ 【天降以此】火力过剩！溢出的 ${overflow} 点伤害溅射给 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`);
           const splashDmg = Math.floor(overflow / otherEnemies.length);
           otherEnemies.forEach((e) => {
             const actualDmg = ctx.applyDamage(e, splashDmg, 'skill');
-            ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，造成了 ${actualDmg} 点伤害！`);
+            if (actualDmg > 0) {
+              ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
+            } else {
+              ctx.log('info', `🔥 轨道炮余波溅射到了 ${e.name}，但没有造成实际伤害！`);
+            }
             if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【溅射击杀】${e.name} 被轨道炮的余波轰成了渣！`, killer: ctx.user });
             const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
             if (idx !== -1) ctx.fighters[idx] = e;
@@ -75,7 +90,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     name: '宇宙分裂', tag: SKILL_TAGS.SPECIAL, text: '🌍 {USER} 撕裂空间...',
     onExecute: (ctx) => {
       const userTeamId = ctx.getTeamId(ctx.user);
-      const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && ctx.getTeamId(f) === userTeamId);
+      const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && !f.isDeadAnnounced && f.currentHp > 0 && ctx.getTeamId(f) === userTeamId);
       allies.forEach((a) => {
         a.status = a.status ?? [];
         a.status.push({ type: 'INVUL', duration: 1 });
@@ -85,7 +100,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === a.id);
         if (idx !== -1) ctx.fighters[idx] = a;
       });
-      ctx.log('win', `🌍 【宇宙分裂】${ctx.user.name} 撕裂了空间！全队获得绝对无敌并净化所有负面状态！`);
+      ctx.log('buff', `🌍 【宇宙分裂】${ctx.user.name} 撕裂了空间！${allies.length} 名队友获得绝对无敌并净化负面状态：${namesOf(allies)}！`);
       return true;
     },
   },
@@ -113,7 +128,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         targetToRevive.currentHp = targetToRevive.maxHp;
         targetToRevive.hpPct = 1.0;
         targetToRevive.status = (targetToRevive.status ?? []).filter((s) => !isStatusType(s.type, REVIVE_CLEAN_STATUS_TYPES));
-        ctx.log('win', `💉 【复活】${ctx.user.name} 消耗终极点数，复活了 ${targetToRevive.name} (恢复了 ${targetToRevive.maxHp} 点生命)！"你的职责尚未完成！"`);
+        ctx.log('heal', `💉 【复活】${ctx.user.name} 消耗终极点数，复活了 ${targetToRevive.name}，恢复至 ${targetToRevive.maxHp}/${targetToRevive.maxHp} 生命！"你的职责尚未完成！"`);
         const revIdx = (ctx.fighters ?? []).findIndex((f) => f.id === targetToRevive.id);
         if (revIdx !== -1) ctx.fighters[revIdx] = targetToRevive;
       }
@@ -124,13 +139,14 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_ult_lockdown: {
     name: '全面封锁', tag: SKILL_TAGS.SPECIAL, text: '🤖 {USER} 部署封锁装置...',
     onExecute: (ctx) => {
-      (ctx.currentTargets ?? []).forEach((e) => {
+      const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      targets.forEach((e) => {
         e.status = e.status ?? [];
         e.status.push({ type: 'STUN', duration: 2 });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
       });
-      ctx.log('skill', `🤖 【全面封锁】倒计时结束！${ctx.user.name} 的装置释放次级波，眩晕了所有敌人！`);
+      ctx.log('skill', `🤖 【全面封锁】倒计时结束！${ctx.user.name} 的装置释放次级波，眩晕 ${targets.length} 名敌人：${namesOf(targets)}！`);
       return true;
     },
   },
@@ -138,7 +154,8 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_ult_vipers_pit: {
     name: '蝰蛇神殿', tag: SKILL_TAGS.SPECIAL, text: '🐍 {USER} 展开毒幕...',
     onExecute: (ctx) => {
-      (ctx.currentTargets ?? []).forEach((e) => {
+      const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      targets.forEach((e) => {
         e.status = e.status ?? [];
         e.status.push({ type: 'POISON', duration: 3 });
         e.status.push({ type: 'BLIND', duration: 3 });
@@ -147,7 +164,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
       });
-      ctx.log('skill', `🐍 【蝰蛇神殿】全场弥漫剧毒！所有敌人中毒、致盲且防御骤降！`);
+      ctx.log('skill', `🐍 【蝰蛇神殿】毒幕覆盖 ${targets.length} 名敌人：${namesOf(targets)}！目标中毒、致盲且防御骤降！`);
       return true;
     },
   },
@@ -155,14 +172,15 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_ult_null_cmd: {
     name: '全面压制', tag: SKILL_TAGS.SPECIAL, text: '🤖 {USER} 发射抑制脉冲...',
     onExecute: (ctx) => {
-      (ctx.currentTargets ?? []).forEach((e) => {
+      const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      targets.forEach((e) => {
         e.status = e.status ?? [];
         e.status.push({ type: 'SILENCE', duration: 3 });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
       });
       ctx.user.atk = Math.floor(ctx.user.atk * 1.5);
-      ctx.log('skill', `🤖 【全面压制】抑制脉冲激活！所有敌人被【沉默】，${ctx.user.name} 攻击力上升！`);
+      ctx.log('skill', `🤖 【全面压制】抑制脉冲激活！${targets.length} 名敌人被【沉默】：${namesOf(targets)}，${ctx.user.name} 攻击力上升！`);
       return true;
     },
   },
@@ -170,14 +188,15 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_ult_neural_theft: {
     name: '神经取缔', tag: SKILL_TAGS.SPECIAL, text: '📷 {USER} 抛出帽子读取记忆...',
     onExecute: (ctx) => {
-      (ctx.currentTargets ?? []).forEach((e) => {
+      const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      targets.forEach((e) => {
         e.status = e.status ?? [];
         e.status.push({ type: 'NEURAL_THEFT_DEBUFF', duration: 2 });
         e.agl = 0;
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
       });
-      ctx.log('skill', `📷 【神经取缔】"我知道你们在哪！" 敌方全体弱点暴露（闪避归零、必吃暴击）！`);
+      ctx.log('skill', `📷 【神经取缔】"我知道你们在哪！" ${targets.length} 名敌人弱点暴露：${namesOf(targets)}（闪避归零、必吃暴击）！`);
       return true;
     },
   },

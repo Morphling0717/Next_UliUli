@@ -19,7 +19,7 @@ export function createSkillContext(
     setLogs: () => {},
     log: (type, text) => runtime.log(type, text),
     getTeamId: (fighter) => runtime.getTeamId(fighter),
-    applyDamage: (damageTarget, amount, source, trueDamage) => runtime.applyDamage(damageTarget, amount, source, trueDamage),
+    applyDamage: (damageTarget, amount, source, trueDamage, attacker) => runtime.applyDamage(damageTarget, amount, source, trueDamage, attacker ?? user),
     markDefeated: (defeatTarget, options) => runtime.markDefeated(defeatTarget, options),
     triggerDepth,
     executeSkillAction: (id, skillUser, skillTarget, depth) => runtime.executeSkillAction(id, skillUser, skillTarget, depth),

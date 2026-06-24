@@ -11,8 +11,45 @@ import { namerenaSkills } from "@/lib/namearena/skills";
 import type { Fighter, StatusEntry } from "@/lib/namearena/types";
 
 type BattleLogEntry = { type: string; text: string };
+type BattlePlaybackItem = {
+  log: BattleLogEntry;
+  fighters: Fighter[];
+};
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const DISPLAY_LOG_LIMIT = 100;
+const LOG_PLAYBACK_PROFILE_BY_SPEED: Record<number, {
+  base: number;
+  charMs: number;
+  maxTextExtra: number;
+  minDeath: number;
+  minLong: number;
+  minHighlight: number;
+}> = {
+  1500: { base: 2400, charMs: 28, maxTextExtra: 3600, minDeath: 3600, minLong: 4500, minHighlight: 5600 },
+  500: { base: 1100, charMs: 12, maxTextExtra: 1500, minDeath: 1700, minLong: 2100, minHighlight: 2800 },
+  50: { base: 260, charMs: 3, maxTextExtra: 320, minDeath: 480, minLong: 620, minHighlight: 800 },
+};
+
+const isTransformLog = (log: BattleLogEntry) =>
+  log.type === 'transform' ||
+  /转职为(?:专属辅助)?【|变身(?:为|——)?【|显露出【|展现出【|觉醒欧皇血统|乘员昏迷|KABOOM|解除了限制/.test(log.text);
+
+const isHighlightLog = (log: BattleLogEntry) =>
+  log.type === 'win' ||
+  isTransformLog(log) ||
+  /最终胜者|浴火重生|并没有死|从地狱归来|不甘倒下|欧皇护符|大保底启动|小保底启动|欧皇时刻|究极进化|人设时钟|光速切片|时间轴回拨|帝皇不可阻挡|摸鱼伙伴羁绊|突发状况|脊髓剑|GREAT！MONSTER|GREAT MONSTER|彩虹狂热|GOTCHARD|飓刃】收割|宇宙分裂|复活】|弑神反噬|大招充能完毕|资金充足|冥驹|武神王座|谢幕返场|乘员昏迷/.test(log.text);
+
+const getLogPlaybackDelay = (log: BattleLogEntry, speed: number) => {
+  const profile = LOG_PLAYBACK_PROFILE_BY_SPEED[speed] ?? LOG_PLAYBACK_PROFILE_BY_SPEED[500];
+  const textLength = log.text.replace(/\s+/g, '').length;
+  const textExtra = Math.min(profile.maxTextExtra, textLength * profile.charMs);
+  let delay = profile.base + textExtra;
+  if (log.text.includes('\n')) delay = Math.max(delay, profile.minLong);
+  if (log.type === 'death') delay = Math.max(delay, profile.minDeath);
+  if (isHighlightLog(log)) delay = Math.max(delay, profile.minHighlight);
+  return delay;
+};
 
 function Icon({
   d,
@@ -88,35 +125,57 @@ export function NameArenaGame() {
     const timerRef = useRef<number | null>(null);
     const battleSpeedRef = useRef(1500);
     const battleTurnRef = useRef(0);
+    const logPlaybackQueueRef = useRef<BattlePlaybackItem[]>([]);
+    const pendingFinalFightersRef = useRef<Fighter[] | null>(null);
+    const pendingEndRef = useRef(false);
+    const battlePumpRef = useRef<() => void>(() => {});
     const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1);
     const [isAutoScroll, setIsAutoScroll] = useState(true);
 
     useEffect(() => { if (isAutoScroll && gameState === 'FIGHTING') logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [displayLogs, isAutoScroll, gameState]);
 
+    const appendDisplayLog = useCallback((logEntry: BattleLogEntry) => {
+        setDisplayLogs(prev => {
+            const newLogs = [...prev, logEntry];
+            return newLogs.length > DISPLAY_LOG_LIMIT ? newLogs.slice(-DISPLAY_LOG_LIMIT) : newLogs;
+        });
+    }, []);
+
     const resetGame = () => {
         setGameState('SETUP');
 	        setDisplayLogs([]);
-	        fullLogsRef.current = [];
+        fullLogsRef.current = [];
 	        setFullLogSnapshot([]);
         fightersRef.current = [];
+        logPlaybackQueueRef.current = [];
+        pendingFinalFightersRef.current = null;
+        pendingEndRef.current = false;
         setFighters([]);
         setIsFullLogModalOpen(false);
         setShowMvp(false);
         spinalSwordRef.current = false;
         battleTurnRef.current = 0;
-        if (timerRef.current !== null) clearInterval(timerRef.current);
+        if (timerRef.current !== null) {
+            clearTimeout(timerRef.current);
+            timerRef.current = null;
+        }
     };
 
     const addLog = (logEntry: BattleLogEntry) => {
         fullLogsRef.current.push(logEntry);
-        setDisplayLogs(prev => {
-            const newLogs = [...prev, logEntry];
-            return newLogs.length > 100 ? newLogs.slice(-100) : newLogs;
-        });
+        appendDisplayLog(logEntry);
     };
 
-    // Synchronous log collector used inside battleStep so logs are batched with fighter state
-    const pendingLogsRef = useRef<BattleLogEntry[]>([]);
+    // Synchronous log collector used inside battleStep so every displayed log carries its matching fighter state.
+    const pendingPlaybackItemsRef = useRef<BattlePlaybackItem[]>([]);
+
+    const scheduleBattlePump = useCallback((delay = 0) => {
+        if (timerRef.current !== null) clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => {
+            timerRef.current = null;
+            battlePumpRef.current();
+        }, delay);
+    }, []);
 
     const downloadLogs = () => {
         const textContent = fullLogsRef.current.map(l => l.text).join('\n');
@@ -130,16 +189,22 @@ export function NameArenaGame() {
     };
 
     const battleStep = useCallback(() => {
-        // Collect logs synchronously during the step so we can batch them with fighter state
-        pendingLogsRef.current = [];
+        if (pendingEndRef.current || logPlaybackQueueRef.current.length > 0) return;
+
+        // Collect logs with an immediate fighter snapshot so the UI state advances with the log that explains it.
+        pendingPlaybackItemsRef.current = [];
+        let engine: BattleEngine | null = null;
         const batchedLog = (logEntry: BattleLogEntry) => {
             fullLogsRef.current.push(logEntry);
-            pendingLogsRef.current.push(logEntry);
+            pendingPlaybackItemsRef.current.push({
+                log: logEntry,
+                fighters: cloneFighters(engine?.fighters ?? fightersRef.current),
+            });
         };
 
         const clonedFighters = cloneFighters(fightersRef.current);
 
-        const engine = new BattleEngine(
+        engine = new BattleEngine(
             clonedFighters, batchedLog,
             namerenaJobs, namerenaSkills, namerenaData, namerenaCore, battleTurnRef.current
         );
@@ -160,39 +225,74 @@ export function NameArenaGame() {
         // Update ref immediately so the next tick always sees fresh data
         fightersRef.current = nextFighters;
 
-        // setFighters + setDisplayLogs are called in the same timer tick.
-        // React 18 batches them into a single render so cards and logs always update together.
-        setFighters([...nextFighters]);
-        const logsSnapshot = pendingLogsRef.current;
-        if (logsSnapshot.length > 0) {
-            setDisplayLogs(prev => {
-                const newLogs = [...prev, ...logsSnapshot];
-                return newLogs.length > 100 ? newLogs.slice(-100) : newLogs;
-            });
+        const playbackItems = pendingPlaybackItemsRef.current;
+        const finalFightersSnapshot = cloneFighters(nextFighters);
+        if (playbackItems.length > 0) {
+            logPlaybackQueueRef.current.push(...playbackItems);
+            pendingFinalFightersRef.current = finalFightersSnapshot;
+        } else {
+            pendingFinalFightersRef.current = null;
+            setFighters(finalFightersSnapshot);
         }
 
         if (isEnd) {
-            setGameState('END');
-            if (timerRef.current !== null) clearInterval(timerRef.current);
+            pendingEndRef.current = true;
         }
     }, []);
 
+    const battlePump = useCallback(() => {
+        const nextItem = logPlaybackQueueRef.current[0];
+
+        if (nextItem) {
+            const playbackItem = logPlaybackQueueRef.current.shift();
+            if (!playbackItem) return;
+            setFighters(playbackItem.fighters);
+            appendDisplayLog(playbackItem.log);
+            scheduleBattlePump(getLogPlaybackDelay(playbackItem.log, battleSpeedRef.current));
+            return;
+        }
+
+        if (pendingFinalFightersRef.current) {
+            setFighters(pendingFinalFightersRef.current);
+            pendingFinalFightersRef.current = null;
+        }
+
+        if (pendingEndRef.current) {
+            pendingEndRef.current = false;
+            setGameState('END');
+            if (timerRef.current !== null) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+            }
+            return;
+        }
+
+        battleStep();
+        scheduleBattlePump(logPlaybackQueueRef.current.length > 0 || pendingEndRef.current ? 0 : 180);
+    }, [appendDisplayLog, battleStep, scheduleBattlePump]);
+
+    useEffect(() => {
+        battlePumpRef.current = battlePump;
+    }, [battlePump]);
+
     useEffect(() => {
         if (gameState === 'FIGHTING')
-                timerRef.current = window.setInterval(battleStep, battleSpeedRef.current);
-            else if (timerRef.current !== null) clearInterval(timerRef.current);
+                scheduleBattlePump(0);
+            else if (timerRef.current !== null) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+            }
             return () => {
-                if (timerRef.current !== null) clearInterval(timerRef.current);
+                if (timerRef.current !== null) {
+                    clearTimeout(timerRef.current);
+                    timerRef.current = null;
+                }
             };
-    }, [battleStep, gameState]);
+    }, [gameState, scheduleBattlePump]);
 
     const changeSpeed = (spd: number) => {
         battleSpeedRef.current = spd;
         setCurrentSpeedLvl(spd === 1500 ? 1 : spd === 500 ? 2 : 3);
-            if (gameState === 'FIGHTING') {
-                if (timerRef.current !== null) clearInterval(timerRef.current);
-                timerRef.current = window.setInterval(battleStep, spd);
-            }
     };
 
     const names = fighters.map(f => f.name).filter(n => n.length > 0).sort((a,b) => b.length - a.length);
@@ -205,6 +305,7 @@ export function NameArenaGame() {
                 crit:   { label: '暴击', bg: 'bg-yellow-600' },
                 death:  { label: '击杀', bg: 'bg-red-600' },
                 win:    { label: '高光', bg: 'bg-indigo-600' },
+                transform: { label: '觉醒', bg: 'bg-fuchsia-600' },
                 heal:   { label: '恢复', bg: 'bg-emerald-600' },
                 buff:   { label: '增益', bg: 'bg-cyan-600' },
                 skill:  { label: '技能', bg: 'bg-blue-600' },
@@ -214,7 +315,7 @@ export function NameArenaGame() {
             };
         const tag = tagMap[l.type] || tagMap['info'];
 
-        if (l.type === 'win') {
+        if (isHighlightLog(l)) {
             return (
                 <div key={i} className="my-5 py-5 px-3 text-center rounded-xl bg-gradient-to-r from-indigo-900/60 via-purple-900/80 to-indigo-900/60 border border-purple-500/50 shadow-[0_0_20px_rgba(168,85,247,0.4)] relative overflow-hidden animate-log-entry animate-pulse-slow z-10">
                     <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMSIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIi8+PC9zdmc+')] opacity-50"></div>

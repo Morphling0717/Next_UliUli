@@ -21,8 +21,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     text: '🔧 {USER} 载具受损！黑炮管了！"长按F进行战地抢修（50秒）"\n{USER} 原地瘫痪（眩晕），但装甲逐渐恢复，回复了海量生命值！',
     onExecute: (ctx) => {
       ctx.user.status.push({ type: 'STUN', duration: 2 });
-      healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.4));
-      ctx.log('heal', `🔧 【战地抢修】履带接上了！炮闩修好了！${ctx.user.name} 恢复了 40% 的生命值！`);
+      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.4));
+      const healText = healed > 0 ? `实际恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+      ctx.log('heal', `🔧 【战地抢修】履带接上了！炮闩修好了！${ctx.user.name} ${healText}！`);
       return true;
     },
   },
@@ -30,11 +31,12 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '王牌乘员抢修', tag: SKILL_TAGS.HEAL, condition: (u) => u.hpPct < 0.6,
     text: '🔧 {USER} 载具受损！但【王牌乘员组】迅速介入！"履带断了？几秒钟的事！"\n{USER} 瞬间完成抢修，清除了所有负面状态，并恢复了巨量生命值！',
     onExecute: (ctx) => {
-      healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.6));
+      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.6));
       ctx.user.status = ctx.user.status.filter(
         (s) => !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'WT_SUPPRESS', 'WT_AIRBORNE', 'WT_REPAIRING'].includes(s.type),
       );
-      ctx.log('heal', `🔧 【王牌乘员】顶级金币车待遇！炮闩履带瞬间复原！${ctx.user.name} 恢复了 60% 的生命值并解除了异常状态！`);
+      const healText = healed > 0 ? `实际恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+      ctx.log('heal', `🔧 【王牌乘员】顶级金币车待遇！炮闩履带瞬间复原！${ctx.user.name} ${healText}并解除了异常状态！`);
       return true;
     },
   },
@@ -94,8 +96,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         if (e.status.some((s) => s.type === 'SPELL_BLOCK')) {
           e.status = e.status.filter((s) => s.type !== 'SPELL_BLOCK');
-          healFighter(e, Math.floor(e.maxHp * 0.15));
-          ctx.log('info', `🔵 庇护之音！林肯法球(或特种装甲)的光幕为 ${e.name} 挡下了 ${ctx.user.name} 的空袭，并恢复了部分生命！`);
+          const healed = healFighter(e, Math.floor(e.maxHp * 0.15));
+          const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
+          ctx.log('info', `🔵 庇护之音！林肯法球(或特种装甲)的光幕为 ${e.name} 挡下了 ${ctx.user.name} 的空袭${healText}！`);
           return;
         }
 
