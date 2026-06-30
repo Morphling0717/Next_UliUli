@@ -201,7 +201,7 @@ export function syncPuppetMasterStatus(runtime: StatusProcessingRuntime, actor: 
   const hasPuppet = runtime.fighters.some((fighter) =>
     fighter.isSummon &&
     fighter.summonerId === actor.id &&
-    fighter.name === '小汀(傀儡)' &&
+    (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
     runtime.isActiveCombatant(fighter),
   );
   const hasStatus = actor.status.some((status) => status.type === 'PUPPET_MASTER');

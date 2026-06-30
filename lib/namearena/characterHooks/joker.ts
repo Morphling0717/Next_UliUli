@@ -1,4 +1,5 @@
 import { cloneJobDefinition } from '../combatState';
+import type { DamageApplicationOptions } from '../types';
 import type { CharacterHook } from './types';
 
 export const jokerHook: CharacterHook = {
@@ -21,8 +22,11 @@ export const jokerHook: CharacterHook = {
     return true;
   },
 
-  onDefeated: ({ fighter }) => {
-    if (fighter.isJoker && !fighter.hasResurrected) fighter.reviveTurns = 5;
+  onDefeated: ({ fighter, runtime }) => {
+    if (fighter.isJoker && !fighter.hasResurrected) {
+      fighter.reviveTurns = 5;
+      runtime.log('info', `🃏 ${fighter.name} 没有真正退场，进入 5 次结算的返场倒计时！`);
+    }
   },
 
   shouldPreventWin: ({ fighter, runtime, aliveCombatants, activeTeams }) => {
@@ -85,8 +89,16 @@ export const jokerHook: CharacterHook = {
     if (enemies.length > 0) {
       const aoeDmg = Math.floor(fighter.mag * 2.0);
       runtime.log('skill', `💥 【谢幕返场】${fighter.name} 的地狱笑话席卷 ${enemies.length} 名敌人：${enemies.map((enemy) => enemy.name).join('、')}！`);
-      enemies.forEach((enemy) => {
-        const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter, { deferTransform: true });
+      for (const enemy of enemies) {
+        if (!runtime.isActiveCombatant(fighter)) break;
+        if (!runtime.isActiveCombatant(enemy) || runtime.getTeamId(enemy) === myTeamId) continue;
+        const damageOptions: DamageApplicationOptions = {
+          deferTransform: true,
+          respectDefenses: true,
+          actionName: '谢幕返场',
+        };
+        const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter, damageOptions);
+        if (damageOptions.redirectedByJoker) continue;
         if (actualDmg > 0) {
           runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害，并施加【混乱】！`);
         } else {
@@ -99,7 +111,7 @@ export const jokerHook: CharacterHook = {
         if (actualDmg > 0 && runtime.isActiveCombatant(enemy)) {
           enemy.status.push({ type: 'CONFUSED', duration: 1 });
         }
-      });
+      }
     }
     return true;
   },

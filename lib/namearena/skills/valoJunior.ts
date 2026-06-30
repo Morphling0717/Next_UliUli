@@ -1,5 +1,6 @@
-import type { Fighter, SkillDefinition } from '../types';
+import type { DamageApplicationOptions, Fighter, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
+import { isActiveCombatant } from '../combatState';
 import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
 
 const { SKILL_TAGS } = Data;
@@ -30,10 +31,15 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         .sort(() => 0.5 - Math.random())
         .slice(0, 2);
       if (otherEnemies.length > 0) {
+        if (!isActiveCombatant(ctx.user)) return;
         ctx.log('skill', `🚀 【晚安火炮】爆炸波及 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`);
         const aoeDmg = Math.floor(dmg * 0.8);
-        otherEnemies.forEach((e) => {
-          const actualDmg = ctx.applyDamage(e, aoeDmg, 'skill');
+        for (const e of otherEnemies) {
+          if (!isActiveCombatant(ctx.user)) break;
+          if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+          const damageOptions: DamageApplicationOptions = { actionName: '晚安火炮余波' };
+          const actualDmg = ctx.applyDamage(e, aoeDmg, 'skill', false, ctx.user, damageOptions);
+          if (damageOptions.redirectedByJoker) continue;
           if (actualDmg > 0) {
             ctx.log('info', `💥 爆炸余波重创了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
           } else {
@@ -43,7 +49,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
           if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【范围击杀】${e.name} 被晚安火炮的余波炸碎了！`, killer: ctx.user });
           const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
           if (idx !== -1) ctx.fighters[idx] = e;
-        });
+        }
       }
     },
   },
@@ -69,10 +75,15 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         const overflow = dmg - (hpBeforeDamage ?? 0);
         const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead && !f.isDeadAnnounced && f.currentHp > 0);
         if (otherEnemies.length > 0) {
+          if (!isActiveCombatant(ctx.user)) return;
           ctx.log('crit', `🛰️ 【天降以此】火力过剩！溢出的 ${overflow} 点伤害溅射给 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`);
           const splashDmg = Math.floor(overflow / otherEnemies.length);
-          otherEnemies.forEach((e) => {
-            const actualDmg = ctx.applyDamage(e, splashDmg, 'skill');
+          for (const e of otherEnemies) {
+            if (!isActiveCombatant(ctx.user)) break;
+            if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+            const damageOptions: DamageApplicationOptions = { actionName: '天降以此余波' };
+            const actualDmg = ctx.applyDamage(e, splashDmg, 'skill', false, ctx.user, damageOptions);
+            if (damageOptions.redirectedByJoker) continue;
             if (actualDmg > 0) {
               ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
             } else {
@@ -82,7 +93,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
             if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【溅射击杀】${e.name} 被轨道炮的余波轰成了渣！`, killer: ctx.user });
             const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
             if (idx !== -1) ctx.fighters[idx] = e;
-          });
+          }
         }
       }
     },

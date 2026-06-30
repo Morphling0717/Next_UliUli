@@ -1,6 +1,6 @@
-import type { SkillDefinition, StatKey, StylePoolEntry } from '../types';
+import type { DamageApplicationOptions, SkillDefinition, StatKey, StylePoolEntry } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, setCurrentHp } from '../combatState';
+import { healFighter, isActiveCombatant, setCurrentHp } from '../combatState';
 
 const { SKILL_TAGS } = Data;
 
@@ -92,38 +92,47 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
 
       const roll = rolls[Math.floor(Math.random() * rolls.length)];
 
-      const doDamage = (baseDmg: number): number => {
+      const doDamage = (baseDmg: number, actionName = '计算器盲按'): { actualDmg: number; redirected: boolean } => {
         const res = ctx.user.jobData?.name === '欧皇' ? Math.floor(ctx.target.res * 0.5) : ctx.target.res;
         let finalDmg = Math.max(1, Math.floor(baseDmg * (1 + Math.random() * 0.2) - res * 0.5));
         if ((ctx.target.status ?? []).some((s) => s.type === 'ETHEREAL')) finalDmg = Math.floor(finalDmg * 2.0);
-        const actualDmg = ctx.applyDamage(ctx.target, finalDmg, 'skill');
+        const damageOptions: DamageApplicationOptions = { actionName };
+        const actualDmg = ctx.applyDamage(ctx.target, finalDmg, 'skill', false, ctx.user, damageOptions);
         if (ctx.user?.stats) ctx.user.stats.dmgDealt += actualDmg;
-        return actualDmg;
+        return { actualDmg, redirected: !!damageOptions.redirectedByJoker };
       };
 
       if (roll.type === '114514') {
-        const dmg = doDamage(Math.floor(ctx.user.mag * 1.5));
-        if (dmg <= 0) {
-          ctx.log('skill', `🧮 滴—— 1 1 4 5 1 4... ${ctx.user.name} 播放了极其生草的恶臭数字，但 ${ctx.target.name} 没有受到实际伤害，中毒没有生效！`);
+        ctx.log('skill', `🧮 滴—— 1 1 4 5 1 4... ${ctx.user.name} 播放极其生草的恶臭数字，精神污染朝 ${ctx.target.name} 扩散！`);
+        const { actualDmg: dmg, redirected } = doDamage(Math.floor(ctx.user.mag * 1.5), '恶臭数字');
+        if (redirected) {
+          // 屑的转移日志已经说明完整结果。
+        } else if (dmg <= 0) {
+          ctx.log('info', `🧮 恶臭数字扫过 ${ctx.target.name}，但没有造成实际伤害，中毒没有生效！`);
         } else {
-          ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(dmg)));
+          ctx.log('skill', `🧮 恶臭数字命中 ${ctx.target.name}，实际造成 ${dmg} 点精神伤害并使其深度中毒！`);
           ctx.flushDeferredDamageEvents?.();
           ctx.target.status = ctx.target.status ?? [];
           ctx.target.status.push({ type: 'POISON', duration: 3 });
         }
       } else if (roll.type === '666666') {
+        ctx.log('skill', `🧮 滴—— 6 6 6 6 6 6... 弹幕共鸣！${ctx.user.name} 召唤弹幕狂潮，准备对 ${ctx.target.name} 打出 6 段魔法打击！`);
         let totalDmg = 0;
+        let redirectedAny = false;
         for (let i = 0; i < 6; i++) {
+          if (!isActiveCombatant(ctx.user)) break;
           if (ctx.target.currentHp > 0) {
             let segDmg = Math.floor(ctx.user.mag * 0.5);
             if (Math.random() < 0.5) segDmg = Math.floor(segDmg * 1.5);
-            totalDmg += doDamage(segDmg);
+            const segment = doDamage(segDmg, '弹幕共鸣');
+            redirectedAny ||= segment.redirected;
+            totalDmg += segment.actualDmg;
           }
         }
         if (totalDmg > 0) {
-          ctx.log('crit', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(totalDmg)));
-        } else {
-          ctx.log('info', `🧮 滴—— 6 6 6 6 6 6... 弹幕狂潮扫过 ${ctx.target.name}，但没有造成实际伤害！`);
+          ctx.log('crit', `🧮 【弹幕共鸣】${ctx.user.name} 的 6 段魔法打击结算完毕，对 ${ctx.target.name} 总计造成 ${totalDmg} 点实际伤害！`);
+        } else if (!redirectedAny) {
+          ctx.log('info', `🧮 【弹幕共鸣】弹幕狂潮扫过 ${ctx.target.name}，但没有造成实际伤害！`);
         }
         ctx.flushDeferredDamageEvents?.();
       } else if (roll.type === '888888') {
@@ -155,11 +164,14 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         if (boostedValoNames.length > 0) logMsg += `\n💰 联动彩蛋触发：队里的瓦学妹【${boostedValoNames.join('、')}】顺手狂赚了 3 点经济！`;
         ctx.log('heal', logMsg);
       } else if (roll.type === '5201314') {
-        const dmg = doDamage(Math.floor(ctx.user.mag * 0.1));
-        if (dmg <= 0) {
-          ctx.log('skill', `🧮 滴—— 5 2 0 1 3 1 4... ${ctx.user.name} 发射了极致的爱心飞吻，但 ${ctx.target.name} 没有受到实际伤害，魅惑没有生效！`);
+        ctx.log('skill', `🧮 滴—— 5 2 0 1 3 1 4... ${ctx.user.name} 发射极致的爱心飞吻，试图深度魅惑 ${ctx.target.name}！`);
+        const { actualDmg: dmg, redirected } = doDamage(Math.floor(ctx.user.mag * 0.1), '爱心飞吻');
+        if (redirected) {
+          // 屑的转移日志已经说明完整结果。
+        } else if (dmg <= 0) {
+          ctx.log('info', `🧮 爱心飞吻擦过 ${ctx.target.name}，但没有造成实际伤害，魅惑没有生效！`);
         } else {
-          ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(dmg)));
+          ctx.log('skill', `🧮 爱心飞吻命中 ${ctx.target.name}，实际造成 ${dmg} 点物理伤害并深度魅惑！`);
           ctx.flushDeferredDamageEvents?.();
           ctx.target.status = ctx.target.status ?? [];
           ctx.target.status.push({ type: 'CHARMED', duration: 3 });
@@ -169,11 +181,14 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         ctx.user.status = ctx.user.status ?? [];
         ctx.user.status.push({ type: 'COUNTER', duration: 2 });
       } else if (roll.type === '996007') {
-        const dmg = doDamage(Math.floor(ctx.user.mag * 1.8));
-        if (dmg <= 0) {
-          ctx.log('skill', `🧮 滴—— 9 9 6 0 0 7... ${ctx.user.name} 试图强迫 ${ctx.target.name} 无休加班，但没有造成实际伤害，灼烧和减速没有生效！`);
+        ctx.log('skill', `🧮 滴—— 9 9 6 0 0 7... ${ctx.user.name} 强迫 ${ctx.target.name} 无休加班，重压即将落下！`);
+        const { actualDmg: dmg, redirected } = doDamage(Math.floor(ctx.user.mag * 1.8), '无休加班');
+        if (redirected) {
+          // 屑的转移日志已经说明完整结果。
+        } else if (dmg <= 0) {
+          ctx.log('info', `🧮 无休加班的重压没有造成实际伤害，灼烧和减速没有生效！`);
         } else {
-          ctx.log('skill', roll.text.replace(/{USER}/g, ctx.user.name).replace(/{TARGET}/g, ctx.target.name).replace('{VAL}', String(dmg)));
+          ctx.log('skill', `🧮 无休加班压垮 ${ctx.target.name}，实际造成 ${dmg} 点魔法伤害并附加灼烧，速度永久暴跌！`);
           ctx.flushDeferredDamageEvents?.();
           ctx.target.status = ctx.target.status ?? [];
           ctx.target.status.push({ type: 'BURN', duration: 3 });
@@ -185,6 +200,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         ctx.markDefeated(ctx.target, { message: `💀 【击杀】${ctx.target.name} 承受不住这极其离谱的计算器魔法，当场暴毙！`, killer: ctx.user });
       }
 
+      if (!isActiveCombatant(ctx.user)) return true;
       ctx.user.status = ctx.user.status ?? [];
       refreshStatus(ctx.user.status, 'RABBIT_CALC_HASTE', 3);
       ctx.log('info', `⚡ 伴随着按键的残影，${ctx.user.name} 进入【计算超频】状态，接下来 3 次自身行动出手频率提升 15%！`);
@@ -199,7 +215,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       ctx.log('skill', `🧮 咔哒！计算器发出了震耳欲聋的审判之音："【归——零——】！！！"`);
 
       if (ctx.target.job === 'GOD_SLIME') {
-        const actualDmg = ctx.applyDamage(ctx.user, 9999, 'skill', true);
+        const actualDmg = ctx.applyDamage(ctx.user, 9999, 'skill', true, ctx.target, { actionName: '弑神反噬', respectDefenses: false });
         if (actualDmg > 0) {
           ctx.log('crit', `⚡ 【弑神反噬】警告！！${ctx.user.name} 试图篡改神明【${ctx.target.name}】的数据！\n神明的绝对威压免疫了归零，降下神罚之雷，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -386,9 +402,17 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       const dmg = Math.floor(ctx.user.mag * 2.5);
       const enemyNames = enemies.map((enemy) => enemy.name).join('、') || '无';
       ctx.log('skill', `🔊 【扩音处刑】大喇叭里传出放大了十倍的魔音："【6666...归零！】" 刺向 ${enemies.length} 名敌人：${enemyNames}！`);
-      enemies.forEach((e) => {
-        const actualDmg = ctx.applyDamage(e, dmg, 'skill', true);
+      for (const e of enemies) {
+        if (!isActiveCombatant(ctx.user)) break;
+        if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((s) => s.type === 'SYNERGY_SLACKING')) continue;
+        const damageOptions: DamageApplicationOptions = { actionName: '扩音处刑' };
+        const actualDmg = ctx.applyDamage(e, dmg, 'skill', true, ctx.user, damageOptions);
+        if (damageOptions.redirectedByJoker) continue;
         ctx.user.stats.dmgDealt += actualDmg;
+        if (damageOptions.targetDefeatedDuringDamage || e.isDead || e.isDeadAnnounced) {
+          ctx.flushDeferredDamageEvents?.();
+          continue;
+        }
         const controlImmune = (e.status ?? []).some((s) => ['BKB', 'STYLE_FOOL', 'STYLE_EMPEROR'].includes(s.type));
         let shouldStun = false;
         if (actualDmg <= 0) {
@@ -407,7 +431,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {
           ctx.markDefeated(e, { message: `💀 【击杀】${e.name} 被魔音贯耳，大脑宕机而亡！`, killer: ctx.user });
         }
-      });
+      }
 
       return true;
     },

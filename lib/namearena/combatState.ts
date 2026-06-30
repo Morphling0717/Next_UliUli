@@ -46,6 +46,7 @@ export function cloneFighter(fighter: Fighter): Fighter {
     jobData: fighter.jobData ? cloneJobDefinition(fighter.jobData) : fighter.jobData,
     status: cloneStatuses(fighter.status),
     stats: { ...fighter.stats },
+    exodiaPieces: fighter.exodiaPieces ? [...fighter.exodiaPieces] : fighter.exodiaPieces,
   };
 }
 

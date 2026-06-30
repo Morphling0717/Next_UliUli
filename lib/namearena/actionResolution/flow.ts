@@ -1,4 +1,5 @@
 import type {
+  DamageApplicationOptions,
   Fighter,
 } from '../types';
 import { healFighter } from '../combatState';
@@ -43,6 +44,24 @@ function createTargetingRuntime(runtime: ActionResolutionRuntime) {
   };
 }
 
+function clarifyDamagePlaceholderText(text: string): string {
+  return text
+    .replace(/重创 \{TARGET\} \{VAL\}\)/g, '重创 {TARGET}，造成 {VAL} 点伤害)')
+    .replace(/造成 9999 \({VAL}\) 真实伤害/g, '造成 {VAL} 点真实伤害')
+    .replace(/\({VAL}\s*伤害\)/g, '(造成 {VAL} 点伤害)')
+    .replace(/\({VAL}\)/g, '(造成 {VAL} 点伤害)')
+    .replace(/{VAL}伤害/g, '{VAL} 点伤害');
+}
+
+function canJokerRedirectSkillDamage(target: Fighter, skillTag: string, runtime: ActionResolutionRuntime): boolean {
+  return (
+    target.job === 'GOD_OF_TROLLS' &&
+    skillTag !== runtime.skillTags.BUFF &&
+    skillTag !== runtime.skillTags.HEAL &&
+    !target.status.some((status) => status.type === 'WATER_PRISON')
+  );
+}
+
 export function executeSkillAction(
   runtime: ActionResolutionRuntime,
   skillId: string | null,
@@ -69,6 +88,10 @@ export function executeSkillAction(
     ? `【援护】${target.name} 冲了出来，替宿主挡下了 ${user.name} 的攻击`
     : '';
 
+  const gachaStateBeforeResolution = {
+    luck: user.gachaLuck,
+    pityPower: user.gachaPityPower,
+  };
   const skill = resolveSkillDefinition({
     skills: runtime.skills,
     data: runtime.data,
@@ -117,9 +140,24 @@ export function executeSkillAction(
     target,
     currentTargets,
     triggerDepth,
+    incomingActionName,
     trackDeferredDamageTarget,
     flushDeferredDamageEvents,
   );
+  const refundInterruptedGacha = (reason: string) => {
+    if (!skill.isGacha) return;
+    const changed =
+      user.gachaLuck !== gachaStateBeforeResolution.luck ||
+      user.gachaPityPower !== gachaStateBeforeResolution.pityPower;
+    if (gachaStateBeforeResolution.luck === undefined) delete user.gachaLuck;
+    else user.gachaLuck = gachaStateBeforeResolution.luck;
+    if (gachaStateBeforeResolution.pityPower === undefined) delete user.gachaPityPower;
+    else user.gachaPityPower = gachaStateBeforeResolution.pityPower;
+    if (changed) {
+      runtime.log('info', `🎲 ${user.name} 的【${incomingActionName}】${reason}，本次抽卡未结算，欧气已返还！`);
+    }
+  };
+
   if (skill.onExecute && skill.onExecute(skillCtx)) {
     flushDeferredDamageEvents();
     return;
@@ -129,7 +167,9 @@ export function executeSkillAction(
     target.status = target.status.filter((status) => status.type !== 'SPELL_BLOCK');
     const healed = healFighter(target, Math.floor(target.maxHp * 0.15));
     const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
-    return runtime.log('info', `🔵 庇护之音！林肯法球(或特种装甲)的光幕为 ${target.name} 挡下了 ${user.name} 的【${skill.name}】${healText}！`);
+    runtime.log('info', `🔵 庇护之音！${user.name} 的【${skill.name}】刚要命中 ${target.name}，林肯法球(或特种装甲)的光幕将其挡下${healText}！`);
+    refundInterruptedGacha('被法术抵挡挡下');
+    return;
   }
 
   if (runtime.executeSupportSkill(skill, user, forcedTarget, userTeamId)) {
@@ -138,15 +178,32 @@ export function executeSkillAction(
   }
 
   if (missesSkill(user, target, skill, isIntercepted)) {
-    return runtime.log('info', `💨 ${user.name} 的 ${skill.name ?? '攻击'} 被 ${target.name} 闪避了！`);
+    runtime.log('info', `💨 ${user.name} 的 ${skill.name ?? '攻击'} 被 ${target.name} 闪避了！`);
+    refundInterruptedGacha('被闪避');
+    return;
   }
 
-  if (handleWaitCounter(runtime, target, user, triggerDepth)) return;
-  if (handleCounterStatus(runtime, target, user)) return;
+  if (handleWaitCounter(runtime, target, user, triggerDepth, incomingActionName)) {
+    refundInterruptedGacha('被反击打断');
+    return;
+  }
+  if (handleCounterStatus(runtime, target, user)) {
+    refundInterruptedGacha('被反击打断');
+    return;
+  }
 
-  if (breakAbsoluteDefense(runtime, skillId, user, target)) return;
-  if (dodgesWithPassiveSkill(runtime, user, target)) return;
-  if (!canTouchDamagePlane(runtime, user, target, skill)) return;
+  if (breakAbsoluteDefense(runtime, skillId, user, target)) {
+    refundInterruptedGacha('用于击破绝对防御');
+    return;
+  }
+  if (dodgesWithPassiveSkill(runtime, user, target)) {
+    refundInterruptedGacha('被特殊闪避');
+    return;
+  }
+  if (!canTouchDamagePlane(runtime, user, target, skill)) {
+    refundInterruptedGacha('无法触碰目标');
+    return;
+  }
 
   const damageResult = runtime.calculateDamage(user, target, skill, userTeamId, skillId);
   let { dmg } = damageResult;
@@ -162,7 +219,7 @@ export function executeSkillAction(
   if (preMitigationDmg >= target.currentHp && target.job === 'GOD_SLIME') {
     const sonProtector = runtime.fighters.find((fighter) => fighter.isSon && runtime.isActiveCombatant(fighter) && runtime.getTeamId(fighter) === runtime.getTeamId(target) && fighter.id !== target.id);
     if (sonProtector) {
-      runtime.log('info', `🛡️ 致命一击袭来！但在命中的瞬间，${target.name} 与【水人的好大儿】互换了位置！好大儿化作一滩清水替水神挡下了必杀！`);
+      runtime.log('info', `🛡️ 致命一击袭来！但在命中的瞬间，${target.name} 与【水人的好大儿】互换了位置！好大儿化作一滩清水替水神挡下了这次致命攻击！`);
       target = sonProtector;
       isIntercepted = true;
       interceptionLabel = `【换位援护】${target.name} 化作一滩清水，替水神挡下了 ${user.name} 的【${incomingActionName}】`;
@@ -172,14 +229,20 @@ export function executeSkillAction(
 
   skillCtx.target = target;
   const hpBeforeDamage = target.currentHp;
+  const usesPreResolutionDamageLog = !isIntercepted && preMitigationDmg > 0 && canJokerRedirectSkillDamage(target, skill.tag, runtime);
 
   if (isIntercepted) {
-    runtime.log('info', `🛡️ ${interceptionLabel}！准备承受 ${preMitigationDmg} 点伤害！(减伤50%)`);
+    runtime.log('info', `🛡️ ${interceptionLabel}！援护减伤后准备承受 ${preMitigationDmg} 点伤害！`);
+  } else if (usesPreResolutionDamageLog) {
+    runtime.log(logType, `${logType === 'crit' ? '💥 暴击！' : ''}🎭 ${user.name} 的【${incomingActionName}】锁定 ${target.name}，即将结算 ${preMitigationDmg} 点预估伤害！`);
   } else {
     let msg = formatText(skill.text ?? '');
     if (skill.isRandomText && skill.pool) {
       const pool = skill.pool as string[];
       msg = msg.replace(/{JOKE}/g, pool[Math.floor(Math.random() * pool.length)]);
+    }
+    if (preMitigationDmg > 0 && skill.tag !== runtime.skillTags.BUFF && skill.tag !== runtime.skillTags.HEAL) {
+      msg = clarifyDamagePlaceholderText(msg);
     }
     if (!msg.includes('{VAL}') && preMitigationDmg > 0 && skill.tag !== runtime.skillTags.BUFF && skill.tag !== runtime.skillTags.HEAL) {
       msg += ` (造成 {VAL} 点伤害)`;
@@ -188,24 +251,50 @@ export function executeSkillAction(
   }
 
   applySelfDamage(runtime, user, skill);
-  applyAttackerStyleEffects(runtime, user, target);
-  applySkillStatusEffect(runtime, skill, target);
 
+  const damageOptions: DamageApplicationOptions = isIntercepted
+    ? { deferTransform: true, actionName: incomingActionName }
+    : { deferTransform: true, actionName: incomingActionName };
   const actualDmg = runtime.applyDamage(
     target,
     preMitigationDmg,
     'skill',
     !!ignoreDefOverride || sexyTrueDamage,
     user,
-    isIntercepted ? { deferTransform: true } : undefined,
+    damageOptions,
   );
   if (isIntercepted) {
-    runtime.log('info', `🛡️ ${interceptionLabel}，实际承受 ${actualDmg} 点伤害！`);
-    if (actualDmg > 0) runtime.flushDeferredDamageEvents(target);
+    if (actualDmg > 0) {
+      runtime.log('info', `🛡️ ${interceptionLabel}，实际承受 ${actualDmg} 点伤害！`);
+    } else {
+      runtime.log('info', `🛡️ ${interceptionLabel}，但没有造成实际伤害！`);
+    }
+  } else if (usesPreResolutionDamageLog && !damageOptions.redirectedByJoker && !damageOptions.targetDefeatedDuringDamage) {
+    if (actualDmg > 0) {
+      runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
+    } else {
+      runtime.log('info', `📌 实际结算：${target.name} 完全抵消了这次伤害（原始预估 ${preMitigationDmg}），没有承受实际伤害。`);
+    }
   }
-  if (preMitigationDmg > 0 && actualDmg !== preMitigationDmg && runtime.isActiveCombatant(target)) {
-    runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
+  if (
+    preMitigationDmg > 0 &&
+    actualDmg !== preMitigationDmg &&
+    !usesPreResolutionDamageLog &&
+    runtime.isActiveCombatant(target) &&
+    !damageOptions.redirectedByJoker &&
+    !damageOptions.targetDefeatedDuringDamage
+  ) {
+    if (actualDmg > 0) {
+      runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
+    } else {
+      runtime.log('info', `📌 实际结算：${target.name} 完全抵消了这次伤害（原始预估 ${preMitigationDmg}），没有承受实际伤害。`);
+    }
   }
+  if (actualDmg > 0 && target.currentHp > 0 && !damageOptions.redirectedByJoker) {
+    applySkillStatusEffect(runtime, skill, target);
+    applyAttackerStyleEffects(runtime, user, target);
+  }
+  if (actualDmg > 0) runtime.flushDeferredDamageEvents(target);
 
   handleValorantWeaponDrop(runtime, target, actualDmg);
   handlePhysicalCounterReflect(runtime, skill, user, target, actualDmg);
@@ -217,10 +306,9 @@ export function executeSkillAction(
   applyLifestealEffects(runtime, user, skill, actualDmg, hpBeforeDamage);
   triggerSuccubusBabyFollowup(runtime, user, target, skillId, userTeamId, triggerDepth);
 
-  // Transformation check fires immediately after damage so HP is restored at once
-  runtime.handleTransformations(target);
+  if (actualDmg <= 0) runtime.handleTransformations(target);
   runtime.handleTransformations(user);
-  if (skill.afterExecute) {
+  if (skill.afterExecute && !damageOptions.redirectedByJoker) {
     skill.afterExecute(skillCtx, actualDmg, hpBeforeDamage);
     flushDeferredDamageEvents();
   }

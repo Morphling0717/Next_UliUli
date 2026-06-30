@@ -1,6 +1,6 @@
-import type { SkillDefinition } from '../types';
+import type { DamageApplicationOptions, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter } from '../combatState';
+import { healFighter, isActiveCombatant } from '../combatState';
 import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from '../statusRules';
 
 const { SKILL_TAGS } = Data;
@@ -87,8 +87,16 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       const dmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * 0.95);
       ctx.log('skill', `🌀 【团战连招】${ctx.user.name} 消耗 3 APM 多线操作，向 ${enemies.length} 名敌人打出连招！`);
       let totalDmg = 0;
-      enemies.forEach((enemy) => {
-        const actualDmg = ctx.applyDamage(enemy, dmg, 'skill');
+      let redirectedAny = false;
+      for (const enemy of enemies) {
+        if (!isActiveCombatant(ctx.user)) break;
+        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        const damageOptions: DamageApplicationOptions = { actionName: '团战连招' };
+        const actualDmg = ctx.applyDamage(enemy, dmg, 'skill', false, ctx.user, damageOptions);
+        if (damageOptions.redirectedByJoker) {
+          redirectedAny = true;
+          continue;
+        }
         totalDmg += actualDmg;
         ctx.user.stats.dmgDealt += actualDmg;
         if (actualDmg > 0) {
@@ -100,9 +108,15 @@ export const gamerSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
           ctx.markDefeated(enemy, { message: `💀 【团战收割】${enemy.name} 被玄凝的多线操作打崩了！`, killer: ctx.user });
         }
-      });
+      }
+      if (!isActiveCombatant(ctx.user)) {
+        return true;
+      }
       if (totalDmg > 0) {
-        ctx.log('info', `🌀 【团战连招】${ctx.user.name} 本次多线操作总计造成 ${totalDmg} 点伤害！`);
+        const totalLabel = redirectedAny ? '对未被转移的目标总计造成' : '总计造成';
+        ctx.log('info', `🌀 【团战连招】${ctx.user.name} 本次多线操作${totalLabel} ${totalDmg} 点伤害！`);
+      } else if (redirectedAny) {
+        ctx.log('info', `🌀 【团战连招】${ctx.user.name} 的原目标伤害被随机恶作剧转移，转移伤害已单独结算！`);
       } else {
         ctx.log('info', `🌀 【团战连招】${ctx.user.name} 这轮多线操作没有打出有效伤害！`);
       }
@@ -118,7 +132,10 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       if (!spendApm(ctx.user, 4)) return false;
       const hpRatio = ctx.target.currentHp / ctx.target.maxHp;
       const dmg = Math.floor(ctx.user.atk * (hpRatio < 0.35 ? 4.2 : 2.6));
-      const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', true);
+      ctx.log('skill', `🎮 【处决QTE】${ctx.user.name} 消耗 4 APM，完美输入已经锁定 ${ctx.target.name}！`);
+      const damageOptions: DamageApplicationOptions = { actionName: '处决QTE' };
+      const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', true, ctx.user, damageOptions);
+      if (damageOptions.redirectedByJoker) return true;
       ctx.user.stats.dmgDealt += actualDmg;
       if (actualDmg > 0) {
         ctx.log('crit', `🎮 【处决QTE】${ctx.user.name} 消耗 4 APM 打出完美输入，对 ${ctx.target.name} 实际造成 ${actualDmg} 点真实处决伤害！`);
@@ -167,11 +184,14 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       ctx.user.status.push({ type: 'AIM', duration: 1 });
       const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.24 + ctx.user.wis * 0.9));
       const dmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * 2.2);
-      const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', true);
+      ctx.log('crit', `🏅 【1vX残局】${ctx.user.name} 消耗 3 APM 清掉异常、稳住血线，并开始拆解 ${ctx.target.name}！`);
+      const damageOptions: DamageApplicationOptions = { actionName: '1vX残局' };
+      const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', true, ctx.user, damageOptions);
+      if (damageOptions.redirectedByJoker) return true;
       ctx.user.stats.dmgDealt += actualDmg;
       const healText = healed > 0 ? `恢复 ${healed} 点生命` : '治疗溢出';
       const damageText = actualDmg > 0 ? `并对 ${ctx.target.name} 打出 ${actualDmg} 点真实反打伤害` : `但没有对 ${ctx.target.name} 造成实际伤害`;
-      ctx.log(actualDmg > 0 ? 'crit' : 'info', `🏅 【1vX残局】${ctx.user.name} 消耗 3 APM 清掉异常、${healText}，${damageText}！`);
+      ctx.log(actualDmg > 0 ? 'crit' : 'info', `🏅 【1vX残局】${ctx.user.name} ${healText}，${damageText}！`);
       ctx.flushDeferredDamageEvents?.();
       if (ctx.target.currentHp <= 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
         ctx.markDefeated(ctx.target, { message: `💀 【残局收割】${ctx.target.name} 被玄凝的残局处理带走！`, killer: ctx.user });
@@ -187,7 +207,10 @@ export const gamerSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       if (!spendApm(ctx.user, 6)) return false;
       const primary = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * 3.0);
-      const actualPrimary = ctx.applyDamage(ctx.target, primary, 'skill', true);
+      ctx.log('crit', `🏆 【世界赛名场面】${ctx.user.name} 消耗 6 APM，开始复刻名场面，主目标锁定 ${ctx.target.name}！`);
+      const primaryDamageOptions: DamageApplicationOptions = { actionName: '世界赛名场面' };
+      const actualPrimary = ctx.applyDamage(ctx.target, primary, 'skill', true, ctx.user, primaryDamageOptions);
+      if (primaryDamageOptions.redirectedByJoker) return true;
       ctx.user.stats.dmgDealt += actualPrimary;
       if (actualPrimary > 0) {
         ctx.log('crit', `🏆 【世界赛名场面】${ctx.user.name} 消耗 6 APM 打出高光操作，对 ${ctx.target.name} 实际造成 ${actualPrimary} 点真实伤害！`);
@@ -195,23 +218,28 @@ export const gamerSkills: Record<string, SkillDefinition> = {
         ctx.log('info', `🏆 【世界赛名场面】${ctx.user.name} 消耗 6 APM 打出高光操作，但 ${ctx.target.name} 没有承受实际伤害！`);
       }
       ctx.flushDeferredDamageEvents?.();
+      if (!isActiveCombatant(ctx.user)) return true;
       const splash = Math.floor(primary * 0.25);
-      (ctx.currentTargets ?? [])
+      const splashTargets = (ctx.currentTargets ?? [])
         .filter((enemy) => enemy.id !== ctx.target.id && enemy.currentHp > 0)
-        .slice(0, 2)
-        .forEach((enemy) => {
-          const actualDmg = ctx.applyDamage(enemy, splash, 'skill', true);
-          ctx.user.stats.dmgDealt += actualDmg;
-          if (actualDmg > 0) {
-            ctx.log('info', `🏆 名场面余波波及 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
-          } else {
-            ctx.log('info', `🏆 名场面余波波及 ${enemy.name}，但没有造成实际伤害！`);
-          }
-          ctx.flushDeferredDamageEvents?.();
-          if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
-            ctx.markDefeated(enemy, { message: `💀 【名场面收割】${enemy.name} 被玄凝的世界赛操作带走！`, killer: ctx.user });
-          }
-        });
+        .slice(0, 2);
+      for (const enemy of splashTargets) {
+        if (!isActiveCombatant(ctx.user)) break;
+        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        const damageOptions: DamageApplicationOptions = { actionName: '世界赛名场面余波' };
+        const actualDmg = ctx.applyDamage(enemy, splash, 'skill', true, ctx.user, damageOptions);
+        if (damageOptions.redirectedByJoker) continue;
+        ctx.user.stats.dmgDealt += actualDmg;
+        if (actualDmg > 0) {
+          ctx.log('info', `🏆 名场面余波波及 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
+        } else {
+          ctx.log('info', `🏆 名场面余波波及 ${enemy.name}，但没有造成实际伤害！`);
+        }
+        ctx.flushDeferredDamageEvents?.();
+        if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
+          ctx.markDefeated(enemy, { message: `💀 【名场面收割】${enemy.name} 被玄凝的世界赛操作带走！`, killer: ctx.user });
+        }
+      }
       if (ctx.target.currentHp <= 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
         ctx.markDefeated(ctx.target, { message: `💀 【名场面处决】${ctx.target.name} 倒在玄凝的世界赛操作下！`, killer: ctx.user });
       }

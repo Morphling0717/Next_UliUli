@@ -10,7 +10,7 @@ export function selectSpinalSwordSpecialSkill(
   if (Math.random() < 0.15) return 'blood_mist';
   if (actor.jobData?.skills?.includes('summon_puppet_ting')) {
     const hasPuppet = fighters.some((fighter) =>
-      fighter.name === '小汀(傀儡)' &&
+      (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
       isActive(fighter) &&
       fighter.summonerId === actor.id,
     );

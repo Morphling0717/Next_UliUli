@@ -11,19 +11,22 @@ export const gachaHook: CharacterHook = {
     if (phase !== 'postMechanics' || !isLuckEmperor(actor)) return null;
     if (!actor.jobData.skills.includes('destiny_draw')) return null;
 
-    const luck = actor.gachaLuck ?? 0;
-    if (luck >= 3) return 'destiny_draw';
-    if (actor.hpPct <= 0.45 && Math.random() < 0.75) return 'destiny_draw';
-
     const actorTeam = runtime.getTeamId(actor);
-    const hasOwnSummon = runtime.fighters.some((fighter) =>
+    const ownSummons = runtime.fighters.filter((fighter) =>
       fighter.isSummon &&
       fighter.summonerId === actor.id &&
       runtime.isActiveCombatant(fighter) &&
       runtime.getTeamId(fighter) === actorTeam,
     );
+    const ordinarySummonCount = ownSummons.filter((fighter) => !fighter.isAdvancedSummon).length;
+    const luck = actor.gachaLuck ?? 0;
+    if (luck >= 3) return 'destiny_draw';
+    if (ownSummons.length === 0 && Math.random() < 0.85) return 'destiny_draw';
+    if (ordinarySummonCount >= 2 && Math.random() < 0.72) return 'destiny_draw';
+    if (actor.hpPct <= 0.45 && Math.random() < 0.8) return 'destiny_draw';
+
     const hasSummonLifesteal = actor.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS);
-    if (hasOwnSummon && !hasSummonLifesteal && Math.random() < 0.5) return 'destiny_draw';
+    if (ownSummons.length > 0 && !hasSummonLifesteal && Math.random() < 0.75) return 'destiny_draw';
 
     return null;
   },
@@ -39,10 +42,11 @@ export const gachaHook: CharacterHook = {
       fighter.mag *= 3.0;
       fighter.spd = 100;
       fighter.wis = 120;
-      fighter.gachaLuck = Math.max(0, fighter.gachaLuck ?? 0);
+      fighter.gachaLuck = Math.max(2, fighter.gachaLuck ?? 0);
       fighter.gachaPityPower = 0;
       fighter.hasUsedGachaDeathSave = false;
       fighter.gachaSummonLifestealPct = 0;
+      fighter.exodiaPieces = fighter.exodiaPieces ?? [];
     });
     return true;
   },

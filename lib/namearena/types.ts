@@ -51,6 +51,10 @@ export interface LastDamageRecord {
 
 export interface DamageApplicationOptions {
   deferTransform?: boolean;
+  actionName?: string;
+  respectDefenses?: boolean;
+  redirectedByJoker?: boolean;
+  targetDefeatedDuringDamage?: boolean;
 }
 
 export interface PendingDamageEvent {
@@ -129,8 +133,10 @@ export interface Fighter {
   isWT?: boolean;          // War Thunder player (战雷军迷)
   isGamer?: boolean;       // High-end gamer (玄凝)
   isSummon?: boolean;      // Summoned unit
+  isAdvancedSummon?: boolean;
   isSon?: boolean;         // Water god's son
   summonerId?: string;
+  summonBaseName?: string;
 
   // ── Battle-round state ─────────────────────────────────────────────────
   transformed?: boolean;
@@ -156,10 +162,15 @@ export interface Fighter {
 
   // ── Gacha addict / Luck Emperor pity system ───────────────────────────
   gachaLuck?: number;
+  gachaInstantActionQueued?: boolean;
   gachaPityPower?: number;
   hasUsedGachaDeathSave?: boolean;
   gachaSummonLifestealPct?: number;
+  exodiaPieces?: string[];
   hasUsedExodiaObliterate?: boolean;
+  hasUsedRaPhoenix?: boolean;
+  raChantBoost?: number;
+  blueEyesUltimateStrain?: number;
 
   // ── Chimera / Succubus ultimate evolution ─────────────────────────────
   hasUltimateEvolved?: boolean;
@@ -240,6 +251,11 @@ export interface SkillContext {
     target: Fighter | null,
     depth: number,
   ) => void;
+  executeSummonSkill: (
+    skill: SkillDefinition,
+    user: Fighter,
+    userTeamId: string,
+  ) => void;
   STATUS_EFFECTS: StatusEffectsMap;
   /** @deprecated legacy callback stub — not used at runtime */
   setLogs?: (updater: unknown) => void;
@@ -281,9 +297,14 @@ export interface GachaEntry {
   summonJob?: string;
   stats?: SummonStats;
   unique?: boolean;
+  advancedSummon?: boolean;
   tributes?: number;
   triggerAgain?: number;
   newSkill?: string;
+  requiresFriendlySummon?: string;
+  requiresAnyFriendlySummon?: boolean;
+  requiresOrdinarySummon?: boolean;
+  requiresBlueEyesFusion?: boolean;
   onExecute?: (ctx: SkillContext) => boolean;
   afterExecute?: (
     ctx: SkillContext,
@@ -330,9 +351,14 @@ export interface SkillDefinition {
   summonJob?: string;
   stats?: SummonStats;
   unique?: boolean;
+  advancedSummon?: boolean;
   tributes?: number;
   triggerAgain?: number;
   newSkill?: string;
+  requiresFriendlySummon?: string;
+  requiresAnyFriendlySummon?: boolean;
+  requiresOrdinarySummon?: boolean;
+  requiresBlueEyesFusion?: boolean;
   condition?: (user: Fighter) => boolean;
   onExecute?: (ctx: SkillContext) => boolean;
   afterExecute?: (

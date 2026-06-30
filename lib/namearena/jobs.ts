@@ -189,6 +189,8 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
   DUEL_MONSTER:   { name: '决斗怪兽',  icon: '🃏', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
   EXODIA_INCARNATE: { name: '黑暗大法师', icon: '🧙‍♂️', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['exodia_obliterate', 'exodia_forbidden_blast', 'exodia_seal_chains'] },
   BLUE_EYES_WHITE_DRAGON: { name: '青眼白龙', icon: '🐲', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['blue_eyes_burst_stream', 'blue_eyes_sweeping_breath', 'blue_eyes_dragon_roar'] },
+  BLUE_EYES_ULTIMATE_DRAGON: { name: '青眼究极龙', icon: '🐉', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['ultimate_burst_stream', 'triple_dragon_head'] },
+  RA_WINGED_DRAGON: { name: '拉的翼神龙', icon: '☀️', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['ra_sun_flare', 'ra_divine_pressure'] },
   GENSHIN_ARCHON: { name: '璃月七神',  icon: '🛡️', hp: 1.0, atk: 1.0, def: 2.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
   FATE_SERVANT:   { name: '从者',      icon: '🗡️', hp: 1.0, atk: 1.5, def: 1.0, spd: 1.5, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
   HSR_HUNTER:     { name: '星穹铁道猎人', icon: '🤖', hp: 1.0, atk: 1.2, def: 1.0, spd: 1.5, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },

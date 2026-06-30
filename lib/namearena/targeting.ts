@@ -40,7 +40,7 @@ export function resolveTarget(
   const protector = runtime.fighters.find((fighter) =>
     fighter.isSummon &&
     fighter.summonerId === target.id &&
-    fighter.name === '小汀(傀儡)' &&
+    (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
     runtime.isActiveCombatant(fighter),
   );
   if (protector && protector.id !== user.id) {

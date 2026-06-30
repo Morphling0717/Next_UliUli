@@ -1,8 +1,30 @@
-import type { SkillDefinition } from '../types';
+import type { DamageApplicationOptions, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, setCurrentHp } from '../combatState';
+import { healFighter, isActiveCombatant, setCurrentHp } from '../combatState';
 
 const { SKILL_TAGS } = Data;
+
+const CAS_MAX_TARGETS = 4;
+const CAS_MAIN_DAMAGE_MULT = 2.8;
+const CAS_DESIGNATED_MAIN_DAMAGE_MULT = 3.2;
+const CAS_SPLASH_DAMAGE_MULT = 1.25;
+const CAS_DESIGNATED_SPLASH_DAMAGE_MULT = 1.55;
+const CAS_MAIN_AMMO_RACK_PCT = 0.22;
+const CAS_DESIGNATED_MAIN_AMMO_RACK_PCT = 0.30;
+const CAS_SPLASH_AMMO_RACK_PCT = 0.10;
+const CAS_DESIGNATED_SPLASH_AMMO_RACK_PCT = 0.15;
+
+function isCasEligibleTarget(ctx: SkillContext, fighter: SkillContext['target'] | undefined): boolean {
+  return (
+    !!fighter &&
+    fighter.id !== ctx.user.id &&
+    fighter.currentHp > 0 &&
+    !fighter.isDead &&
+    !fighter.isDeadAnnounced &&
+    ctx.getTeamId(fighter) !== ctx.getTeamId(ctx.user) &&
+    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING')
+  );
+}
 
 export const warThunderSkills: Record<string, SkillDefinition> = {
   wt_attack_d_point: {
@@ -61,8 +83,8 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     text: '🛡️ {USER} 摆出了无懈可击的完美倾斜角度，复合装甲闪耀着魔法的光辉！\n大喊："BVVD保佑！" 触发【顶级魔法跳弹】，清除了自身负面状态，并绝对免疫接下来的所有伤害！',
   },
   wt_laser_rangefinder: {
-    name: '激光测距仪', tag: SKILL_TAGS.BUFF, status: 'AIM', statBuff: { atk: 1.5 },
-    text: '🔭 {USER} 开启热成像与激光测距仪，锁定目标！\n接下来的攻击必定暴击、无法闪避，且攻击力大幅上升！',
+    name: '激光测距仪', tag: SKILL_TAGS.BUFF, status: 'AIM',
+    text: '🔭 {USER} 开启热成像与激光测距仪，锁定目标！\n下一次攻击必定暴击、无法闪避；若呼叫苏-30SM2，将获得精确CAS引导！',
   },
   wt_bmpt_suppress: {
     name: 'BMPT死亡收割机', tag: SKILL_TAGS.PHYS, mult: 0.6, hits: 5, status: 'WT_SUPPRESS', alwaysHit: true,
@@ -82,16 +104,31 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '苏-30SM2 狂暴轰入', tag: SKILL_TAGS.PHYS, ignoreDef: true,
     text: '✈️ 【CAS 请求确认】{USER} 呼叫空中支援！一架 苏-30SM2 呼啸而过...\n"全体目光向我看齐！狂暴轰入！！！"',
     onExecute: (ctx) => {
-      const enemies = (ctx.currentTargets ?? []).sort(() => 0.5 - Math.random()).slice(0, 6);
-      if (enemies.length === 0) return true;
+      const candidates = (ctx.currentTargets ?? []).filter((fighter) => isCasEligibleTarget(ctx, fighter));
+      const primary = isCasEligibleTarget(ctx, ctx.target) ? ctx.target : candidates[0];
+      if (!primary) return true;
 
-      ctx.log('skill', `✈️ 【苏-30SM2 洗地】${ctx.user.name} 呼叫的战机投下满载的航弹！整个战场化为火海！`);
-      const baseDmg = Math.floor(ctx.user.atk * 3.5);
+      const splashTargets = candidates
+        .filter((fighter) => fighter.id !== primary.id)
+        .sort(() => 0.5 - Math.random())
+        .slice(0, CAS_MAX_TARGETS - 1);
+      const enemies = [primary, ...splashTargets];
+      const hasLaserDesignation = ctx.user.status.some((status) => status.type === 'AIM');
+      const mainDmg = Math.floor(ctx.user.atk * (hasLaserDesignation ? CAS_DESIGNATED_MAIN_DAMAGE_MULT : CAS_MAIN_DAMAGE_MULT));
+      const splashDmg = Math.floor(ctx.user.atk * (hasLaserDesignation ? CAS_DESIGNATED_SPLASH_DAMAGE_MULT : CAS_SPLASH_DAMAGE_MULT));
+      let lethalOutcomeTriggered = false;
 
-      enemies.forEach((e) => {
+      ctx.log('skill', hasLaserDesignation
+        ? `✈️ 【苏-30SM2 精确CAS】${ctx.user.name} 上传激光测距坐标，主目标 ${primary.name} 被战机锁定！`
+        : `✈️ 【苏-30SM2 洗地】${ctx.user.name} 呼叫空中支援，航弹将重点轰炸 ${primary.name} 并压制周边目标！`);
+
+      for (const [index, e] of enemies.entries()) {
+        if (!isActiveCombatant(ctx.user)) break;
+        if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        const isPrimary = index === 0;
         if (e.status.some((s) => s.type === 'INVUL')) {
           ctx.log('info', `🛡️ ${e.name} 免疫了 ${ctx.user.name} 的空袭伤害！`);
-          return;
+          continue;
         }
 
         if (e.status.some((s) => s.type === 'SPELL_BLOCK')) {
@@ -99,35 +136,49 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
           const healed = healFighter(e, Math.floor(e.maxHp * 0.15));
           const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
           ctx.log('info', `🔵 庇护之音！林肯法球(或特种装甲)的光幕为 ${e.name} 挡下了 ${ctx.user.name} 的空袭${healText}！`);
-          return;
+          continue;
         }
 
-        const actualDmg = ctx.applyDamage(e, baseDmg, 'skill', true);
+        let plannedDmg = isPrimary ? mainDmg : splashDmg;
+        if (!isPrimary && plannedDmg >= e.currentHp) {
+          plannedDmg = Math.max(0, e.currentHp - 1);
+        }
+
+        const damageOptions: DamageApplicationOptions = { actionName: '苏-30SM2 洗地' };
+        const actualDmg = ctx.applyDamage(e, plannedDmg, 'skill', true, ctx.user, damageOptions);
+        if (damageOptions.redirectedByJoker) continue;
         const airborneImmune = e.status.some((s) => s.type === 'BKB' || s.type === 'INVUL');
-        let shouldApplyAirborne = false;
+        ctx.user.stats.dmgDealt += actualDmg;
         if (actualDmg <= 0) {
           ctx.log('info', `💥 轰炸冲击被化解！${e.name} 没有承受实际伤害，也没有被【击飞】！`);
         } else if (airborneImmune) {
-          ctx.log('crit', `💥 轰炸波及！${e.name} 承受了 ${actualDmg} 点真实伤害，但免疫了【击飞】！`);
+          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！${e.name} 承受了 ${actualDmg} 点真实伤害，但免疫了控制效果！`);
         } else {
-          ctx.log('crit', `💥 轰炸波及！${e.name} 承受了 ${actualDmg} 点真实伤害并被【击飞】！`);
-          shouldApplyAirborne = true;
+          const controlName = isPrimary ? '击飞' : '火力压制';
+          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！${e.name} 承受了 ${actualDmg} 点真实伤害并被【${controlName}】！`);
         }
 
         ctx.flushDeferredDamageEvents?.();
-        if (shouldApplyAirborne && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
-          e.status.push({ type: 'WT_AIRBORNE', duration: 2 });
+        if (actualDmg > 0 && !airborneImmune && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
+          e.status.push({ type: isPrimary ? 'WT_AIRBORNE' : 'WT_SUPPRESS', duration: isPrimary ? 2 : 1 });
         }
 
-        if (e.currentHp > 0 && e.hpPct < 0.3) {
+        const ammoRackPct = isPrimary
+          ? (hasLaserDesignation ? CAS_DESIGNATED_MAIN_AMMO_RACK_PCT : CAS_MAIN_AMMO_RACK_PCT)
+          : (hasLaserDesignation ? CAS_DESIGNATED_SPLASH_AMMO_RACK_PCT : CAS_SPLASH_AMMO_RACK_PCT);
+        if (!lethalOutcomeTriggered && actualDmg > 0 && e.currentHp > 0 && e.hpPct < ammoRackPct) {
           setCurrentHp(e, 0);
-          ctx.markDefeated(e, { message: `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`, killer: ctx.user, setHpZero: false });
+          lethalOutcomeTriggered = ctx.markDefeated(e, { message: `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`, killer: ctx.user, setHpZero: false }) || lethalOutcomeTriggered;
         }
 
         if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {
-          ctx.markDefeated(e, { message: `💀 【CAS击杀】${e.name} 被苏-30SM2的航弹炸回了机库！`, killer: ctx.user });
+          lethalOutcomeTriggered = ctx.markDefeated(e, { message: `💀 【CAS击杀】${e.name} 被苏-30SM2的航弹炸回了机库！`, killer: ctx.user }) || lethalOutcomeTriggered;
         }
-      });
+      }
+      if (hasLaserDesignation) {
+        ctx.user.status = ctx.user.status.filter((status) => status.type !== 'AIM');
+        ctx.log('info', `🎯 ${ctx.user.name} 消耗了激光测距坐标，本次 CAS 的精确打击窗口关闭。`);
+      }
       return true;
     },
   },

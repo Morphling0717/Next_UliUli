@@ -8,9 +8,11 @@ export function handleWaitCounter(
   target: Fighter,
   user: Fighter,
   triggerDepth: number,
+  actionName = '攻击',
 ): boolean {
   if (!target.status.some((status) => status.type === 'WAIT_COUNTER') || target.counterUsed) return false;
 
+  runtime.log('info', `⚔️ ${user.name} 的【${actionName}】即将命中 ${target.name}，触发等待反击判定！`);
   target.status = target.status.filter((status) => status.type !== 'WAIT_COUNTER');
   target.counterUsed = true;
   if (runCharacterWaitCounterHooks({

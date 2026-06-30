@@ -118,6 +118,9 @@ export function runDeathAccountingCases(): string[] {
     assert(engine.fighters[2].hasResurrected, 'Joker should mark resurrection as consumed');
     assert(!engine.fighters[2].isDeadAnnounced, 'Joker revive should clear death announcement');
     assert(engine.fighters[0].stats.kills === 1, `Joker settlement should not duplicate attacker kills, got ${engine.fighters[0].stats.kills}`);
+    const countdownIndex = logs.findIndex((entry) => entry.text.includes('返场倒计时'));
+    const reviveIndex = logs.findIndex((entry) => entry.text.includes('从地狱归来'));
+    assert(countdownIndex >= 0 && reviveIndex >= 0 && countdownIndex < reviveIndex, 'Joker death should explain the revival countdown before returning');
     assert(logs.filter((entry) => entry.text.includes('从地狱归来')).length === 1, 'Joker should revive exactly once');
     cases.push('Joker death countdown revives without duplicate accounting');
   }

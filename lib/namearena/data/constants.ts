@@ -72,6 +72,7 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   SPELL_BLOCK: { name: '法术抵挡', icon: '🔵', desc: '抵挡下一次技能伤害或控制' },
   NO_HEAL: { name: '禁疗', icon: '🥀', desc: '无法恢复生命值' },
   GACHA_SUMMON_LIFESTEAL: { name: '吸血牌', icon: '🧛', desc: '召唤物造成的部分伤害会转化为牢鳄的治疗' },
+  RA_PHOENIX: { name: '神不死鸟', icon: '🔥', desc: '翼神龙受到致死伤害时一场一次复燃反扑' },
 
   SLACKING: { name: '摸鱼', icon: '🐟', desc: '场外OB，无敌且无法被选中与行动' },
   ZEROED: { name: '归零', icon: '🧮', desc: '全属性强行降至10%' },

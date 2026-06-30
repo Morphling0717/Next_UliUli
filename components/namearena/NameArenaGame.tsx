@@ -15,6 +15,25 @@ type BattlePlaybackItem = {
   log: BattleLogEntry;
   fighters: Fighter[];
 };
+type SettlementStats = {
+  dmgDealt: number;
+  dmgTaken: number;
+  kills: number;
+};
+type SettlementContribution = {
+  name: string;
+  stats: SettlementStats;
+};
+type SettlementRow = {
+  id: string;
+  fighter: Fighter;
+  name: string;
+  color: string;
+  icon: string;
+  stats: SettlementStats;
+  summonStats: SettlementStats;
+  summonContributions: SettlementContribution[];
+};
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const DISPLAY_LOG_LIMIT = 100;
@@ -49,6 +68,71 @@ const getLogPlaybackDelay = (log: BattleLogEntry, speed: number) => {
   if (log.type === 'death') delay = Math.max(delay, profile.minDeath);
   if (isHighlightLog(log)) delay = Math.max(delay, profile.minHighlight);
   return delay;
+};
+
+const emptySettlementStats = (): SettlementStats => ({ dmgDealt: 0, dmgTaken: 0, kills: 0 });
+
+const copySettlementStats = (fighter: Fighter): SettlementStats => ({
+  dmgDealt: fighter.stats.dmgDealt,
+  dmgTaken: fighter.stats.dmgTaken,
+  kills: fighter.stats.kills,
+});
+
+const addSettlementStats = (target: SettlementStats, source: SettlementStats) => {
+  target.dmgDealt += source.dmgDealt;
+  target.dmgTaken += source.dmgTaken;
+  target.kills += source.kills;
+};
+
+const hasSettlementContribution = (stats: SettlementStats) =>
+  stats.dmgDealt > 0 || stats.dmgTaken > 0 || stats.kills > 0;
+
+const buildSettlementRows = (fighters: Fighter[]): SettlementRow[] => {
+  const rowsById = new Map<string, SettlementRow>();
+  const rows: SettlementRow[] = [];
+
+  fighters.forEach((fighter) => {
+    if (fighter.isSummon) return;
+    const row: SettlementRow = {
+      id: fighter.id,
+      fighter,
+      name: fighter.name,
+      color: fighter.color,
+      icon: fighter.jobData?.icon || '❓',
+      stats: copySettlementStats(fighter),
+      summonStats: emptySettlementStats(),
+      summonContributions: [],
+    };
+    rowsById.set(fighter.id, row);
+    rows.push(row);
+  });
+
+  fighters.forEach((fighter) => {
+    if (!fighter.isSummon) return;
+    const stats = copySettlementStats(fighter);
+    const summonerRow = fighter.summonerId ? rowsById.get(fighter.summonerId) : undefined;
+    if (summonerRow) {
+      addSettlementStats(summonerRow.stats, stats);
+      addSettlementStats(summonerRow.summonStats, stats);
+      if (hasSettlementContribution(stats)) {
+        summonerRow.summonContributions.push({ name: fighter.name, stats });
+      }
+      return;
+    }
+    if (!hasSettlementContribution(stats)) return;
+    rows.push({
+      id: fighter.id,
+      fighter,
+      name: fighter.name,
+      color: fighter.color,
+      icon: fighter.jobData?.icon || '❓',
+      stats,
+      summonStats: emptySettlementStats(),
+      summonContributions: [],
+    });
+  });
+
+  return rows;
 };
 
 function Icon({
@@ -367,13 +451,22 @@ export function NameArenaGame() {
     };
 
     const renderMVP = () => {
-        const validFighters = fighters.filter(f => !f.isSummon || f.stats.dmgDealt > 0);
-        const sortedByDmg = [...validFighters].sort((a, b) => b.stats.dmgDealt - a.stats.dmgDealt);
+        const settlementRows = buildSettlementRows(fighters);
+        const sortedByDmg = [...settlementRows].sort((a, b) => b.stats.dmgDealt - a.stats.dmgDealt);
         const maxDmg = Math.max(1, sortedByDmg[0]?.stats.dmgDealt || 1);
 
         const mvpDmg = sortedByDmg[0];
-        const mvpTank = [...validFighters].sort((a, b) => b.stats.dmgTaken - a.stats.dmgTaken)[0];
-        const mvpKills = [...validFighters].sort((a, b) => b.stats.kills - a.stats.kills)[0];
+        const mvpTank = [...settlementRows].sort((a, b) => b.stats.dmgTaken - a.stats.dmgTaken)[0];
+        const mvpKills = [...settlementRows].sort((a, b) => b.stats.kills - a.stats.kills)[0];
+        const summonSummary = (row?: SettlementRow) => {
+            if (!row || !hasSettlementContribution(row.summonStats)) return null;
+            const parts = [
+                row.summonStats.dmgDealt > 0 ? `召唤伤害 +${row.summonStats.dmgDealt.toLocaleString()}` : null,
+                row.summonStats.kills > 0 ? `召唤击杀 +${row.summonStats.kills}` : null,
+                row.summonStats.dmgTaken > 0 ? `召唤承伤 +${row.summonStats.dmgTaken.toLocaleString()}` : null,
+            ].filter(Boolean);
+            return parts.join(' / ');
+        };
 
         return (
             <div className="absolute inset-0 z-30 flex min-h-0 flex-col overflow-y-auto bg-slate-900 p-4 md:p-6 animate-fade-in custom-scrollbar">
@@ -386,23 +479,26 @@ export function NameArenaGame() {
                     <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 flex flex-col items-center shadow-xl relative overflow-hidden">
                         <div className="absolute top-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>
                         <span className="text-sm text-slate-400 mb-2 font-bold tracking-widest">⚔️ 输出 MVP</span>
-                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpDmg?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpDmg?.jobData?.icon || '❓'}</div>
+                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpDmg?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpDmg?.icon || '❓'}</div>
                         <span className="font-black text-lg text-white mb-1">{mvpDmg?.name || '-'}</span>
                         <span className="text-orange-400 font-mono font-bold">{mvpDmg?.stats.dmgDealt.toLocaleString() || 0} 伤害</span>
+                        {summonSummary(mvpDmg) && <span className="mt-1 text-center text-[11px] font-bold text-orange-200/80">{summonSummary(mvpDmg)}</span>}
                     </div>
                     <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 flex flex-col items-center shadow-xl relative overflow-hidden">
                         <div className="absolute top-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-teal-400"></div>
                         <span className="text-sm text-slate-400 mb-2 font-bold tracking-widest">🛡️ 承伤 MVP</span>
-                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpTank?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpTank?.jobData?.icon || '❓'}</div>
+                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpTank?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpTank?.icon || '❓'}</div>
                         <span className="font-black text-lg text-white mb-1">{mvpTank?.name || '-'}</span>
                         <span className="text-emerald-400 font-mono font-bold">{mvpTank?.stats.dmgTaken.toLocaleString() || 0} 承伤</span>
+                        {summonSummary(mvpTank) && <span className="mt-1 text-center text-[11px] font-bold text-emerald-200/80">{summonSummary(mvpTank)}</span>}
                     </div>
                     <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 flex flex-col items-center shadow-xl relative overflow-hidden">
                         <div className="absolute top-0 w-full h-1 bg-gradient-to-r from-purple-500 to-pink-500"></div>
                         <span className="text-sm text-slate-400 mb-2 font-bold tracking-widest">☠️ 击杀王</span>
-                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpKills?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpKills?.jobData?.icon || '❓'}</div>
+                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpKills?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpKills?.icon || '❓'}</div>
                         <span className="font-black text-lg text-white mb-1">{mvpKills?.name || '-'}</span>
                         <span className="text-pink-400 font-mono font-bold">{mvpKills?.stats.kills || 0} 击杀</span>
+                        {summonSummary(mvpKills) && <span className="mt-1 text-center text-[11px] font-bold text-pink-200/80">{summonSummary(mvpKills)}</span>}
                     </div>
                 </div>
 
@@ -410,7 +506,10 @@ export function NameArenaGame() {
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-xl border border-slate-700/50 bg-slate-800/50 p-4 custom-scrollbar">
                     {sortedByDmg.map(f => (
                         <div key={f.id} className="flex items-center gap-3">
-                            <span className="w-24 truncate text-sm text-slate-300 text-right font-bold">{f.name}</span>
+                            <div className="w-32 min-w-0 text-right">
+                                <div className="truncate text-sm font-bold text-slate-300">{f.name}</div>
+                                {summonSummary(f) && <div className="truncate text-[10px] font-bold text-indigo-200/80">{summonSummary(f)}</div>}
+                            </div>
                             <div className="flex-1 h-6 bg-slate-900 rounded-lg overflow-hidden relative border border-slate-800 shadow-inner">
                                 <div className={`h-full bg-gradient-to-r ${f.color} transition-all duration-1000 ease-out`} style={{ width: `${(f.stats.dmgDealt / maxDmg) * 100}%` }}></div>
                                 <span className="absolute inset-0 flex items-center px-3 text-xs font-mono font-bold text-white mix-blend-difference drop-shadow-md">

@@ -165,7 +165,11 @@ export function applyLifestealEffects(
   if (healAmt <= 0) return;
 
   const healed = healFighter(user, healAmt);
-  if (healed > 0) runtime.log('heal', `💉 ${user.name} 触发吸血被动，恢复了 ${healed} 点生命！`);
+  if (healed > 0) {
+    runtime.log('heal', `💉 ${user.name} 触发吸血被动，恢复了 ${healed} 点生命！`);
+  } else {
+    runtime.log('info', `💉 ${user.name} 触发吸血被动，但生命已满，治疗溢出！`);
+  }
 }
 
 export function consumeAimAfterAttack(

@@ -1,6 +1,6 @@
-import type { SkillDefinition } from '../types';
+import type { DamageApplicationOptions, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { setCurrentHp } from '../combatState';
+import { isActiveCombatant, setCurrentHp } from '../combatState';
 
 const { SKILL_TAGS } = Data;
 
@@ -16,14 +16,14 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
   abyssal_prison: {
     name: '深渊水牢', tag: SKILL_TAGS.MAG, mult: 1.5,
     text: '💧 {USER} 抬手升起一座深渊水牢！{TARGET} 引以为傲的反击姿态瞬间瓦解！只能在无尽的窒息中挣扎...',
-    onExecute: (ctx) => {
+    afterExecute: (ctx, actualDmg) => {
+      if (actualDmg <= 0 || ctx.target.currentHp <= 0) return;
       ctx.target.status = (ctx.target.status ?? []).filter((s) => s.type !== 'WAIT_COUNTER' && !s.type.startsWith('CTR_'));
       ctx.target.status.push({ type: 'WATER_PRISON', duration: 3 });
       if (ctx.target.hpPct < 0.2) {
         setCurrentHp(ctx.target, 0);
         ctx.markDefeated(ctx.target, { message: `💀 【溺毙处决】${ctx.target.name} 在深渊水牢中彻底停止了呼吸...`, killer: ctx.user, setHpZero: false });
       }
-      return false;
     },
   },
   apocalyptic_flood: {
@@ -31,8 +31,12 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     text: '🌊🌊🌊 【神罚·灭世大洪水】！天地倒转，万物归虚！{USER} 掀起吞噬战场的狂潮，先将 {TARGET} 卷入洪峰，造成 {VAL} 点真实伤害！',
     afterExecute: (ctx, dmg) => {
       const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead);
-      otherEnemies.forEach((e) => {
-        const actualDmg = ctx.applyDamage(e, dmg, 'skill');
+      for (const e of otherEnemies) {
+        if (!isActiveCombatant(ctx.user)) break;
+        if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        const damageOptions: DamageApplicationOptions = { actionName: '神罚·灭世大洪水' };
+        const actualDmg = ctx.applyDamage(e, dmg, 'skill', false, ctx.user, damageOptions);
+        if (damageOptions.redirectedByJoker) continue;
         if (actualDmg > 0) {
           ctx.log('info', `🌊 狂暴洪水吞噬了 ${e.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -42,7 +46,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
         if (e.currentHp <= 0) ctx.markDefeated(e, { message: `💀 【吞噬击杀】${e.name} 被狂暴的大洪水吞没溺毙！`, killer: ctx.user });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
-      });
+      }
     },
   },
   ethereal_blade: { name: '虚灵之刃', tag: SKILL_TAGS.MAG, mult: 4.5, status: 'ETHEREAL', text: '👻 【Shotgun连招】！{USER} 祭出虚灵之刃！将 {TARGET} 打入虚无界，随后倾泻毁灭性的属性洪流！造成 {VAL} 点核爆魔法伤害！' },
@@ -65,12 +69,12 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
   eye_of_skadi: {
     name: '斯嘉蒂之眼', tag: SKILL_TAGS.MAG, mult: 2.5, status: 'FREEZE',
     text: '👁️ 感受极北的寒意！{USER} 凝聚斯嘉蒂之眼，射出霜寒水弹！{TARGET} 被绝对零度击中，生机与速度被彻底封印！',
-    onExecute: (ctx) => {
+    afterExecute: (ctx, actualDmg) => {
+      if (actualDmg <= 0 || ctx.target.currentHp <= 0) return;
       ctx.target.spd = Math.floor(ctx.target.spd * 0.2);
       ctx.target.atk = Math.floor(ctx.target.atk * 0.5);
       ctx.target.status = ctx.target.status ?? [];
       ctx.target.status.push({ type: 'NO_HEAL', duration: 3 });
-      return false;
     },
   },
   linken_sphere: { name: '林肯法球', tag: SKILL_TAGS.BUFF, status: 'SPELL_BLOCK', text: '🔵 庇护之音响起！{USER} 周身凝结出林肯法球的蔚蓝光幕！免疫一切恶意，神明的威压不容侵犯！' },

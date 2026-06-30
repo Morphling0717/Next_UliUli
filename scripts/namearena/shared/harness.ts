@@ -275,6 +275,10 @@ export function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function exactNamePattern(text: string): string {
+  return `${escapeRegExp(text)}(?=[，,。！!、\\s]|$)`;
+}
+
 export function sanitizeFileName(text: string): string {
   return text.replace(/[^\w.-]+/g, '_').slice(0, 180);
 }
@@ -282,15 +286,38 @@ export function sanitizeFileName(text: string): string {
 export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] = []): LogIssue[] {
   const issues: LogIssue[] = [];
   const activeSlacking = new Set<string>();
-  const names = [...new Set([...rosterNames, ...SPECIALS, '小汀(傀儡)', '史瓦罗', '克拉拉', '钟离'])];
+  const names = [...new Set([
+    ...rosterNames,
+    ...SPECIALS,
+    '小汀(傀儡)',
+    '史瓦罗',
+    '克拉拉',
+    '钟离',
+    'Saber',
+    '萨姆',
+    '巴哈姆特',
+    '伊莫库',
+    '史尔特尔',
+    '青眼究极龙',
+    '青眼白龙',
+    '黑暗大法师',
+    '翼神龙',
+  ])];
   const orderedNames = [...names].sort((a, b) => b.length - a.length);
   const mentionedName = (value: string): string | undefined => orderedNames.find((name) => value.includes(name));
+  const leadingMentionedName = (value: string): string | undefined => {
+    const withoutIcon = value.replace(/^\S+\s+/, '');
+    return orderedNames.find((name) => withoutIcon.startsWith(name));
+  };
   const parseDeathVictim = (value: string): string | undefined => {
     const match = value.match(/^(?:💀|☠️) (?:【[^】]+】)?(.+?) (?:被|因|承受不住|遭到|跌入|化为|化为了)/);
     if (!match?.[1]) return undefined;
-    return orderedNames.find((name) => match[1]?.includes(name));
+    const rawName = (match[1].split(/[！!。]/).pop() ?? match[1]).trim();
+    if (/#\d+$/.test(rawName)) return rawName;
+    return orderedNames.find((name) => rawName === name) ?? orderedNames.find((name) => rawName.includes(name));
   };
   const patterns: Array<[string, RegExp]> = [
+    ['newline-in-log-text', /\r|\n/],
     ['nan-or-undefined', /\b(?:NaN|undefined|null)\b/],
     ['negative-number-log', /(?:造成|承受|恢复|损失)了? -\d/],
     ['zero-damage-control', /(?:承受了|造成了|实际造成) 0 点.*(?:并被|并深度|并使其|并施加|眩晕|魅惑|击飞|中毒|灼烧|沉默|混乱)/],
@@ -298,11 +325,15 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     ['legacy-generic-death', /伤重不治倒下了/],
     ['death-without-cause', /生命归零，倒在了战场上/],
     ['legacy-ting-double-death-text', /倒下了，但他拔出了/],
+    ['joker-redundant-zero-settlement', /📌 实际结算：屑 实际承受 0 点伤害/],
+    ['legacy-joker-no-victim-dodge', /【随机恶作剧】屑 .*躲开了 \d+ 点伤害/],
   ];
   let expectWaterSonInterceptLine = 0;
   const pendingCounterOutcomes: Array<{ counterName: string; line: number; text: string; deadline: number }> = [];
-  const pendingInterceptions: Array<{ targetName: string; line: number; text: string; deadline: number }> = [];
-  const recentDeaths: Array<{ name: string; line: number; text: string; deadline: number }> = [];
+  const pendingInterceptions: Array<{ targetName: string; line: number; text: string; deadline: number; settlePattern: RegExp }> = [];
+  const pendingGachaPityOutcomes: Array<{ line: number; text: string; deadline: number }> = [];
+  const recentDeaths: Array<{ name: string; line: number; text: string; deadline: number; targetPattern: RegExp }> = [];
+  const summonedBaseNames = new Set<string>();
 
   logs.forEach((entry, index) => {
     const line = index + 1;
@@ -310,11 +341,13 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     for (let i = recentDeaths.length - 1; i >= 0; i -= 1) {
       const recentDeath = recentDeaths[i];
       if (!recentDeath) continue;
-      const namePattern = escapeRegExp(recentDeath.name);
-      if (text.includes(recentDeath.name) && /复活|从地狱归来|并没有死|浴火重生/.test(text)) {
+      if (text.includes(recentDeath.name) && /复活|从地狱归来|并没有死|浴火重生|被水人救起/.test(text)) {
         recentDeaths.splice(i, 1);
-      } else if (line <= recentDeath.deadline && new RegExp(`${namePattern} (?:受到持续伤害|在深渊水牢中窒息)`).test(text)) {
-        issues.push({ label, line, type: 'status-tick-after-death', text: `${recentDeath.text}\nNEXT: ${text}`, name: recentDeath.name });
+      } else if (
+        line <= recentDeath.deadline &&
+        recentDeath.targetPattern.test(text)
+      ) {
+        issues.push({ label, line, type: 'dead-fighter-mentioned-as-target', text: `${recentDeath.text}\nNEXT: ${text}`, name: recentDeath.name });
         recentDeaths.splice(i, 1);
       } else if (line > recentDeath.deadline) {
         recentDeaths.splice(i, 1);
@@ -323,11 +356,21 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     for (let i = pendingInterceptions.length - 1; i >= 0; i -= 1) {
       const pending = pendingInterceptions[i];
       if (!pending) continue;
-      if (new RegExp(`${escapeRegExp(pending.targetName)}.*实际承受`).test(text)) {
+      if (pending.settlePattern.test(text)) {
         pendingInterceptions.splice(i, 1);
       } else if (line > pending.deadline) {
         issues.push({ label, line: pending.line, type: 'intercept-without-actual-damage', text: pending.text });
         pendingInterceptions.splice(i, 1);
+      }
+    }
+    for (let i = pendingGachaPityOutcomes.length - 1; i >= 0; i -= 1) {
+      const pending = pendingGachaPityOutcomes[i];
+      if (!pending) continue;
+      if (/【(?:氪金改命|十连金光|天井兑换|小保底歪了但没完全歪|封印组件|灰流丽|圣防护罩·镜之力|黑莲花|召唤指令|全军进击|献祭准备|召唤物回收|死者苏生|毁灭爆裂疾风弹|真之光|古之咒文|太阳神火焰加农|神不死鸟|献祭升格)】|抽到吸血牌|抽到了吸血牌|【召唤成功】|【单抽】|【命运抽卡】|未结算，欧气已返还/.test(text)) {
+        pendingGachaPityOutcomes.splice(i, 1);
+      } else if (line > pending.deadline) {
+        issues.push({ label, line: pending.line, type: 'gacha-pity-without-outcome', text: pending.text });
+        pendingGachaPityOutcomes.splice(i, 1);
       }
     }
     for (let i = pendingCounterOutcomes.length - 1; i >= 0; i -= 1) {
@@ -356,6 +399,23 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
       });
     }
 
+    if (/【随机恶作剧】/.test(text)) {
+      if (!/遭到.+【[^】]+】/.test(text)) {
+        issues.push({ label, line, type: 'joker-transfer-without-source', text });
+      }
+      if (/遭到(?:状态伤害|持续伤害|深渊水牢窒息)/.test(text)) {
+        issues.push({ label, line, type: 'joker-transfer-from-status-damage', text });
+      }
+    }
+
+    if (/(?:大保底启动|小保底启动)/.test(text)) {
+      pendingGachaPityOutcomes.push({
+        line,
+        text,
+        deadline: line + 6,
+      });
+    }
+
     if (entry.type === 'death' && !/脊髓剑遗留/.test(text)) {
       const deathName = parseDeathVictim(text);
       if (deathName) {
@@ -364,6 +424,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
           line,
           text,
           deadline: line + 4,
+          targetPattern: new RegExp(`(?:对 ${exactNamePattern(deathName)}|攻击了 ${exactNamePattern(deathName)}|${exactNamePattern(deathName)} (?:承受|实际承受|受到持续伤害|在深渊水牢中窒息|没有承受实际伤害))`),
         });
       }
     }
@@ -375,11 +436,32 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
         line,
         text,
         deadline: line + 3,
+        settlePattern: new RegExp(`${escapeRegExp(interceptStart[1])}.*(?:实际承受|没有造成实际伤害)`),
       });
     }
 
     const nextText = logs[index + 1]?.text ?? '';
-    const currentEventName = mentionedName(text);
+    const abyssDeathVictim = text.match(/【溺毙处决】(.+?) 在深渊水牢/)?.[1];
+    if (abyssDeathVictim && nextText.includes(`【深渊水牢】`) && nextText.includes(`${abyssDeathVictim} `)) {
+      issues.push({ label, line, type: 'death-before-abyssal-prison-source', text: `${text}\nNEXT: ${nextText}` });
+    }
+    const currentDamageTarget = text.match(/(?:命中|吞噬了|重创了|波及|溅射到了|对) (.+?)[，,]/)?.[1];
+    const blockedTarget = nextText.match(/光幕为 (.+?) 挡下/)?.[1];
+    if (currentDamageTarget && blockedTarget && currentDamageTarget === blockedTarget && /实际造成 \d+/.test(text) && /挡下了.+【[^】]+】/.test(nextText)) {
+      issues.push({ label, line, type: 'block-after-damage-result', text: `${text}\nNEXT: ${nextText}` });
+    }
+    const summonMatch = text.match(/【召唤成功】.+?召唤出了 (.+?)！/);
+    if (summonMatch?.[1]) {
+      const summonName = summonMatch[1];
+      const baseName = summonName.replace(/#\d+$/, '');
+      if (summonedBaseNames.has(baseName) && summonName === baseName && !['黑暗大法师', '小汀(傀儡)'].includes(baseName)) {
+        issues.push({ label, line, type: 'duplicate-unnumbered-summon-name', text });
+      }
+      summonedBaseNames.add(baseName);
+    }
+    const currentEventName = (entry.type === 'transform' || /触发了锁血保护/.test(text))
+      ? (leadingMentionedName(text) ?? mentionedName(text))
+      : mentionedName(text);
     const nextTargetsCurrent = currentEventName
       ? new RegExp(
         `(?:对 ${escapeRegExp(currentEventName)} (?:实际)?造成|命中 ${escapeRegExp(currentEventName)}|吞噬了 ${escapeRegExp(currentEventName)}|` +
@@ -466,6 +548,9 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
   });
   pendingInterceptions.forEach((pending) => {
     issues.push({ label, line: pending.line, type: 'intercept-without-actual-damage', text: pending.text });
+  });
+  pendingGachaPityOutcomes.forEach((pending) => {
+    issues.push({ label, line: pending.line, type: 'gacha-pity-without-outcome', text: pending.text });
   });
 
   return issues;
@@ -589,6 +674,7 @@ export function buildRegressionSpecs(): BattleSpec[] {
   const specs: BattleSpec[] = [];
   for (let i = 0; i < 12; i += 1) specs.push({ phase: 'all-special', label: `all-special-${i}`, names: SPECIALS, seed: 8000 + i });
   for (let i = 0; i < 12; i += 1) specs.push({ phase: 'no-water', label: `no-water-${i}`, names: NO_WATER, seed: 9000 + i });
+  specs.push({ phase: 'no-water-edge', label: 'no-water-joker-phoenix-chain', names: NO_WATER, seed: 9311 });
   SPECIALS.forEach((a, i) => {
     SPECIALS.forEach((b, j) => {
       if (i !== j) specs.push({ phase: '1v1', label: `1v1-${a}-vs-${b}`, names: [a, b], seed: 20000 + i * 97 + j });
