@@ -17,8 +17,8 @@ export function determineActor(alive: Fighter[]): Fighter | null {
   if (alive.length === 0) return null;
   const actionWeight = (fighter: Fighter) => {
     let multiplier = 1;
-    if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.15;
-    if (fighter.status.some((status) => status.type === 'RABBIT_ZERO_HASTE')) multiplier *= 1.3;
+    if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.13;
+    if (fighter.status.some((status) => status.type === 'RABBIT_ZERO_HASTE')) multiplier *= 1.26;
     return Math.max(1, Math.floor(fighter.spd * multiplier));
   };
   let ticket = Math.random() * alive.reduce((sum, fighter) => sum + actionWeight(fighter), 0);

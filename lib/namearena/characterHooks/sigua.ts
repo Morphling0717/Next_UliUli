@@ -99,17 +99,18 @@ export const siguaHook: CharacterHook = {
 
     if (!VALO_JUNIOR) return false;
     transform('VALO_JUNIOR', `🔫 ${fighter.name} 眼神变了！拿起了步枪！转职为【${VALO_JUNIOR.name}】！全场特工技能准备就绪！`, () => {
-      fighter.maxHp = Math.max(3000, Math.min(3400, Math.floor(fighter.maxHp * 2.5)));
+      fighter.maxHp = Math.max(3000, Math.min(3375, Math.floor(fighter.maxHp * 2.48)));
       fighter.currentHp = fighter.maxHp;
-      fighter.atk = 300;
+      fighter.atk = 286;
       fighter.def = scaleStat(fighter.def, 3.5, 150);
       fighter.mag = scaleStat(fighter.mag, 1.5, 90);
       fighter.res = scaleStat(fighter.res, 3.5, 150);
       fighter.spd = 130;
-      fighter.agl = Math.max(220, Math.floor(fighter.agl * 5.0));
+      fighter.agl = Math.max(215, Math.floor(fighter.agl * 4.9));
       fighter.wis = scaleStat(fighter.wis, 2.0, 150);
-      fighter.ultPoints = 2;
+      fighter.ultPoints = 1;
       fighter.economy = 2;
+      fighter.crosshairFocus = 0;
     });
     return true;
   },

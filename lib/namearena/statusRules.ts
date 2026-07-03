@@ -40,6 +40,7 @@ export const GLOBAL_TIMED_STATUS_TYPES: string[] = [
   'ETHEREAL',
   'SYNERGY_SLACKING',
   'TING_DEFIANCE',
+  'TOKUSATSU_DEFIANCE',
 ];
 
 export const TRIGGER_TIMED_STATUS_TYPES: string[] = [
@@ -82,6 +83,10 @@ export const REVIVE_CLEAN_STATUS_TYPES: string[] = [
   'WT_SUPPRESS',
   'WT_AIRBORNE',
   'WT_REPAIRING',
+  'WT_BREECH_DAMAGED',
+  'WT_TRACK_DAMAGED',
+  'WT_AMMO_EXPOSED',
+  'WT_SCOUTED',
   'NO_HEAL',
   'WEAK',
   'ZEROED',

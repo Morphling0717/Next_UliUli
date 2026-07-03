@@ -28,16 +28,16 @@ export const tingSkills: Record<string, SkillDefinition> = {
   grudge_rend: {
     name: '怨念裂斩',
     tag: SKILL_TAGS.PHYS,
-    mult: 4.2,
+    mult: 4.18,
     minDamagePct: 0.25,
-    lifesteal: 0.25,
+    lifesteal: 0.5,
     text: '🦴 {USER} 把怨气缠上脊髓剑，撕开 {TARGET} 的防线，造成 {VAL} 伤害！',
   },
   grudge_blood_feast: {
     name: '血怨吞噬',
     tag: SKILL_TAGS.MAG,
-    mult: 3.8,
-    lifesteal: 0.75,
+    mult: 3.9,
+    lifesteal: 1.1,
     text: '🩸 {USER} 将战场血雾卷回体内，吞噬 {TARGET} 的生命，造成 {VAL} 伤害！',
   },
   grudge_wail: {
@@ -45,7 +45,7 @@ export const tingSkills: Record<string, SkillDefinition> = {
     tag: SKILL_TAGS.DEBUFF,
     mult: 2.4,
     status: 'WEAK',
-    lifesteal: 0.25,
+    lifesteal: 0.35,
     text: '👻 {USER} 发出刺耳尖啸，震碎 {TARGET} 的斗志，造成 {VAL} 伤害并附加虚弱！',
   },
   bone_guard: {
@@ -59,7 +59,7 @@ export const tingSkills: Record<string, SkillDefinition> = {
     tag: SKILL_TAGS.PHYS,
     mult: 3.6,
     ignoreDef: true,
-    selfDmgPct: 0.9,
+    selfDmgPct: 0.82,
     selfDmgCanKill: false,
     condition: (user) => user.hpPct > 0.35,
     text: '💣 {USER} 扑向了 {TARGET}，启动了自毁程序！"我和你爆了！！" 爆炸造成 {VAL} 真实伤害，自己也被反冲炸到濒死！',

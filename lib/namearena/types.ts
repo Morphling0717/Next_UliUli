@@ -27,6 +27,12 @@ export type StatKey = 'atk' | 'def' | 'spd' | 'agl' | 'mag' | 'res' | 'wis';
 export interface StatusEntry {
   type: string;
   duration: number;
+  /**
+   * Flavor/mechanical source for defensive statuses such as SPELL_BLOCK,
+   * BKB and INVUL. This keeps combat logs from calling every shield
+   * "Linken" or every control immunity "BKB".
+   */
+  sourceId?: string;
   /** Engine turn when a globally-timed status was first observed. */
   appliedTurn?: number;
 }
@@ -53,6 +59,7 @@ export interface DamageApplicationOptions {
   deferTransform?: boolean;
   actionName?: string;
   respectDefenses?: boolean;
+  canTriggerWaitCounter?: boolean;
   redirectedByJoker?: boolean;
   targetDefeatedDuringDamage?: boolean;
 }
@@ -159,34 +166,66 @@ export interface Fighter {
   // ── Gamer death / water-team resurrection ─────────────────────────────
   resurrected?: boolean;
   apm?: number;
+  gamerLastSkillType?: string;
+  gamerMastery?: number;
+  gamerBoostReady?: boolean;
+  gamerInputBuffer?: number;
+  gamerMarkedTargetId?: string;
+  gamerClutchWindow?: number;
+  gamerDamageRewardTurn?: number;
+  gamerHeavyHitRewardTurn?: number;
+  gamerInstantActionQueued?: boolean;
+  hasUsedGamerWorldStage?: boolean;
+  hasUsedGamerChampionCombo?: boolean;
+  hasUsedGamerTransformAction?: boolean;
 
   // ── Gacha addict / Luck Emperor pity system ───────────────────────────
   gachaLuck?: number;
   gachaInstantActionQueued?: boolean;
   gachaPityPower?: number;
+  gachaTingGuardTrapReady?: boolean;
   hasUsedGachaDeathSave?: boolean;
   gachaSummonLifestealPct?: number;
   exodiaPieces?: string[];
   hasUsedExodiaObliterate?: boolean;
+  hasUsedExodiaGuard?: boolean;
   hasUsedRaPhoenix?: boolean;
+  hasUsedRaTingGuard?: boolean;
   raChantBoost?: number;
   blueEyesUltimateStrain?: number;
+  blueEyesUltimateGuardCount?: number;
 
   // ── Chimera / Succubus ultimate evolution ─────────────────────────────
   hasUltimateEvolved?: boolean;
+  chimeraMilestoneLevel?: number;
+  chimeraInstantActionQueued?: boolean;
 
   // ── Tokusatsu (Bujin) counter state ───────────────────────────────────
   counterUsed?: boolean;
   hasUsedGreatMonsterVictory?: boolean;
   hasUsedRainbowFever?: boolean;
+  hasUsedTokusatsuDefiance?: boolean;
+  tokusatsuInstantActionQueued?: boolean;
+  tokusatsuThroneResonance?: number;
   monsterTurns?: number;
   savedStats?: BaseStats;
 
   // ── Valorant Junior economy (丝瓜 2nd stage) ──────────────────────────
   ultPoints?: number;
   economy?: number;
+  crosshairFocus?: number;
+  valoInstantActionQueued?: boolean;
+  hasUsedValoRunItBack?: boolean;
   savedSpd?: number;
   savedAgl?: number;
+
+  // ── War Thunder vehicle / spawn-point system (M1) ─────────────────────
+  wtSpawnPoints?: number;
+  wtFpeCharges?: number;
+  wtNbcsCharges?: number;
+  wtBackupUsed?: boolean;
+  wtMarkedTargetId?: string;
+  wtKillStreak?: number;
 
   // ── Slacking synergy (丝瓜 + 兔卷卷 bond) ────────────────────────────
   willSlackThisGame?: boolean;
@@ -288,6 +327,7 @@ export interface GachaEntry {
   minDamagePct?: number;
   lifesteal?: number;
   status?: string;
+  statusSource?: string;
   statBuff?: Partial<Record<StatKey | 'crit', number>>;
   cleanStatus?: boolean;
   selfDmgPct?: number;
@@ -335,6 +375,7 @@ export interface SkillDefinition {
   minDamagePct?: number;
   lifesteal?: number;
   status?: string;
+  statusSource?: string;
   statBuff?: Partial<Record<StatKey | 'crit', number>>;
   text?: string;
   /** Pool is GachaEntry[] for isGacha skills, string[] for isRandomText skills */

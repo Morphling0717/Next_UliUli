@@ -12,6 +12,10 @@ import {
   isAdvancedSummonName,
   isLuckEmperor,
 } from './gachaMechanics';
+import {
+  createStatusEntry,
+  grantStatus,
+} from './defenseStatus';
 
 export interface SummonResolutionRuntime {
   fighters: Fighter[];
@@ -31,7 +35,7 @@ function getSummonBaseName(fighter: Fighter): string {
 }
 
 function formatSummonName(runtime: SummonResolutionRuntime, baseName: string): string {
-  if (baseName === '黑暗大法师' || baseName === '小汀(傀儡)') return baseName;
+  if (baseName === '黑暗大法师') return baseName;
 
   const existingCount = runtime.fighters.filter((fighter) =>
     fighter.isSummon && getSummonBaseName(fighter) === baseName,
@@ -94,8 +98,9 @@ export function executeSummonSkill(
         const shield = user.status.find((status) => status.type === 'SPELL_BLOCK');
         if (shield) {
           shield.duration = Math.max(shield.duration, 2);
+          shield.sourceId = 'gacha_tribute_compensation';
         } else {
-          user.status.push({ type: 'SPELL_BLOCK', duration: 2 });
+          user.status.push(createStatusEntry('SPELL_BLOCK', 2, 'gacha_tribute_compensation'));
         }
         if (!user.status.some((status) => status.type === 'NO_HEAL')) {
           const healed = healFighter(user, Math.floor(user.maxHp * 0.1));
@@ -157,15 +162,18 @@ export function executeSummonSkill(
     isSummon: true,
     isAdvancedSummon,
     hasUsedExodiaObliterate: false,
+    hasUsedExodiaGuard: false,
     hasUsedRaPhoenix: false,
+    hasUsedRaTingGuard: false,
     raChantBoost: 0,
     blueEyesUltimateStrain: 0,
+    blueEyesUltimateGuardCount: 0,
   };
   if (skill.summonName === '翼神龙') {
     summon.raChantBoost = 1;
     summon.status.push({ type: GACHA_RA_PHOENIX_STATUS, duration: 6 });
-    summon.status.push({ type: 'SPELL_BLOCK', duration: 2 });
-    summon.status.push({ type: 'BKB', duration: 1 });
+    grantStatus(summon, 'SPELL_BLOCK', 2, 'ra_divine_aura');
+    grantStatus(summon, 'BKB', 1, 'ra_divine_aura');
     summon.status.push({ type: 'REGEN', duration: 3 });
   }
   runtime.fighters.push(summon);

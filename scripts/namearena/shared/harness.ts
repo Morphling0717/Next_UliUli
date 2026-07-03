@@ -313,6 +313,8 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     const match = value.match(/^(?:💀|☠️) (?:【[^】]+】)?(.+?) (?:被|因|承受不住|遭到|跌入|化为|化为了)/);
     if (!match?.[1]) return undefined;
     const rawName = (match[1].split(/[！!。]/).pop() ?? match[1]).trim();
+    const listedNames = rawName.split(/[、，,]/).map((name) => name.trim()).filter(Boolean);
+    if (listedNames.length > 1) return undefined;
     if (/#\d+$/.test(rawName)) return rawName;
     return orderedNames.find((name) => rawName === name) ?? orderedNames.find((name) => rawName.includes(name));
   };
@@ -341,7 +343,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     for (let i = recentDeaths.length - 1; i >= 0; i -= 1) {
       const recentDeath = recentDeaths[i];
       if (!recentDeath) continue;
-      if (text.includes(recentDeath.name) && /复活|从地狱归来|并没有死|浴火重生|被水人救起/.test(text)) {
+      if (text.includes(recentDeath.name) && /复活|从地狱归来|并没有死|浴火重生|被水人救起|备用载具|重新部署/.test(text)) {
         recentDeaths.splice(i, 1);
       } else if (
         line <= recentDeath.deadline &&
@@ -454,7 +456,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     if (summonMatch?.[1]) {
       const summonName = summonMatch[1];
       const baseName = summonName.replace(/#\d+$/, '');
-      if (summonedBaseNames.has(baseName) && summonName === baseName && !['黑暗大法师', '小汀(傀儡)'].includes(baseName)) {
+      if (summonedBaseNames.has(baseName) && summonName === baseName && baseName !== '黑暗大法师') {
         issues.push({ label, line, type: 'duplicate-unnumbered-summon-name', text });
       }
       summonedBaseNames.add(baseName);

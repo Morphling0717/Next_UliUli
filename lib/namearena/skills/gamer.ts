@@ -1,15 +1,171 @@
-import type { DamageApplicationOptions, SkillDefinition } from '../types';
+import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
 import { healFighter, isActiveCombatant } from '../combatState';
 import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from '../statusRules';
+import {
+  findDefenseStatus,
+  formatControlBlocked,
+  grantStatus,
+} from '../defenseStatus';
 
 const { SKILL_TAGS } = Data;
 
 const MAX_APM = 12;
+const WORLD_STAGE_THRESHOLD = 11;
+const WORLD_STAGE_DURATION = 2;
 
-function spendApm(user: { apm?: number }, cost: number): boolean {
-  if ((user.apm ?? 0) < cost) return false;
-  user.apm = Math.max(0, Math.min(MAX_APM, (user.apm ?? 0) - cost));
+type GamerSkillType = 'fps' | 'moba' | 'action' | 'fighting' | 'macro';
+
+function hasStatus(fighter: Fighter, type: string): boolean {
+  return fighter.status.some((status) => status.type === type);
+}
+
+function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
+  grantStatus(fighter, type, duration, sourceId);
+}
+
+function recoveryText(healed: number): string {
+  return healed > 0 ? `恢复了 ${healed} 点生命` : '生命已满，治疗溢出';
+}
+
+function isWorldStage(user: Fighter): boolean {
+  return hasStatus(user, 'GAMER_WORLD_STAGE');
+}
+
+function effectiveApmCost(user: Fighter, baseCost: number): number {
+  if (baseCost <= 0) return 0;
+  const worldDiscount = isWorldStage(user) ? 1 : 0;
+  const bufferDiscount = Math.min(user.gamerInputBuffer ?? 0, 1);
+  return Math.max(1, baseCost - worldDiscount - bufferDiscount);
+}
+
+function spendApm(user: Fighter, baseCost: number): number | null {
+  const cost = effectiveApmCost(user, baseCost);
+  if ((user.apm ?? 0) < cost) return null;
+  if (cost > 0) {
+    const bufferDiscount = Math.min(user.gamerInputBuffer ?? 0, 1);
+    user.apm = Math.max(0, Math.min(MAX_APM, (user.apm ?? 0) - cost));
+    if (bufferDiscount > 0) user.gamerInputBuffer = Math.max(0, (user.gamerInputBuffer ?? 0) - bufferDiscount);
+  }
+  return cost;
+}
+
+function canPay(user: Fighter, baseCost: number): boolean {
+  return (user.apm ?? 0) >= effectiveApmCost(user, baseCost);
+}
+
+function consumeBoost(user: Fighter): boolean {
+  if (isWorldStage(user)) return true;
+  if (!user.gamerBoostReady) return false;
+  user.gamerBoostReady = false;
+  return true;
+}
+
+function enterWorldStage(ctx: SkillContext, reason: string): void {
+  if (ctx.user.job !== 'ALL_PLATFORM_CHAMPION' || ctx.user.hasUsedGamerWorldStage) return;
+  ctx.user.hasUsedGamerWorldStage = true;
+  ctx.user.gamerBoostReady = true;
+  refreshStatus(ctx.user, 'GAMER_WORLD_STAGE', WORLD_STAGE_DURATION);
+  refreshStatus(ctx.user, 'BKB', 1, 'gamer_world_stage');
+  ctx.log('crit', `🏆 【世界赛舞台】${ctx.user.name} APM 拉到 ${ctx.user.apm ?? 0}/${MAX_APM}，${reason}，所有冠军技能短暂进入强化版！`);
+}
+
+function gainApm(ctx: SkillContext, amount: number, reason: string): void {
+  if (amount <= 0) return;
+  const before = ctx.user.apm ?? 0;
+  ctx.user.apm = Math.min(MAX_APM, before + amount);
+  if (ctx.user.apm <= before) return;
+  if (before < WORLD_STAGE_THRESHOLD && (ctx.user.apm ?? 0) >= WORLD_STAGE_THRESHOLD) {
+    enterWorldStage(ctx, reason);
+  }
+}
+
+function completeTechnique(ctx: SkillContext, skillType: GamerSkillType, options: { apmGain?: number; reason?: string } = {}): void {
+  const previousType = ctx.user.gamerLastSkillType;
+  if (!previousType || previousType === skillType) {
+    ctx.user.gamerMastery = 1;
+  } else {
+    ctx.user.gamerMastery = Math.min(3, (ctx.user.gamerMastery ?? 1) + 1);
+  }
+  ctx.user.gamerLastSkillType = skillType;
+
+  if ((ctx.user.gamerMastery ?? 0) >= 3) {
+    ctx.user.gamerMastery = 0;
+    ctx.user.gamerBoostReady = true;
+    ctx.log('buff', `🎮 【跨平台精通】${ctx.user.name} 连续切换不同游戏理解，下一次冠军技能将自动强化！`);
+  }
+
+  if ((ctx.user.gamerClutchWindow ?? 0) > 0) {
+    ctx.user.gamerClutchWindow = Math.max(0, (ctx.user.gamerClutchWindow ?? 0) - 1);
+  }
+  if (options.apmGain) gainApm(ctx, options.apmGain, options.reason ?? '通过有效操作把节奏续上');
+}
+
+function applyControl(ctx: SkillContext, target: Fighter, status: string, duration: number, label: string): void {
+  const controlImmune = findDefenseStatus(target, 'BKB');
+  if (controlImmune) {
+    ctx.log('info', formatControlBlocked(controlImmune, target.name, label));
+    return;
+  }
+  refreshStatus(target, status, duration);
+}
+
+function applyTrackedDamage(
+  ctx: SkillContext,
+  target: Fighter,
+  amount: number,
+  actionName: string,
+  trueDamage: boolean,
+  logPrefix: string,
+): { actualDmg: number; redirected: boolean } {
+  const options: DamageApplicationOptions = { actionName, deferTransform: true, respectDefenses: true };
+  const actualDmg = ctx.applyDamage(target, Math.max(0, amount), 'skill', trueDamage, ctx.user, options);
+  if (options.redirectedByJoker) return { actualDmg: 0, redirected: true };
+  ctx.user.stats.dmgDealt += actualDmg;
+  if (actualDmg > 0 && (options.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced)) {
+    ctx.log('info', `${logPrefix}，这一击造成 ${actualDmg} 点${trueDamage ? '真实' : ''}伤害并触发了致死连锁；${target.name} 已在后续效果中退场！`);
+  } else if (actualDmg > 0) {
+    ctx.log('crit', `${logPrefix}，对 ${target.name} 实际造成 ${actualDmg} 点${trueDamage ? '真实' : ''}伤害！`);
+  } else {
+    ctx.log('info', `${logPrefix}，但 ${target.name} 没有承受实际伤害！`);
+  }
+  ctx.flushDeferredDamageEvents?.();
+  if (target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
+    ctx.markDefeated(target, { message: `💀 【${actionName}】${target.name} 被玄凝的冠军操作带走！`, killer: ctx.user });
+  }
+  return { actualDmg, redirected: false };
+}
+
+function livingEnemies(ctx: SkillContext, excludeTargetId?: string): Fighter[] {
+  return (ctx.currentTargets ?? []).filter((target) =>
+    target.id !== excludeTargetId &&
+    target.currentHp > 0 &&
+    !target.isDead &&
+    !target.isDeadAnnounced &&
+    !hasStatus(target, 'SYNERGY_SLACKING'),
+  );
+}
+
+function executeCrackConfirm(ctx: SkillContext, label = '破绽确认'): boolean {
+  const cost = spendApm(ctx.user, 3);
+  if (cost === null) return false;
+  const boosted = consumeBoost(ctx.user);
+  const marked = ctx.user.gamerMarkedTargetId === ctx.target.id;
+  const vulnerable =
+    marked ||
+    ctx.target.hpPct <= (boosted ? 0.48 : 0.35) ||
+    ctx.target.status.some((status) => ['STUN', 'FREEZE', 'NEURAL_THEFT_DEBUFF', 'VALO_AIM_PUNCH', 'BLIND'].includes(status.type));
+  const base = Math.max(ctx.user.atk, ctx.user.mag);
+  const multiplier = boosted ? (vulnerable ? 3.45 : 2.62) : (vulnerable ? 2.85 : 2.14);
+  const dmg = Math.floor(base * multiplier + ctx.user.wis * (boosted ? 1.0 : 0.66));
+  const prefix = boosted ? `强化${label}` : label;
+  ctx.log('skill', `🥊 【${prefix}】${ctx.user.name} 消耗 ${cost} APM，把 ${ctx.target.name} 的硬直、血线和习惯全部读完！`);
+  const result = applyTrackedDamage(ctx, ctx.target, dmg, label, true, `🥊 【${prefix}】确认命中`);
+  if (!result.redirected && marked) {
+    delete ctx.user.gamerMarkedTargetId;
+    ctx.log('info', `👁️ 【读输入】${ctx.user.name} 已经把 ${ctx.target.name} 的标记转化为确认伤害，标记解除。`);
+  }
+  completeTechnique(ctx, 'fighting', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '用确认连段把比赛节奏接住' });
   return true;
 }
 
@@ -20,229 +176,275 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   helm_breaker: { name: '登龙剑', tag: SKILL_TAGS.PHYS, mult: 2.5, text: '🐉 {USER} 高高跃起，一招气刃兜割劈在 {TARGET} 身上！造成 {VAL} 伤害！' },
   tcs_mh: { name: '真蓄力斩', tag: SKILL_TAGS.PHYS, mult: 4.0, text: '⚔️ {USER} 完美铁山靠顶住攻击，随后猛力劈下真蓄力斩！对 {TARGET} 造成 {VAL} 伤害！' },
   waterfowl: { name: '水鸟乱舞', tag: SKILL_TAGS.PHYS, mult: 0.8, hits: 5, text: '🦢 {USER} 化身女武神，对 {TARGET} 施展水鸟乱舞！连续劈砍 5 次，共造成 {VAL} 伤害！' },
-  bkb_dota: { name: '开启BKB', tag: SKILL_TAGS.BUFF, status: 'BKB', text: '🟡 {USER} 开启了黑皇杖，全身散发金光，免疫一切魔法控制！' },
+  bkb_dota: { name: '开启BKB', tag: SKILL_TAGS.BUFF, status: 'BKB', statusSource: 'gamer_bkb', text: '🟡 {USER} 开启了黑皇杖，全身散发金光，免疫一切魔法控制！' },
   rush_b: { name: 'Rush B', tag: SKILL_TAGS.BUFF, statBuff: { spd: 2.0, atk: 1.5 }, text: "🏃 {USER} 大喊一声 \"Rush B, Don't stop!\"，速度和攻击力飙升！" },
   yasuo_q: { name: '哈撒给', tag: SKILL_TAGS.MAG, mult: 1.5, status: 'STUN', text: '🌪️ {USER} 斩出一道龙卷风，将 {TARGET} 高高击飞！造成 {VAL} 伤害！' },
   teemo_shroom: { name: '种蘑菇', tag: SKILL_TAGS.MAG, mult: 1.0, status: 'POISON', text: '🍄 {USER} 偷偷在 {TARGET} 脚下种了个毒蘑菇，造成 {VAL} 伤害并施加剧毒！' },
   divine_sunderer: { name: '神圣分离者', tag: SKILL_TAGS.PHYS, mult: 1.5, lifesteal: 0.5, text: '🔨 {USER} 触发耀光效果重击 {TARGET}，造成 {VAL} 伤害并回复自身血量！' },
   judgment_cut: { name: '次元斩', tag: SKILL_TAGS.MAG, mult: 3.0, ignoreDef: true, text: '🗡️ {USER} 拔刀瞬间切开空间，对 {TARGET} 造成 {VAL} 无视魔抗的次元伤害！' },
   kamehameha: { name: '龟派气功', tag: SKILL_TAGS.MAG, mult: 4.0, text: '🐢 {USER} 双手聚气："龟—派—气—功—波！" 轰穿了 {TARGET}，造成 {VAL} 伤害！' },
-  zonia: { name: '金身', tag: SKILL_TAGS.BUFF, status: 'INVUL', text: '⏱️ {USER} 按下了中娅沙漏，化为小金人，进入无敌状态！' },
+  zonia: { name: '金身', tag: SKILL_TAGS.BUFF, status: 'INVUL', statusSource: 'gamer_zhonya', text: '⏱️ {USER} 按下了中娅沙漏，化为小金人，进入无敌状态！' },
   aim_bot: { name: '锁头挂', tag: SKILL_TAGS.BUFF, status: 'AIM', statBuff: { crit: 1.0 }, text: '💻 {USER} 偷偷开启了锁头脚本... 下次攻击必定暴击且无法闪避！' },
   lag_switch: { name: '拔网线', tag: SKILL_TAGS.DEBUFF, status: 'STUN', text: '🔌 {USER} 物理拔掉了服务器网线！{TARGET} 掉线了，原地罚站！' },
-  roll_dodge: { name: '翻滚无敌帧', tag: SKILL_TAGS.BUFF, status: 'INVUL', text: '🔄 {USER} 熟练地进行翻滚，利用无敌帧规避了即将到来的所有伤害！' },
+  roll_dodge: { name: '翻滚无敌帧', tag: SKILL_TAGS.BUFF, status: 'INVUL', statusSource: 'gamer_roll_dodge', text: '🔄 {USER} 熟练地进行翻滚，利用无敌帧规避了即将到来的所有伤害！' },
   tp_scroll: { name: 'TP逃生', tag: SKILL_TAGS.HEAL, mult: 2.0, text: '📜 {USER} 亮起TP光芒，瞬间回到泉水恢复了 {VAL} 点生命值，又TP回了战场！' },
   warcry_dota: { name: '战吼', tag: SKILL_TAGS.BUFF, statBuff: { def: 2.0, res: 2.0 }, text: '吼 {USER} 发出战吼，护甲和魔抗大幅提升！' },
 
   gamer_headshot_line: {
-    name: '爆头线',
-    tag: SKILL_TAGS.PHYS,
-    mult: 2.8,
-    ignoreDef: true,
-    minDamagePct: 0.18,
-    text: '🎯 {USER} 把准星压到爆头线，精准点掉 {TARGET}，造成 {VAL} 真实伤害！',
+    name: '冠军爆头线',
+    tag: SKILL_TAGS.SPECIAL,
+    condition: (user) => canPay(user, 2),
+    text: '🎯 {USER} 把准星压到爆头线，准备收掉 {TARGET}！',
+    onExecute: (ctx) => {
+      const cost = spendApm(ctx.user, 2);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
+      const executeLine = boosted ? 0.45 : 0.35;
+      const hpRatio = ctx.target.currentHp / ctx.target.maxHp;
+      const multiplier = boosted ? (hpRatio <= executeLine ? 3.28 : 2.72) : (hpRatio <= executeLine ? 2.72 : 2.22);
+      const dmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * multiplier + ctx.user.wis * (boosted ? 0.72 : 0.4));
+      const prefix = boosted ? '强化冠军爆头线' : '冠军爆头线';
+      ctx.log('skill', `🎯 【${prefix}】${ctx.user.name} 消耗 ${cost} APM 锁定 ${ctx.target.name}，${hpRatio <= executeLine ? '目标已经进入斩杀线' : '先打一枪压低血线'}！`);
+      const result = applyTrackedDamage(ctx, ctx.target, dmg, '冠军爆头线', true, `🎯 【${prefix}】爆头命中`);
+      completeTechnique(ctx, 'fps', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '用爆头线续住枪感' });
+      return true;
+    },
   },
   gamer_perfect_parry: {
     name: '完美弹反',
     tag: SKILL_TAGS.BUFF,
-    status: 'COUNTER',
-    statBuff: { def: 1.25, res: 1.25 },
-    text: '🛡️ {USER} 读准前摇，进入完美弹反姿态，双抗提升并准备反击！',
+    condition: (user) => canPay(user, 2),
+    text: '🛡️ {USER} 读准前摇，进入完美弹反姿态！',
+    onExecute: (ctx) => {
+      const cost = spendApm(ctx.user, 2);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
+      refreshStatus(ctx.user, 'COUNTER', boosted ? 2 : 1);
+      refreshStatus(ctx.user, 'BKB', 1, 'gamer_perfect_parry');
+      if (boosted) refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'gamer_perfect_parry');
+      ctx.user.def = Math.floor(ctx.user.def * (boosted ? 1.18 : 1.08));
+      ctx.user.res = Math.floor(ctx.user.res * (boosted ? 1.18 : 1.08));
+      ctx.log('buff', `🛡️ 【${boosted ? '强化完美弹反' : '完美弹反'}】${ctx.user.name} 消耗 ${cost} APM 读准前摇，获得反击、防守抗性${boosted ? '与法术抵挡' : ''}！`);
+      completeTechnique(ctx, 'action', { apmGain: boosted ? 1 : 0, reason: '用弹反把防守转成操作资源' });
+      return true;
+    },
   },
   gamer_estus_cancel: {
     name: '喝瓶取消',
     tag: SKILL_TAGS.HEAL,
-    condition: (user) => (user.apm ?? 0) >= 2,
+    condition: (user) => canPay(user, 2),
     text: '🧃 {USER} 卡掉后摇喝下恢复道具，稳住血线！',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 2)) return false;
+      const cost = spendApm(ctx.user, 2);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
       ctx.user.status = ctx.user.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
-      const healAmt = Math.floor(ctx.user.maxHp * 0.25 + Math.max(ctx.user.atk, ctx.user.mag) * 0.5);
+      const healAmt = Math.floor(ctx.user.maxHp * (boosted ? 0.3 : 0.22) + ctx.user.wis * (boosted ? 1.0 : 0.65));
       const healed = healFighter(ctx.user, healAmt);
-      const healText = healed > 0 ? `并恢复了 ${healed} 点生命` : '但生命已满，治疗溢出';
-      ctx.log('heal', `🧃 【喝瓶取消】${ctx.user.name} 消耗 2 APM 清掉常规异常，${healText}！`);
+      if (boosted) {
+        refreshStatus(ctx.user, 'REGEN', 2);
+        refreshStatus(ctx.user, 'BKB', 1, 'gamer_clutch_focus');
+        ctx.user.gamerInputBuffer = Math.min(2, (ctx.user.gamerInputBuffer ?? 0) + 1);
+      }
+      const healText = healed > 0 ? `恢复了 ${healed} 点生命` : '生命已满，治疗溢出';
+      ctx.log('heal', `🧃 【${boosted ? '强化喝瓶取消' : '喝瓶取消'}】${ctx.user.name} 消耗 ${cost} APM 清掉常规异常，${healText}${boosted ? '，并接上输入缓存' : ''}！`);
+      completeTechnique(ctx, 'action', { apmGain: boosted ? 1 : 0, reason: '用取消后摇保持操作不断档' });
       return true;
     },
   },
   gamer_tactical_pause: {
-    name: '战术暂停',
-    tag: SKILL_TAGS.DEBUFF,
-    mult: 1.6,
-    status: 'STUN',
-    condition: (user) => (user.apm ?? 0) >= 3,
-    text: '⏸️ {USER} 抓住对局节奏强行暂停，{TARGET} 被读到下一步行动，受到 {VAL} 伤害并眩晕！',
+    name: '开团指挥',
+    tag: SKILL_TAGS.SPECIAL,
+    condition: (user) => canPay(user, 3),
+    text: '⏸️ {USER} 抓住对局节奏强行暂停，读到 {TARGET} 的下一步行动！',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 3)) return false;
-      return false;
+      const cost = spendApm(ctx.user, 3);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
+      const primary = Math.floor(ctx.user.mag * (boosted ? 2.2 : 1.75) + ctx.user.wis * 0.5);
+      ctx.log('skill', `⏸️ 【${boosted ? '强化开团指挥' : '开团指挥'}】${ctx.user.name} 消耗 ${cost} APM 强行暂停对局，主目标锁定 ${ctx.target.name}！`);
+      const result = applyTrackedDamage(ctx, ctx.target, primary, '开团指挥', false, `⏸️ 【开团指挥】主控命中`);
+      if (!result.redirected && result.actualDmg > 0) applyControl(ctx, ctx.target, 'STUN', boosted ? 2 : 1, '开团眩晕');
+      if (boosted && isActiveCombatant(ctx.user)) {
+        const extras = livingEnemies(ctx, ctx.target.id).slice(0, 2);
+        for (const enemy of extras) {
+          if (!isActiveCombatant(enemy)) continue;
+          const splash = Math.floor(primary * 0.42);
+          applyTrackedDamage(ctx, enemy, splash, '开团指挥余波', false, `⏸️ 【开团余波】波及 ${enemy.name}`);
+        }
+        refreshStatus(ctx.user, 'BKB', 1, 'gamer_clutch_focus');
+      }
+      completeTechnique(ctx, 'moba', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '用开团指挥稳住团战节奏' });
+      return true;
     },
   },
   gamer_wombo_combo: {
-    name: '团战连招',
+    name: 'Wombo Combo',
     tag: SKILL_TAGS.SPECIAL,
-    condition: (user) => (user.apm ?? 0) >= 3,
+    condition: (user) => canPay(user, 3),
     text: '🌀 {USER} 开启 MOBA 团战思路，准备打一套群体连招！',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 3)) return false;
-      const enemies = (ctx.currentTargets ?? []).filter((target) => target.currentHp > 0).slice(0, 3);
-      const dmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * 0.95);
-      ctx.log('skill', `🌀 【团战连招】${ctx.user.name} 消耗 3 APM 多线操作，向 ${enemies.length} 名敌人打出连招！`);
+      const cost = spendApm(ctx.user, 3);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
+      const enemies = livingEnemies(ctx).slice(0, boosted ? 4 : 3);
+      const baseDmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * (boosted ? 1.2 : 0.98) + ctx.user.wis * 0.25);
+      ctx.log('skill', `🌀 【${boosted ? '强化Wombo Combo' : 'Wombo Combo'}】${ctx.user.name} 消耗 ${cost} APM 多线操作，向 ${enemies.length} 名敌人打出团战连招！`);
       let totalDmg = 0;
+      let hitCount = 0;
       let redirectedAny = false;
       for (const enemy of enemies) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
-        const damageOptions: DamageApplicationOptions = { actionName: '团战连招' };
-        const actualDmg = ctx.applyDamage(enemy, dmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker) {
-          redirectedAny = true;
-          continue;
-        }
-        totalDmg += actualDmg;
-        ctx.user.stats.dmgDealt += actualDmg;
-        if (actualDmg > 0) {
-          ctx.log('info', `🎮 连招命中 ${enemy.name}，实际造成 ${actualDmg} 点伤害！`);
-        } else {
-          ctx.log('info', `🎮 连招扫到 ${enemy.name}，但没有造成实际伤害！`);
-        }
-        ctx.flushDeferredDamageEvents?.();
-        if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
-          ctx.markDefeated(enemy, { message: `💀 【团战收割】${enemy.name} 被玄凝的多线操作打崩了！`, killer: ctx.user });
+        if (!isActiveCombatant(enemy)) continue;
+        const result = applyTrackedDamage(ctx, enemy, baseDmg, 'Wombo Combo', false, `🎮 连招命中 ${enemy.name}`);
+        if (result.redirected) redirectedAny = true;
+        if (result.actualDmg > 0) {
+          totalDmg += result.actualDmg;
+          hitCount += 1;
         }
       }
-      if (!isActiveCombatant(ctx.user)) {
-        return true;
+      if (boosted && totalDmg > 0) {
+        const healed = healFighter(ctx.user, Math.floor(totalDmg * 0.16));
+        const healText = healed > 0
+          ? `${ctx.user.name} 从强化连招中恢复了 ${healed} 点生命`
+          : `${ctx.user.name} 的强化连招触发吸血，但生命已满，治疗溢出`;
+        ctx.log(healed > 0 ? 'heal' : 'info', `🌀 【团战吸血】${healText}！`);
       }
       if (totalDmg > 0) {
-        const totalLabel = redirectedAny ? '对未被转移的目标总计造成' : '总计造成';
-        ctx.log('info', `🌀 【团战连招】${ctx.user.name} 本次多线操作${totalLabel} ${totalDmg} 点伤害！`);
+        const totalLabel = redirectedAny ? '对未被转移的目标总计造成' : '本次团战连招总计造成';
+        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} ${totalLabel} ${totalDmg} 点伤害！`);
       } else if (redirectedAny) {
-        ctx.log('info', `🌀 【团战连招】${ctx.user.name} 的原目标伤害被随机恶作剧转移，转移伤害已单独结算！`);
+        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} 的部分伤害被随机恶作剧转移，转移伤害已单独结算！`);
       } else {
-        ctx.log('info', `🌀 【团战连招】${ctx.user.name} 这轮多线操作没有打出有效伤害！`);
+        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} 这轮团战连招没有打出有效伤害！`);
       }
+      completeTechnique(ctx, 'moba', { apmGain: hitCount >= 3 ? 1 : 0, reason: '命中多人后把团战手感续住' });
       return true;
     },
+  },
+  gamer_crack_confirm: {
+    name: '破绽确认',
+    tag: SKILL_TAGS.SPECIAL,
+    condition: (user) => canPay(user, 3),
+    text: '🥊 {USER} 抓到 {TARGET} 的破绽，准备把机会转成击杀！',
+    onExecute: (ctx) => executeCrackConfirm(ctx),
   },
   gamer_qte_execute: {
     name: '处决QTE',
     tag: SKILL_TAGS.SPECIAL,
-    condition: (user) => (user.apm ?? 0) >= 4,
+    condition: (user) => canPay(user, 3),
     text: '🎮 {USER} 看到处决提示亮起，按下完美 QTE！',
+    onExecute: (ctx) => executeCrackConfirm(ctx, '处决QTE'),
+  },
+  gamer_speedrun_route: {
+    name: '速通路线优化',
+    tag: SKILL_TAGS.BUFF,
+    condition: (user) => canPay(user, 1),
+    text: '🏃 {USER} 规划速通路线，压缩下一轮操作成本！',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 4)) return false;
-      const hpRatio = ctx.target.currentHp / ctx.target.maxHp;
-      const dmg = Math.floor(ctx.user.atk * (hpRatio < 0.35 ? 4.2 : 2.6));
-      ctx.log('skill', `🎮 【处决QTE】${ctx.user.name} 消耗 4 APM，完美输入已经锁定 ${ctx.target.name}！`);
-      const damageOptions: DamageApplicationOptions = { actionName: '处决QTE' };
-      const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', true, ctx.user, damageOptions);
-      if (damageOptions.redirectedByJoker) return true;
-      ctx.user.stats.dmgDealt += actualDmg;
-      if (actualDmg > 0) {
-        ctx.log('crit', `🎮 【处决QTE】${ctx.user.name} 消耗 4 APM 打出完美输入，对 ${ctx.target.name} 实际造成 ${actualDmg} 点真实处决伤害！`);
-      } else {
-        ctx.log('info', `🎮 【处决QTE】${ctx.user.name} 消耗 4 APM 打出完美输入，但 ${ctx.target.name} 没有承受实际伤害！`);
-      }
-      ctx.flushDeferredDamageEvents?.();
-      if (ctx.target.currentHp <= 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
-        ctx.markDefeated(ctx.target, { message: `💀 【QTE处决】${ctx.target.name} 被玄凝一套操作带走！`, killer: ctx.user });
-      }
+      const cost = spendApm(ctx.user, 1);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
+      ctx.user.gamerInputBuffer = Math.min(3, (ctx.user.gamerInputBuffer ?? 0) + (boosted ? 2 : 1));
+      refreshStatus(ctx.user, 'AIM', boosted ? 2 : 1);
+      ctx.user.spd = Math.floor(ctx.user.spd * (boosted ? 1.12 : 1.06));
+      ctx.user.agl = Math.floor(ctx.user.agl * (boosted ? 1.12 : 1.06));
+      ctx.log('buff', `🏃 【${boosted ? '强化速通路线优化' : '速通路线优化'}】${ctx.user.name} 消耗 ${cost} APM，获得 ${boosted ? 2 : 1} 层输入缓存、锁头与身位优势！`);
+      completeTechnique(ctx, 'macro', { apmGain: boosted ? 1 : 0, reason: '用速通路线优化压缩后续成本' });
       return true;
     },
   },
-  gamer_speedrun_route: {
-    name: '速通路线',
+  gamer_resource_macro: {
+    name: '资源运营',
     tag: SKILL_TAGS.BUFF,
-    status: 'AIM',
-    condition: (user) => (user.apm ?? 0) >= 2,
-    text: '🏃 {USER} 规划速通路线，下一次攻击将精准命中弱点！',
+    condition: () => true,
+    text: '📈 {USER} 暂停硬拼，开始运营 APM 与下一轮路线。',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 2)) return false;
-      return false;
+      const boosted = consumeBoost(ctx.user);
+      const apmGain = boosted ? 4 : 3;
+      ctx.user.gamerInputBuffer = Math.min(3, (ctx.user.gamerInputBuffer ?? 0) + 1);
+      if (boosted) refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'gamer_clutch_focus');
+      ctx.log('buff', `📈 【${boosted ? '强化资源运营' : '资源运营'}】${ctx.user.name} 放弃无意义平 A，重新规划资源，APM +${apmGain}，输入缓存 +1${boosted ? '，并获得法术抵挡' : ''}！`);
+      completeTechnique(ctx, 'macro');
+      gainApm(ctx, apmGain, '通过资源运营把手感重新拉满');
+      return true;
     },
   },
   gamer_read_inputs: {
     name: '读输入',
-    tag: SKILL_TAGS.DEBUFF,
-    mult: 1.8,
-    status: 'NEURAL_THEFT_DEBUFF',
-    condition: (user) => (user.apm ?? 0) >= 3,
-    text: '👁️ {USER} 像打格斗游戏一样读到了 {TARGET} 的输入，造成 {VAL} 伤害并暴露弱点！',
+    tag: SKILL_TAGS.SPECIAL,
+    condition: (user) => canPay(user, 2),
+    text: '👁️ {USER} 像打格斗游戏一样读到了 {TARGET} 的输入！',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 3)) return false;
-      return false;
+      const cost = spendApm(ctx.user, 2);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
+      const dmg = Math.floor(ctx.user.mag * (boosted ? 1.95 : 1.45) + ctx.user.wis * (boosted ? 0.7 : 0.4));
+      ctx.user.gamerMarkedTargetId = ctx.target.id;
+      ctx.log('skill', `👁️ 【${boosted ? '强化读输入' : '读输入'}】${ctx.user.name} 消耗 ${cost} APM，看穿 ${ctx.target.name} 的下一步，施加破绽标记！`);
+      const result = applyTrackedDamage(ctx, ctx.target, dmg, '读输入', false, `👁️ 【读输入】情报打击命中`);
+      if (!result.redirected && result.actualDmg > 0) {
+        applyControl(ctx, ctx.target, 'NEURAL_THEFT_DEBUFF', boosted ? 3 : 2, '输入读取');
+        if (boosted) {
+          ctx.target.agl = Math.max(0, Math.floor(ctx.target.agl * 0.86));
+          ctx.target.res = Math.max(1, Math.floor(ctx.target.res * 0.9));
+        }
+      }
+      completeTechnique(ctx, 'fighting', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '读到对手输入后继续提速' });
+      return true;
     },
   },
   gamer_clutch_ace: {
     name: '1vX残局',
     tag: SKILL_TAGS.SPECIAL,
-    condition: (user) => (user.apm ?? 0) >= 3,
+    condition: (user) => canPay(user, 4),
     text: '🏅 {USER} 进入 1vX 残局，开始冷静拆解战场！',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 3)) return false;
+      const cost = spendApm(ctx.user, 4);
+      if (cost === null) return false;
+      const boosted = consumeBoost(ctx.user);
+      const beforeClean = ctx.user.status.length;
       ctx.user.status = ctx.user.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
-      ctx.user.status.push({ type: 'BKB', duration: 1 });
-      ctx.user.status.push({ type: 'AIM', duration: 1 });
-      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.24 + ctx.user.wis * 0.9));
-      const dmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * 2.2);
-      ctx.log('crit', `🏅 【1vX残局】${ctx.user.name} 消耗 3 APM 清掉异常、稳住血线，并开始拆解 ${ctx.target.name}！`);
-      const damageOptions: DamageApplicationOptions = { actionName: '1vX残局' };
-      const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', true, ctx.user, damageOptions);
-      if (damageOptions.redirectedByJoker) return true;
-      ctx.user.stats.dmgDealt += actualDmg;
-      const healText = healed > 0 ? `恢复 ${healed} 点生命` : '治疗溢出';
-      const damageText = actualDmg > 0 ? `并对 ${ctx.target.name} 打出 ${actualDmg} 点真实反打伤害` : `但没有对 ${ctx.target.name} 造成实际伤害`;
-      ctx.log(actualDmg > 0 ? 'crit' : 'info', `🏅 【1vX残局】${ctx.user.name} ${healText}，${damageText}！`);
-      ctx.flushDeferredDamageEvents?.();
-      if (ctx.target.currentHp <= 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
-        ctx.markDefeated(ctx.target, { message: `💀 【残局收割】${ctx.target.name} 被玄凝的残局处理带走！`, killer: ctx.user });
-      }
+      const cleanCount = beforeClean - ctx.user.status.length;
+      refreshStatus(ctx.user, 'BKB', boosted ? 2 : 1, 'gamer_clutch_focus');
+      refreshStatus(ctx.user, 'AIM', boosted ? 2 : 1);
+      if (boosted) refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'gamer_clutch_focus');
+      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (boosted ? 0.25 : 0.17) + ctx.user.wis * (boosted ? 0.85 : 0.55)));
+      const dmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * (boosted ? 3.35 : 2.52) + ctx.user.wis * (boosted ? 1.05 : 0.7));
+      const cleanseText = cleanCount > 0 ? `清掉 ${cleanCount} 个异常` : '状态稳定';
+      ctx.log('crit', `🏅 【${boosted ? '强化1vX残局' : '1vX残局'}】${ctx.user.name} 消耗 ${cost} APM ${cleanseText}、${recoveryText(healed)}，并开始拆解 ${ctx.target.name}！`);
+      const result = applyTrackedDamage(ctx, ctx.target, dmg, '1vX残局', true, `🏅 【1vX残局】反打命中`);
+      if (boosted && result.actualDmg > 0) ctx.user.gamerInputBuffer = Math.min(3, (ctx.user.gamerInputBuffer ?? 0) + 1);
+      completeTechnique(ctx, 'fps', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '用残局处理续住枪线' });
       return true;
     },
   },
   gamer_world_combo: {
-    name: '世界赛名场面',
+    name: '全平台冠军连段',
     tag: SKILL_TAGS.SPECIAL,
-    condition: (user) => (user.apm ?? 0) >= 5 && user.status.some((status) => status.type === 'GAMER_WORLD_STAGE'),
-    text: '🏆 {USER} 进入世界赛状态，开始复刻名场面！',
+    condition: (user) => hasStatus(user, 'GAMER_WORLD_STAGE') && canPay(user, 6) && !user.hasUsedGamerChampionCombo,
+    text: '🏆 {USER} 进入世界赛状态，开始打出全平台冠军连段！',
     onExecute: (ctx) => {
-      if (!spendApm(ctx.user, 6)) return false;
-      const primary = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * 3.0);
-      ctx.log('crit', `🏆 【世界赛名场面】${ctx.user.name} 消耗 6 APM，开始复刻名场面，主目标锁定 ${ctx.target.name}！`);
-      const primaryDamageOptions: DamageApplicationOptions = { actionName: '世界赛名场面' };
-      const actualPrimary = ctx.applyDamage(ctx.target, primary, 'skill', true, ctx.user, primaryDamageOptions);
-      if (primaryDamageOptions.redirectedByJoker) return true;
-      ctx.user.stats.dmgDealt += actualPrimary;
-      if (actualPrimary > 0) {
-        ctx.log('crit', `🏆 【世界赛名场面】${ctx.user.name} 消耗 6 APM 打出高光操作，对 ${ctx.target.name} 实际造成 ${actualPrimary} 点真实伤害！`);
-      } else {
-        ctx.log('info', `🏆 【世界赛名场面】${ctx.user.name} 消耗 6 APM 打出高光操作，但 ${ctx.target.name} 没有承受实际伤害！`);
-      }
-      ctx.flushDeferredDamageEvents?.();
+      if (!hasStatus(ctx.user, 'GAMER_WORLD_STAGE') || ctx.user.hasUsedGamerChampionCombo) return false;
+      const cost = spendApm(ctx.user, 6);
+      if (cost === null) return false;
+      ctx.user.hasUsedGamerChampionCombo = true;
+      const base = Math.max(ctx.user.atk, ctx.user.mag);
+      const primary = Math.floor(base * 3.6 + ctx.user.wis * 1.18);
+      ctx.log('crit', `🏆 【全平台冠军连段】${ctx.user.name} 消耗 ${cost} APM，FPS 爆头、MOBA 控制、魂系无敌帧、格斗确认与速通路线全部串联，主目标锁定 ${ctx.target.name}！`);
+      const result = applyTrackedDamage(ctx, ctx.target, primary, '全平台冠军连段', true, `🏆 【冠军连段】主段命中`);
+      if (result.actualDmg > 0) applyControl(ctx, ctx.target, 'STUN', 1, '冠军连段压制');
       if (!isActiveCombatant(ctx.user)) return true;
-      const splash = Math.floor(primary * 0.25);
-      const splashTargets = (ctx.currentTargets ?? [])
-        .filter((enemy) => enemy.id !== ctx.target.id && enemy.currentHp > 0)
-        .slice(0, 2);
+      const splash = Math.floor(primary * 0.28);
+      const splashTargets = livingEnemies(ctx, ctx.target.id).slice(0, 2);
       for (const enemy of splashTargets) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
-        const damageOptions: DamageApplicationOptions = { actionName: '世界赛名场面余波' };
-        const actualDmg = ctx.applyDamage(enemy, splash, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker) continue;
-        ctx.user.stats.dmgDealt += actualDmg;
-        if (actualDmg > 0) {
-          ctx.log('info', `🏆 名场面余波波及 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
-        } else {
-          ctx.log('info', `🏆 名场面余波波及 ${enemy.name}，但没有造成实际伤害！`);
-        }
-        ctx.flushDeferredDamageEvents?.();
-        if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
-          ctx.markDefeated(enemy, { message: `💀 【名场面收割】${enemy.name} 被玄凝的世界赛操作带走！`, killer: ctx.user });
-        }
+        if (!isActiveCombatant(enemy)) continue;
+        applyTrackedDamage(ctx, enemy, splash, '全平台冠军连段余波', true, `🏆 【冠军连段余波】波及 ${enemy.name}`);
       }
-      if (ctx.target.currentHp <= 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
-        ctx.markDefeated(ctx.target, { message: `💀 【名场面处决】${ctx.target.name} 倒在玄凝的世界赛操作下！`, killer: ctx.user });
-      }
+      refreshStatus(ctx.user, 'BKB', 1, 'gamer_world_stage');
+      ctx.user.gamerInputBuffer = Math.min(3, (ctx.user.gamerInputBuffer ?? 0) + 1);
+      completeTechnique(ctx, 'macro', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '世界赛高光后继续接管比赛' });
       return true;
     },
   },

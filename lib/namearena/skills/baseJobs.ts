@@ -9,7 +9,7 @@ export const baseJobSkills: Record<string, SkillDefinition> = {
   serious_punch:{ name: '认真一拳',   tag: SKILL_TAGS.PHYS,  rate: 0.5,  mult: 5.0, ignoreDef: true, text: '👊 {USER} 眼神变得犀利... 认真一拳！瞬间粉碎了 {TARGET}，造成 {VAL} 真实伤害！' },
   aim_shot:     { name: '瞄准射击',   tag: SKILL_TAGS.PHYS,  rate: 0.3,  mult: 1.8, text: '🏹 {USER} 屏息凝神，一箭精准射中 {TARGET}，造成 {VAL} 伤害。' },
   multi_shot:   { name: '多重射击',   tag: SKILL_TAGS.PHYS,  rate: 0.2,  mult: 0.8, hits: 3, text: '🏹 {USER} 瞬间射出三支箭矢！对 {TARGET} 造成 {VAL} 伤害。' },
-  holy_shield:  { name: '神圣护盾',   tag: SKILL_TAGS.BUFF,  rate: 0.15, status: 'INVUL', text: '🛡️ {USER} 施放神之力量，获得无敌护盾！' },
+  holy_shield:  { name: '神圣护盾',   tag: SKILL_TAGS.BUFF,  rate: 0.15, status: 'INVUL', statusSource: 'holy_shield', text: '🛡️ {USER} 施放神之力量，获得无敌护盾！' },
   bash:         { name: '盾击',        tag: SKILL_TAGS.PHYS,  rate: 0.25, mult: 1.2, status: 'STUN', text: '🛡️ {USER} 举盾猛击，造成 {VAL} 伤害并眩晕了 {TARGET}！' },
   fireball:     { name: '火球术',      tag: SKILL_TAGS.MAG,   rate: 0.3,  mult: 1.5, status: 'BURN', text: '🔥 {USER} 搓出一发大火球，轰炸 {TARGET} 造成 {VAL} 魔法伤害！' },
   heal:         { name: '治疗术',      tag: SKILL_TAGS.HEAL,  rate: 0.35, mult: 1.5, condition: (u) => u.hpPct < 0.7, text: '✨ {USER} 沐浴圣光，恢复了 {VAL} 生命。' },

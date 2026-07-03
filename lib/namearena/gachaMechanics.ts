@@ -12,6 +12,11 @@ import type {
   GachaEntry,
   SkillContext,
 } from './types';
+import {
+  findDefenseStatus,
+  formatControlBlocked,
+  grantStatus,
+} from './defenseStatus';
 
 export const GACHA_LUCK_MAX = 5;
 export const GACHA_SUMMON_LIFESTEAL_STATUS = 'GACHA_SUMMON_LIFESTEAL';
@@ -39,13 +44,8 @@ type SummonLifestealRuntime = {
   log: LogFn;
 };
 
-function refreshStatus(fighter: Fighter, type: string, duration: number): void {
-  const existing = fighter.status.find((status) => status.type === type);
-  if (existing) {
-    existing.duration = Math.max(existing.duration, duration);
-  } else {
-    fighter.status.push({ type, duration });
-  }
+function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
+  grantStatus(fighter, type, duration, sourceId);
 }
 
 function activeFighters(runtime: LuckDrawRuntime): Fighter[] {
@@ -281,8 +281,8 @@ export function triggerGachaDeathSave(
   fighter.hasUsedGachaDeathSave = true;
   cleanseLuckEmperor(fighter);
   fighter.currentHp = Math.max(1, Math.floor(fighter.maxHp * 0.25));
-  refreshStatus(fighter, 'SPELL_BLOCK', 3);
-  refreshStatus(fighter, 'BKB', 2);
+  refreshStatus(fighter, 'SPELL_BLOCK', 3, 'gacha_death_charm');
+  refreshStatus(fighter, 'BKB', 2, 'gacha_death_charm');
   refreshStatus(fighter, 'REGEN', 3);
   syncHpPct(fighter);
   log('buff', `👑 【欧皇护符】${fighter.name} 在致死瞬间强行改命，清除异常并锁住了 ${fighter.currentHp} 点生命！`);
@@ -536,7 +536,7 @@ export const GACHA_TRIBUTE_PREP_CARD: GachaEntry = {
   onExecute: (ctx) => {
     const summons = activeContextOrdinarySummons(ctx);
     for (const summon of summons) {
-      refreshStatus(summon, 'SPELL_BLOCK', 2);
+      refreshStatus(summon, 'SPELL_BLOCK', 2, 'gacha_tribute_compensation');
       refreshStatus(summon, 'REGEN', 2);
     }
     ctx.log('buff', `🕯️ 【献祭准备】${ctx.user.name} 为 ${summons.length} 只普通召唤物套上仪式护盾，并积攒欧气！`);
@@ -555,7 +555,8 @@ export const GACHA_SUMMON_RECYCLE_CARD: GachaEntry = {
     ctx.markDefeated(victim, { message: `💀 【召唤物回收】${victim.name} 被 ${ctx.user.name} 回收为卡组资源！`, awardKill: false });
     victim.isDead = true;
     const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.18));
-    ctx.log('heal', `♻️ 【召唤物回收】${ctx.user.name} 回收 ${victim.name}，恢复 ${healed} 点生命并获得 2 点欧气！`);
+    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    ctx.log(healed > 0 ? 'heal' : 'info', `♻️ 【召唤物回收】${ctx.user.name} 回收 ${victim.name}，${healText}，并获得 2 点欧气！`);
     grantGachaLuck(ctx.user, 2, ctx.log, '召唤物回收');
     return true;
   },
@@ -593,8 +594,9 @@ export const GACHA_ASH_BLOSSOM_CARD: GachaEntry = {
   text: '🌸 {USER} 抽到「灰流丽」，打断敌方关键行动！',
   tag: 'debuff',
   onExecute: (ctx) => {
-    if (ctx.target.status.some((status) => status.type === 'BKB')) {
-      ctx.log('info', `🌸 【灰流丽】试图打断 ${ctx.target.name}，但对方处于 BKB 状态！`);
+    const controlImmune = findDefenseStatus(ctx.target, 'BKB');
+    if (controlImmune) {
+      ctx.log('info', `🌸 【灰流丽】试图打断 ${ctx.target.name}，但${formatControlBlocked(controlImmune, ctx.target.name, '打断效果').replace(/^🟡\s*/, '')}`);
       return true;
     }
     ctx.target.status.push({ type: 'STUN', duration: 2 });
@@ -657,12 +659,12 @@ export const GACHA_TRUE_LIGHT_CARD: GachaEntry = {
   onExecute: (ctx) => {
     const blueEyes = contextFriendlySummonByBaseName(ctx, '青眼白龙');
     if (!blueEyes) return false;
-    refreshStatus(blueEyes, 'SPELL_BLOCK', 3);
-    refreshStatus(blueEyes, 'BKB', 2);
+    refreshStatus(blueEyes, 'SPELL_BLOCK', 3, 'gacha_true_light');
+    refreshStatus(blueEyes, 'BKB', 2, 'gacha_true_light');
     refreshStatus(blueEyes, 'REGEN', 3);
     const healed = blueEyes.hpPct <= 0.55 ? healFighter(blueEyes, Math.floor(blueEyes.maxHp * 0.22)) : 0;
     consumeGachaLuck(ctx.user, 1);
-    ctx.log('buff', `💡 【真之光】${ctx.user.name} 守护 ${blueEyes.name}，赋予法术抵挡、黑皇杖与再生${healed > 0 ? `，并恢复 ${healed} 点生命` : ''}！`);
+    ctx.log('buff', `💡 【真之光】${ctx.user.name} 守护 ${blueEyes.name}，赋予真之光护壁、控制免疫与再生${healed > 0 ? `，并恢复 ${healed} 点生命` : ''}！`);
     return true;
   },
 };
@@ -675,7 +677,7 @@ export const GACHA_ANCIENT_CHANT_CARD: GachaEntry = {
     const ra = contextFriendlySummonByBaseName(ctx, '翼神龙');
     if (!ra) return false;
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
-    refreshStatus(ra, 'SPELL_BLOCK', 2);
+    refreshStatus(ra, 'SPELL_BLOCK', 2, 'gacha_ancient_chant');
     const healed = healFighter(ra, Math.floor(ra.maxHp * 0.18));
     ctx.log('buff', `☀️ 【古之咒文】${ctx.user.name} 强化 ${ra.name}，太阳神力 ${ra.raChantBoost}/3，获得法术抵挡${healed > 0 ? `，恢复 ${healed} 点生命` : ''}！`);
     return true;
@@ -703,7 +705,7 @@ export const GACHA_BLAZE_CANNON_CARD: GachaEntry = {
     const actualDmg = damageFromSummon(ctx, ra, ctx.target, dmg, '太阳神火焰加农', true, { deferOutcome: true });
     if (actualDmg > 0) ctx.log('crit', `🔥 神炎命中 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`);
     finalizeSummonDamage(ctx, ra, ctx.target, '太阳神火焰加农');
-    if (isActiveCombatant(ra)) refreshStatus(ra, 'BKB', 1);
+    if (isActiveCombatant(ra)) refreshStatus(ra, 'BKB', 1, 'ra_divine_aura');
     return true;
   },
 };
@@ -739,7 +741,8 @@ export const GACHA_RA_TRIBUTE_ASCENSION_CARD: GachaEntry = {
     victim.isDead = true;
     const healed = healFighter(ra, Math.floor(ra.maxHp * 0.28));
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
-    ctx.log('buff', `🛐 【献祭升格】${ctx.user.name} 献祭 ${victim.name}，${ra.name} 恢复 ${healed} 点生命并获得 1 层太阳神力！`);
+    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    ctx.log('buff', `🛐 【献祭升格】${ctx.user.name} 献祭 ${victim.name}，${ra.name} ${healText}，并获得 1 层太阳神力！`);
     return true;
   },
 };
@@ -751,7 +754,7 @@ export const GACHA_SMALL_PITY_CARD: GachaEntry = {
     const power = getPityPower(ctx.user, 3);
     cleanseLuckEmperor(ctx.user);
     const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.22 + power * 0.03)));
-    refreshStatus(ctx.user, 'SPELL_BLOCK', 2);
+    refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_small_pity');
     refreshStatus(ctx.user, 'REGEN', 3);
     const healText = healed > 0 ? `恢复了 ${healed} 点生命` : '生命已满，治疗溢出';
     ctx.log('heal', `🍀 【小保底歪了但没完全歪】${ctx.user.name} 被保底光芒护住，${healText}，并获得法术抵挡与再生！`);
@@ -775,7 +778,7 @@ export const GACHA_CEILING_EXCHANGE_CARD: GachaEntry = {
     if (summons.length > 0) {
       const leader = summons[0];
       if (leader) {
-        refreshStatus(leader, 'SPELL_BLOCK', 2);
+        refreshStatus(leader, 'SPELL_BLOCK', 2, 'gacha_heavenly_exchange');
         commandSummon(ctx, leader, '天井指令');
         if (power >= GACHA_LUCK_MAX && isActiveCombatant(leader)) commandSummon(ctx, leader, '天井连携');
       }
@@ -821,11 +824,11 @@ export const GACHA_WHALE_REWRITE_CARD: GachaEntry = {
     const power = getPityPower(ctx.user, 3);
     cleanseLuckEmperor(ctx.user);
     const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.18 + power * 0.04)));
-    refreshStatus(ctx.user, 'BKB', 1);
-    refreshStatus(ctx.user, 'SPELL_BLOCK', 2);
+    refreshStatus(ctx.user, 'BKB', 1, 'gacha_whale_rewrite');
+    refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_whale_rewrite');
     refreshStatus(ctx.user, 'REGEN', 3);
     const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
-    ctx.log('buff', `💳 【氪金改命】${ctx.user.name} 清除异常，${healText}，并获得短暂黑皇杖、法术抵挡与再生！`);
+    ctx.log('buff', `💳 【氪金改命】${ctx.user.name} 清除异常，${healText}，并获得改命抗性、法术抵挡与再生！`);
     grantGachaLuck(ctx.user, 1, ctx.log, '氪金改命余波');
     return true;
   },
@@ -853,12 +856,12 @@ function chooseMajorPityEntry(runtime: LuckDrawRuntime, user: Fighter): GachaEnt
 
   if (user.hpPct <= 0.38) return GACHA_WHALE_REWRITE_CARD;
   if (summonCount < 2 && summonCards.length > 0) return GACHA_TEN_PULL_GOLD_CARD;
-  if (raSupports.length > 0 && Math.random() < 0.82) return pickRandom(raSupports);
-  if (hasBlueEyesFusionMaterials(runtime, user) && Math.random() < 0.78) return GACHA_BLUE_EYES_ULTIMATE_CARD;
-  if (supports.length > 0 && Math.random() < 0.68) return pickRandom(supports);
-  if (tributeCards.length > 0 && Math.random() < 0.72) return pickRandom(tributeCards);
+  if (raSupports.length > 0 && Math.random() < 0.68) return pickRandom(raSupports);
+  if (hasBlueEyesFusionMaterials(runtime, user) && Math.random() < 0.51) return GACHA_BLUE_EYES_ULTIMATE_CARD;
+  if (supports.length > 0 && Math.random() < 0.54) return pickRandom(supports);
+  if (tributeCards.length > 0 && Math.random() < 0.46) return pickRandom(tributeCards);
   if (summons.length > 0 && !hasSummonLifesteal) return GACHA_SUMMON_LIFESTEAL_CARD;
-  if (summonCards.length > 0 && Math.random() < 0.58) return pickRandom(summonCards);
+  if (summonCards.length > 0 && Math.random() < 0.45) return pickRandom(summonCards);
   if (enemies.length >= 3) return GACHA_TEN_PULL_GOLD_CARD;
   return GACHA_CEILING_EXCHANGE_CARD;
 }
@@ -874,13 +877,13 @@ function chooseEnhancedEntry(runtime: LuckDrawRuntime, user: Fighter, pool: Gach
   const raSupports = raSupportEntries(runtime, user, pool);
 
   if (user.hpPct <= 0.5) return GACHA_SMALL_PITY_CARD;
-  if (summonCount < 2 && summonCards.length > 0 && Math.random() < 0.72) return GACHA_TEN_PULL_GOLD_CARD;
-  if (raSupports.length > 0 && Math.random() < 0.58) return pickRandom(raSupports);
-  if (hasBlueEyesFusionMaterials(runtime, user) && Math.random() < 0.45) return GACHA_BLUE_EYES_ULTIMATE_CARD;
-  if (supports.length > 0 && Math.random() < 0.42) return pickRandom(supports);
-  if (tributeCards.length > 0 && Math.random() < 0.56) return pickRandom(tributeCards);
+  if (summonCount < 2 && summonCards.length > 0 && Math.random() < 0.62) return GACHA_TEN_PULL_GOLD_CARD;
+  if (raSupports.length > 0 && Math.random() < 0.42) return pickRandom(raSupports);
+  if (hasBlueEyesFusionMaterials(runtime, user) && Math.random() < 0.27) return GACHA_BLUE_EYES_ULTIMATE_CARD;
+  if (supports.length > 0 && Math.random() < 0.32) return pickRandom(supports);
+  if (tributeCards.length > 0 && Math.random() < 0.34) return pickRandom(tributeCards);
   if (summons.length > 0 && !hasSummonLifesteal) return GACHA_SUMMON_LIFESTEAL_CARD;
-  if (summonCards.length > 0 && Math.random() < 0.44) return pickRandom(summonCards);
+  if (summonCards.length > 0 && Math.random() < 0.36) return pickRandom(summonCards);
 
   const premium = usablePool.filter((entry) =>
     entry.tag === 'heal' ||
@@ -916,13 +919,13 @@ function chooseSmartEntry(runtime: LuckDrawRuntime, user: Fighter, pool: GachaEn
     if (defensive.length > 0 && Math.random() < 0.65) return pickRandom(defensive);
   }
 
-  if (summonCount < 2 && summonCards.length > 0 && Math.random() < 0.55) return GACHA_TEN_PULL_GOLD_CARD;
-  if (raSupports.length > 0 && Math.random() < 0.36) return pickRandom(raSupports);
-  if (hasBlueEyesFusionMaterials(runtime, user) && Math.random() < 0.32) return GACHA_BLUE_EYES_ULTIMATE_CARD;
-  if (supports.length > 0 && Math.random() < 0.24) return pickRandom(supports);
-  if (tributeCards.length > 0 && Math.random() < 0.42) return pickRandom(tributeCards);
-  if (summons.length > 0 && !hasSummonLifesteal && Math.random() < 0.3) return GACHA_SUMMON_LIFESTEAL_CARD;
-  if (summonCards.length > 0 && Math.random() < 0.36) return pickRandom(summonCards);
+  if (summonCount < 2 && summonCards.length > 0 && Math.random() < 0.48) return GACHA_TEN_PULL_GOLD_CARD;
+  if (raSupports.length > 0 && Math.random() < 0.28) return pickRandom(raSupports);
+  if (hasBlueEyesFusionMaterials(runtime, user) && Math.random() < 0.24) return GACHA_BLUE_EYES_ULTIMATE_CARD;
+  if (supports.length > 0 && Math.random() < 0.2) return pickRandom(supports);
+  if (tributeCards.length > 0 && Math.random() < 0.28) return pickRandom(tributeCards);
+  if (summons.length > 0 && !hasSummonLifesteal && Math.random() < 0.25) return GACHA_SUMMON_LIFESTEAL_CARD;
+  if (summonCards.length > 0 && Math.random() < 0.32) return pickRandom(summonCards);
 
   if (enemies.length >= 3) {
     const crowdControl = candidates.filter((entry) =>

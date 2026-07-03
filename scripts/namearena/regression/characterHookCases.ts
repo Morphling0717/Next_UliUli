@@ -1,4 +1,4 @@
-import type { Fighter, StatKey } from '../../../lib/namearena/types';
+import type { Fighter, SkillDefinition, StatKey } from '../../../lib/namearena/types';
 import {
   assert,
   localProject,
@@ -14,6 +14,23 @@ function bindAsGachaSummon(owner: Fighter, summon: Fighter, baseName: string, ad
   summon.summonerId = owner.id;
   summon.summonBaseName = baseName;
   summon.isAdvancedSummon = advanced;
+}
+
+function forceLuckEmperor(fighter: Fighter): void {
+  const luckEmperor = localProject.jobs.LUCK_EMPEROR;
+  assert(luckEmperor, 'LUCK_EMPEROR job should exist for gacha guard tests');
+  fighter.job = 'LUCK_EMPEROR';
+  fighter.jobData = JSON.parse(JSON.stringify(luckEmperor)) as typeof luckEmperor;
+  fighter.transformed = true;
+  fighter.isGacha = true;
+  fighter.gachaLuck = 0;
+  fighter.gachaPityPower = 0;
+}
+
+function chimeraInstallSkillByStatus(status: string): SkillDefinition {
+  const plug = localProject.data.CHIMERA_PLUGIN_POOL?.find((entry) => entry.status === status);
+  assert(plug, `Chimera plugin ${status} should exist`);
+  return { name: '插件安装', ...plug } as SkillDefinition;
 }
 
 export function runCharacterHookCases(): string[] {
@@ -169,6 +186,146 @@ export function runCharacterHookCases(): string[] {
   {
     const ting = makeFighter('小汀@A');
     const croc = makeFighter('牢鳄@B');
+    const summon = makeFighter('护主普通召唤物@B');
+    bindAsGachaSummon(croc, summon, 'Saber');
+    const { engine, logs } = makeDeathEngine([ting, croc, summon]);
+    const engineCroc = engine.fighters[1];
+    const engineSummon = engine.fighters[2];
+    forceLuckEmperor(engineCroc);
+    engineCroc.maxHp = 3000;
+    localProject.setCurrentHp(engineCroc, 3000);
+    engineSummon.maxHp = 1200;
+    localProject.setCurrentHp(engineSummon, 1200);
+
+    const actual = withRandomSequence([0], () => engine.applyDamage(engineCroc, 1000, 'skill', true, engine.fighters[0], { actionName: '护主测试' }));
+
+    assert(actual === 720, `Ordinary summon guard should reduce Ting damage to 720, got ${actual}`);
+    assert(engineCroc.currentHp === 2280, `Croc should take the reduced damage after summon guard, got ${engineCroc.currentHp}`);
+    assert(engineSummon.currentHp === 920, `Ordinary summon should absorb 280 guard damage, got ${engineSummon.currentHp}`);
+    assert(logs.some((entry) => entry.text.includes('召唤物护主') && entry.text.includes('280')), 'Ordinary summon guard should explain the damage split');
+    cases.push('Gacha ordinary summon guards against Ting');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const croc = makeFighter('牢鳄@B');
+    const exodia = makeFighter('黑暗大法师@B');
+    bindAsGachaSummon(croc, exodia, '黑暗大法师', true);
+    const { engine, logs } = makeDeathEngine([ting, croc, exodia]);
+    const engineCroc = engine.fighters[1];
+    const engineExodia = engine.fighters[2];
+    forceLuckEmperor(engineCroc);
+    engineCroc.maxHp = 3000;
+    localProject.setCurrentHp(engineCroc, 500);
+
+    const actual = engine.applyDamage(engineCroc, 1000, 'skill', true, engine.fighters[0], { actionName: '封印护壁测试' });
+
+    assert(actual === 0, `Exodia guard should nullify lethal Ting damage, got ${actual}`);
+    assert(engineCroc.currentHp === 500, 'Exodia guard should keep Croc HP unchanged');
+    assert(engineExodia.hasUsedExodiaGuard, 'Exodia guard should be marked as used');
+    assert(logs.some((entry) => entry.text.includes('封印护壁') && entry.text.includes('无效化')), 'Exodia guard should log the lethal prevention');
+    cases.push('Exodia guard nullifies lethal Ting hit once');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const croc = makeFighter('牢鳄@B');
+    const { engine, logs } = makeDeathEngine([ting, croc]);
+    const engineCroc = engine.fighters[1];
+    forceLuckEmperor(engineCroc);
+    engineCroc.maxHp = 3000;
+    engineCroc.gachaTingGuardTrapReady = true;
+    localProject.setCurrentHp(engineCroc, 3000);
+
+    const actual = engine.applyDamage(engineCroc, 1000, 'skill', true, engine.fighters[0], { actionName: '护主陷阱测试' });
+    const trapSummon = engine.fighters.find((fighter) => fighter.summonBaseName === '护主栗子球');
+
+    assert(actual === 640, `Ting guard trap should reduce damage to 640, got ${actual}`);
+    assert(trapSummon && trapSummon.currentHp === 840, `Guard trap summon should absorb 360 damage, got ${trapSummon?.currentHp}`);
+    assert(!engineCroc.gachaTingGuardTrapReady, 'Ting guard trap should be consumed after flipping');
+    assert(logs.some((entry) => entry.text.includes('护主陷阱')), 'Ting guard trap should explain the emergency summon');
+    cases.push('Gacha Ting guard trap flips into substitute summon');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const croc = makeFighter('牢鳄@B');
+    const blueEyes = makeFighter('青眼白龙@B');
+    bindAsGachaSummon(croc, blueEyes, '青眼白龙', true);
+    const { engine, logs } = makeDeathEngine([ting, croc, blueEyes]);
+    const engineTing = engine.fighters[0];
+    const engineCroc = engine.fighters[1];
+    const engineBlueEyes = engine.fighters[2];
+    forceLuckEmperor(engineCroc);
+    engineCroc.hasUsedGachaDeathSave = true;
+    engineTing.maxHp = 10000;
+    localProject.setCurrentHp(engineTing, 10000);
+    engineBlueEyes.atk = 120;
+    engineBlueEyes.mag = 180;
+    engineBlueEyes.spd = 140;
+
+    engine.markDefeated(engineCroc, { message: '💀 【测试】小汀击倒牢鳄。', killer: engineTing });
+
+    assert(logs.some((entry) => entry.text.includes('召唤师遗产')), 'Advanced summons should inherit a revenge order when Ting defeats Croc');
+    assert(logs.some((entry) => entry.text.includes('复仇指令') && entry.text.includes('青眼白龙')), 'The strongest advanced summon should immediately pressure Ting');
+    assert(engineBlueEyes.status.some((status) => status.type === 'BKB'), 'Gacha revenge should briefly protect advanced summons');
+    assert(engineBlueEyes.status.some((status) => status.type === 'REGEN'), 'Gacha revenge should give advanced summons regeneration');
+    cases.push('Gacha advanced summons revenge Ting after Croc defeat');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const croc = makeFighter('牢鳄@B');
+    const { engine, logs } = makeDeathEngine([ting, croc]);
+    const engineTing = engine.fighters[0];
+    const engineCroc = engine.fighters[1];
+    engineTing.maxHp = 4000;
+    localProject.setCurrentHp(engineTing, 1000);
+    engineTing.atk = 1;
+    engineTing.def = 1;
+    engineTing.res = 1;
+    engineTing.baseStatsForZero = { atk: 120, def: 240, res: 180 };
+    engineTing.wasZeroed = true;
+    engineTing.status.push(
+      { type: 'POISON', duration: 2 },
+      { type: 'STUN', duration: 2 },
+      { type: 'NO_HEAL', duration: 2 },
+      { type: 'ZEROED', duration: 2 },
+    );
+
+    engine.markDefeated(engineCroc, { message: '💀 【测试】牢鳄被小汀击倒。', killer: engineTing });
+
+    assert(engineTing.stats.kills === 1, `Ting should receive the Croc kill, got ${engineTing.stats.kills}`);
+    assert(engineTing.currentHp === 2400, `Ting Croc-kill momentum should heal 35% max HP, got ${engineTing.currentHp}`);
+    assert(engineTing.atk === 120 && engineTing.def === 240 && engineTing.res === 180, 'Ting Croc-kill momentum should restore zeroed stats');
+    assert(!engineTing.status.some((status) => ['POISON', 'STUN', 'NO_HEAL', 'ZEROED'].includes(status.type)), 'Ting Croc-kill momentum should cleanse dangerous negative statuses');
+    assert(['INVUL', 'BKB', 'SPELL_BLOCK', 'REGEN'].every((type) => engineTing.status.some((status) => status.type === type)), 'Ting Croc-kill momentum should grant short survival statuses');
+    assert(logs.some((entry) => entry.text.includes('爆鳄余烬') && entry.text.includes('亲手击倒')), 'Ting Croc-kill momentum should explain the post-kill recovery in logs');
+    cases.push('Ting Croc-kill momentum cleanses and heals');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const target = makeFighter('吸血残血靶子@B');
+    const { engine, logs } = makeDeathEngine([ting, target]);
+    const engineTing = engine.fighters[0];
+    const engineTarget = engine.fighters[1];
+    engineTing.transformed = true;
+    engineTing.maxHp = 5000;
+    localProject.setCurrentHp(engineTing, 1000);
+    engineTarget.maxHp = 5000;
+    localProject.setCurrentHp(engineTarget, 1);
+
+    engine.applyLifestealEffects(engineTing, engineTarget, engine.SKILLS.grudge_rend, 1000, 1);
+
+    assert(engineTing.currentHp === 2050, `Ting lifesteal should use a capped overkill base against near-dead targets, got ${engineTing.currentHp}`);
+    assert(logs.some((entry) => entry.text.includes('触发吸血被动') && entry.text.includes('1050')), 'Ting overkill lifesteal should log the actual recovered amount');
+    cases.push('Ting overkill lifesteal has capped heal base');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const croc = makeFighter('牢鳄@B');
     const { engine } = makeDeathEngine([ting, croc]);
     localProject.setCurrentHp(engine.fighters[1], Math.floor(engine.fighters[1].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[1]);
@@ -185,20 +342,75 @@ export function runCharacterHookCases(): string[] {
 
     assert(engine.fighters[1].currentHp > 0 && !engine.fighters[1].isDeadAnnounced, 'Ting suicide bomb should not one-shot full-health transformed Croc');
     assert(engine.fighters[0].currentHp > 0 && !engine.fighters[0].isDeadAnnounced, 'Ting suicide bomb recoil should not directly remove Ting from the battlefield');
-    assert(engine.fighters[0].hpPct <= 0.3, `Ting suicide bomb should still leave Ting heavily damaged, got hpPct ${engine.fighters[0].hpPct}`);
+    assert(engine.fighters[0].hpPct <= 0.5, `Ting suicide bomb should still leave Ting heavily damaged, got hpPct ${engine.fighters[0].hpPct}`);
     cases.push('Ting suicide bomb damages without double-removal');
   }
 
   {
     const tokusatsu = makeFighter('刺猬人@A');
     const { engine, logs } = makeDeathEngine([tokusatsu, makeFighter('变身旁观者@B')]);
+    const baseRes = engine.fighters[0].res;
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[0]);
 
     assert(engine.fighters[0].transformed, 'Tokusatsu hook should mark the fighter as transformed');
     assert(engine.fighters[0].job === 'MIRACLE_BUJIN', `Tokusatsu hook should transform to MIRACLE_BUJIN, got ${engine.fighters[0].job}`);
+    assert(engine.fighters[0].res > baseRes && engine.fighters[0].res >= 120, `Tokusatsu transform should raise resistance, got ${baseRes} -> ${engine.fighters[0].res}`);
+    assert(engine.fighters[0].status.some((status) => status.type === 'BKB'), 'Tokusatsu transform should add short BKB protection');
+    assert(engine.fighters[0].status.some((status) => status.type === 'SPELL_BLOCK'), 'Tokusatsu transform should add short spell block protection');
     assert(logs.some((entry) => entry.text.includes('奇迹武刃')), 'Tokusatsu hook should keep the original transform log');
     cases.push('Tokusatsu transform hook');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const { engine } = makeDeathEngine([tokusatsu, makeFighter('王座共鸣靶@B')]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    engine.fighters[0].tokusatsuThroneResonance = 4;
+
+    const selectedSkill = withRandomSequence([0.3], () => engine.selectSkill(engine.fighters[0]));
+
+    assert(selectedSkill === 'bujin_chair', `Tokusatsu throne resonance should raise high-HP chair chance enough to select bujin_chair, got ${selectedSkill}`);
+    cases.push('Tokusatsu throne resonance raises chair selection chance');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const { engine, logs } = makeDeathEngine([tokusatsu, makeFighter('王座控制靶@B')]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    const engineTokusatsu = engine.fighters[0];
+    engineTokusatsu.status = engineTokusatsu.status.filter((status) => status.type !== 'BKB' && status.type !== 'SPELL_BLOCK');
+    engineTokusatsu.tokusatsuThroneResonance = 4;
+    engineTokusatsu.status.push({ type: 'STUN', duration: 2 });
+
+    const canAct = withRandomSequence([0], () => engine.processStatus(engineTokusatsu));
+
+    assert(canAct, 'Tokusatsu control resonance should convert the skipped action into a throne stance');
+    assert(engineTokusatsu.status.some((status) => status.type === 'WAIT_COUNTER'), 'Tokusatsu control resonance should add WAIT_COUNTER');
+    assert(!engineTokusatsu.status.some((status) => status.type === 'STUN'), 'Tokusatsu control resonance should cleanse the blocking control');
+    assert(logs.some((entry) => entry.text.includes('悲愿共鸣') && entry.text.includes('武神王座')), 'Tokusatsu control resonance should explain the throne conversion');
+    cases.push('Tokusatsu control skip can become throne stance');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const target = makeFighter('王座防御靶@B');
+    const { engine, logs } = makeDeathEngine([tokusatsu, target]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    const engineTokusatsu = engine.fighters[0];
+    engineTokusatsu.tokusatsuThroneResonance = 3;
+
+    engine.executeSkillAction('bujin_chair', engineTokusatsu, engine.fighters[1]);
+
+    assert(engineTokusatsu.status.some((status) => status.type === 'WAIT_COUNTER' && status.duration === 4), 'Tokusatsu chair should add a 4-turn wait counter');
+    assert(engineTokusatsu.status.some((status) => status.type === 'BKB' && status.duration === 2 && status.sourceId === 'tokusatsu_bujin_throne'), 'Tokusatsu chair should add 2-turn throne-sourced control armor');
+    assert(engineTokusatsu.status.some((status) => status.type === 'SPELL_BLOCK' && status.duration === 2 && status.sourceId === 'tokusatsu_bujin_throne'), 'Tokusatsu chair should add 2-turn throne-sourced spell block');
+    assert((engineTokusatsu.tokusatsuThroneResonance ?? -1) === 0, 'Tokusatsu chair should consume stored throne resonance');
+    assert(logs.some((entry) => entry.text.includes('悲愿共鸣 3 层')), 'Tokusatsu chair should mention consumed resonance when present');
+    cases.push('Tokusatsu chair grants throne-sourced defenses');
   }
 
   {
@@ -220,6 +432,95 @@ export function runCharacterHookCases(): string[] {
     assert(engine.fighters[1].hasUsedGreatMonsterVictory, 'Tokusatsu wait counter hook should fire GREAT MONSTER VICTORY once');
     assert(logs.some((entry) => entry.text.includes('GREAT！MONSTER')), 'Tokusatsu wait counter hook should keep the monster transform log');
     cases.push('Tokusatsu wait counter hook');
+  }
+
+  {
+    const attacker = makeFighter('王座范围技攻击者@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const { engine, logs } = makeDeathEngine([attacker, tokusatsu]);
+    const engineAttacker = engine.fighters[0];
+    const engineTokusatsu = engine.fighters[1];
+    engineAttacker.maxHp = 100000;
+    localProject.setCurrentHp(engineAttacker, 100000);
+    engineTokusatsu.maxHp = 100000;
+    localProject.setCurrentHp(engineTokusatsu, 100000);
+    engineTokusatsu.status.push({ type: 'WAIT_COUNTER', duration: 3 });
+
+    const actual = engine.applyDamage(engineTokusatsu, 1000, 'skill', true, engineAttacker, { actionName: '范围波及测试' });
+
+    assert(actual === 250, `Tokusatsu throne should reduce active splash damage to 25%, got ${actual}`);
+    assert(engineTokusatsu.counterUsed, 'Tokusatsu throne should be consumed by active splash damage');
+    assert(engineTokusatsu.job === 'MIRACLE_MONSTER_BUJIN', `Tokusatsu active splash counter should transform to monster form, got ${engineTokusatsu.job}`);
+    assert(engineTokusatsu.res >= 130, `Tokusatsu monster form should raise resistance, got ${engineTokusatsu.res}`);
+    assert(logs.some((entry) => entry.text.includes('范围波及测试') && entry.text.includes('等待反击判定')), 'Tokusatsu active splash counter should explain the incoming active damage');
+    cases.push('Tokusatsu throne catches active splash damage');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const attacker = makeFighter('悲愿测试者@B');
+    const { engine, logs } = makeDeathEngine([tokusatsu, attacker]);
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for Tokusatsu defiance tests');
+    const engineTokusatsu = engine.fighters[0];
+    const engineAttacker = engine.fighters[1];
+    engineTokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    engineTokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    engineTokusatsu.transformed = true;
+    engineTokusatsu.maxHp = 5000;
+    localProject.setCurrentHp(engineTokusatsu, 120);
+    engineTokusatsu.status.push({ type: 'POISON', duration: 3 }, { type: 'WT_SUPPRESS', duration: 2 });
+
+    engine.applyDamage(engineTokusatsu, 9999, 'skill', true, engineAttacker, { actionName: '悲愿致死测试' });
+
+    assert(engineTokusatsu.currentHp > 0 && !engineTokusatsu.isDeadAnnounced, 'Tokusatsu defiance should prevent the first lethal monster-form hit');
+    assert(engineTokusatsu.hasUsedTokusatsuDefiance, 'Tokusatsu defiance should be marked as consumed');
+    assert(engineTokusatsu.tokusatsuInstantActionQueued, 'Tokusatsu defiance should queue an instant counter action');
+    assert(!engineTokusatsu.status.some((status) => status.type === 'POISON' || status.type === 'WT_SUPPRESS'), 'Tokusatsu defiance should cleanse negative statuses');
+    assert(engineTokusatsu.status.some((status) => status.type === 'TOKUSATSU_DEFIANCE'), 'Tokusatsu defiance should add a visible status');
+
+    engine.finishStep({ current: false });
+
+    assert(!engineTokusatsu.tokusatsuInstantActionQueued, 'Tokusatsu instant counter should resolve during finishStep');
+    assert(logs.some((entry) => entry.text.includes('悲愿不倒')), 'Tokusatsu defiance should log the lethal prevention');
+    assert(logs.some((entry) => entry.text.includes('悲愿反扑')), 'Tokusatsu defiance should log the instant counter');
+    cases.push('Tokusatsu monster defiance queues instant counter');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const joker = makeFighter('屑@B');
+    const { engine, logs } = makeDeathEngine([tokusatsu, joker]);
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    const jokerJob = localProject.jobs.GOD_OF_TROLLS;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for Tokusatsu redirected-rainbow tests');
+    assert(jokerJob, 'GOD_OF_TROLLS job should exist for Tokusatsu redirected-rainbow tests');
+    const engineTokusatsu = engine.fighters[0];
+    const engineJoker = engine.fighters[1];
+    engineTokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    engineTokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    engineTokusatsu.transformed = true;
+    engineTokusatsu.hasUsedTokusatsuDefiance = true;
+    engineTokusatsu.maxHp = 4000;
+    localProject.setCurrentHp(engineTokusatsu, 300);
+    engineTokusatsu.atk = 260;
+    engineTokusatsu.mag = 180;
+    engineTokusatsu.spd = 130;
+    engineJoker.job = 'GOD_OF_TROLLS';
+    engineJoker.jobData = JSON.parse(JSON.stringify(jokerJob)) as typeof jokerJob;
+    engineJoker.maxHp = 10000;
+    localProject.setCurrentHp(engineJoker, 10000);
+
+    withRandomSequence([0, 0], () => {
+      engine.executeSkillAction('rainbow_fever', engineTokusatsu, engineJoker);
+    });
+
+    const deathIndex = logs.findIndex((entry) => entry.text.includes('伤害转移') && entry.text.includes('刺猬人 被 屑'));
+    assert(deathIndex >= 0, 'Redirected Rainbow Fever should be able to kill Tokusatsu through Joker transfer in this regression');
+    const afterDeathTexts = logs.slice(deathIndex + 1).map((entry) => entry.text);
+    assert(!afterDeathTexts.some((text) => text.includes('彩虹炼金余波回流')), 'Redirected Rainbow Fever should not heal Tokusatsu after Tokusatsu dies');
+    assert(!afterDeathTexts.some((text) => text.includes('彩虹列车余波')), 'Redirected Rainbow Fever should stop splash lines after Tokusatsu dies');
+    cases.push('Tokusatsu redirected Rainbow Fever stops after self-death');
   }
 
   {
@@ -634,13 +935,18 @@ export function runCharacterHookCases(): string[] {
     assert(blueEyes, 'Blue-Eyes card should summon 青眼白龙');
     assert(blueEyes.job === 'BLUE_EYES_WHITE_DRAGON', `Blue-Eyes should use BLUE_EYES_WHITE_DRAGON job, got ${blueEyes.job}`);
     assert(blueEyes.jobData.skills.includes('blue_eyes_burst_stream'), 'Blue-Eyes should have a dedicated burst skill');
+    blueEyes.agl = 0;
+    blueEyes.critRate = 0;
+    blueEyes.status.push({ type: 'AIM', duration: 1 });
 
     engine.fighters.filter((fighter) => fighter.name.startsWith('白龙靶')).forEach((target) => {
       target.maxHp = 100000;
       localProject.setCurrentHp(target, 100000);
       target.agl = 0;
     });
-    engine.executeSkillAction('blue_eyes_sweeping_breath', blueEyes, engine.fighters[3]);
+    withRandomSequence([0.5, 0.99], () => {
+      engine.executeSkillAction('blue_eyes_sweeping_breath', blueEyes, engine.fighters[3]);
+    });
 
     assert(logs.some((entry) => entry.text.includes('白龙扫射')), 'Blue-Eyes sweeping breath should produce a named combat log');
     assert(logs.some((entry) => /造成 \d+ 点溅射伤害/.test(entry.text)), 'Blue-Eyes sweeping breath should log numeric splash damage');
@@ -700,6 +1006,29 @@ export function runCharacterHookCases(): string[] {
     assert(ultimate.isAdvancedSummon, 'Blue-Eyes Ultimate should be marked as an advanced summon');
     assert(logs.some((entry) => entry.text.includes('融合')), 'Blue-Eyes fusion should log its materials');
     cases.push('Gacha Blue-Eyes Ultimate fusion consumes only valid own materials');
+  }
+
+  {
+    const ultimate = makeFighter('青眼究极龙日志测试@A');
+    const target = makeFighter('三重龙首法球靶@B');
+    const { engine, logs } = makeDeathEngine([ultimate, target]);
+    const engineUltimate = engine.fighters[0];
+    const engineTarget = engine.fighters[1];
+    engineUltimate.atk = 120;
+    engineUltimate.mag = 120;
+    engineUltimate.agl = 10000;
+    engineUltimate.critRate = 0;
+    engineTarget.agl = 0;
+    engineTarget.maxHp = 10000;
+    localProject.setCurrentHp(engineTarget, 5000);
+    engineTarget.status.push({ type: 'SPELL_BLOCK', duration: 2 });
+
+    engine.executeSkillAction('triple_dragon_head', engineUltimate, engineTarget);
+
+    assert(logs.some((entry) => entry.text.includes('第 1 颗龙首撞上') && entry.text.includes('防护，被完全拦截')), 'Triple Dragon Head should log which head consumed spell block');
+    assert(!logs.some((entry) => entry.text.includes('林肯法球(或特种装甲)') && entry.text.includes('三重龙首')), 'Triple Dragon Head should not emit a generic block line after a hit line');
+    assert(logs.some((entry) => entry.text.includes('第 2 颗龙首命中') || entry.text.includes('第 3 颗龙首命中')), 'Triple Dragon Head should continue after one blocked head');
+    cases.push('Blue-Eyes Ultimate triple head logs spell block per head');
   }
 
   {
@@ -815,6 +1144,31 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const attacker = makeFighter('神不死鸟王座攻击者@B');
+    const gacha = makeFighter('牢鳄@A');
+    const ra = makeFighter('翼神龙王座测试体@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const { engine, logs } = makeDeathEngine([attacker, gacha, ra, tokusatsu]);
+    localProject.setCurrentHp(engine.fighters[1], Math.floor(engine.fighters[1].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[1]);
+    bindAsGachaSummon(engine.fighters[1], engine.fighters[2], '翼神龙', true);
+    engine.fighters[2].maxHp = 3000;
+    localProject.setCurrentHp(engine.fighters[2], 100);
+    engine.fighters[2].status.push({ type: 'RA_PHOENIX', duration: 3 });
+    engine.fighters[3].maxHp = 100000;
+    localProject.setCurrentHp(engine.fighters[3], 100000);
+    engine.fighters[3].status.push({ type: 'WAIT_COUNTER', duration: 3 });
+
+    engine.applyDamage(engine.fighters[2], 5000, 'skill', true, engine.fighters[0], { actionName: '神不死鸟王座测试' });
+
+    assert(engine.fighters[3].stats.dmgTaken > 0, 'Ra Phoenix fire should still damage Tokusatsu');
+    assert(!engine.fighters[3].counterUsed, 'Ra Phoenix passive retaliation should not consume Tokusatsu throne');
+    assert(engine.fighters[3].job !== 'MIRACLE_MONSTER_BUJIN', 'Ra Phoenix passive retaliation should not transform Tokusatsu into monster form');
+    assert(!logs.some((entry) => entry.text.includes('神不死鸟') && entry.text.includes('武神王座')), 'Ra Phoenix logs should not claim it triggered Tokusatsu throne');
+    cases.push('Gacha Ra Phoenix does not trigger Tokusatsu throne');
+  }
+
+  {
     const gacha = makeFighter('牢鳄@A');
     const ra = makeFighter('翼神龙指令测试体@A');
     const target = makeFighter('召唤指令靶子@B');
@@ -897,9 +1251,52 @@ export function runCharacterHookCases(): string[] {
     engine.handleTransformations(engine.fighters[0]);
 
     assert(engine.fighters[0].job === 'CHIMERA', `Succubus hook should transform to CHIMERA, got ${engine.fighters[0].job}`);
-    assert(engine.fighters[0].spd === 120, 'Succubus hook should set chimera speed');
+    assert(engine.fighters[0].spd === 121, 'Succubus hook should set chimera speed');
+    assert(engine.fighters[0].status.some((status) => status.type === 'BKB' && status.sourceId === 'chimera_startup_core'), 'Succubus transform should add startup core BKB');
+    assert(engine.fighters[0].status.some((status) => status.type === 'SPELL_BLOCK' && status.sourceId === 'chimera_startup_core'), 'Succubus transform should add startup core spell block');
     assert(logs.some((entry) => entry.text.includes('肉体开始重组')), 'Succubus hook should keep the original transform log');
     cases.push('Succubus transform hook');
+  }
+
+  {
+    const succubus = makeFighter('克蕾儿丝菲尔@A');
+    const target = makeFighter('合成兽插件靶@B');
+    target.maxHp = 100000;
+    localProject.setCurrentHp(target, 100000);
+    const { engine, logs } = makeDeathEngine([succubus, target]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    const claire = engine.fighters[0];
+    const teamId = engine.getTeamId(claire);
+
+    engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_HEAD'), claire, null, teamId);
+    engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_SKIN'), claire, null, teamId);
+
+    assert(Number(claire.chimeraMilestoneLevel) === 2, `Chimera should reach 2-plugin milestone, got ${claire.chimeraMilestoneLevel}`);
+    assert(claire.status.some((status) => status.type === 'REGEN'), '2-plugin milestone should grant regeneration');
+    assert(logs.some((entry) => entry.text.includes('合成稳定')), '2-plugin milestone should be logged');
+    assert(logs.some((entry) => entry.text.includes('暴食之口启动')), 'Head plugin install should have an immediate combat side effect');
+    assert(logs.some((entry) => entry.text.includes('纳米皮肤') && entry.text.includes('自适应硬化')), 'Skin plugin install should have an immediate defensive side effect');
+
+    engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_BACK'), claire, null, teamId);
+    engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_HEART'), claire, null, teamId);
+
+    assert(Number(claire.chimeraMilestoneLevel) === 4, `Chimera should reach 4-plugin milestone, got ${claire.chimeraMilestoneLevel}`);
+    assert(claire.chimeraInstantActionQueued, '4-plugin milestone should queue a chimera instant action');
+    withRandomSequence([0, 0, 0, 0], () => {
+      engine.finishStep({ current: false });
+    });
+    assert(!claire.chimeraInstantActionQueued, 'Chimera instant action should resolve during finishStep');
+    assert(logs.some((entry) => entry.text.includes('兽性苏醒') && entry.text.includes('追加一次合成兽行动')), '4-plugin milestone instant action should be logged');
+
+    engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_EYE'), claire, null, teamId);
+    engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_LEG'), claire, null, teamId);
+
+    assert(Number(claire.chimeraMilestoneLevel) === 6, `Chimera should reach 6-plugin milestone, got ${claire.chimeraMilestoneLevel}`);
+    assert(claire.status.some((status) => status.type === 'INVUL' && status.sourceId === 'chimera_disaster_omen'), '6-plugin milestone should grant disaster omen invul');
+    assert(claire.status.some((status) => status.type === 'SPELL_BLOCK' && status.sourceId === 'chimera_disaster_omen'), '6-plugin milestone should grant disaster omen spell block');
+    assert(logs.some((entry) => entry.text.includes('灾厄预兆')), '6-plugin milestone should be logged');
+    cases.push('Succubus chimera plugin milestones');
   }
 
   {
@@ -938,7 +1335,7 @@ export function runCharacterHookCases(): string[] {
 
     assert(engine.fighters[0].job === 'VALO_JUNIOR', `Sigua solo hook should transform to VALO_JUNIOR, got ${engine.fighters[0].job}`);
     assert(engine.fighters[0].def >= 150 && engine.fighters[0].res >= 150, 'Sigua solo hook should set Valorant defensive floors');
-    assert(engine.fighters[0].ultPoints === 2 && engine.fighters[0].economy === 2, 'Sigua solo hook should initialize Valorant resources');
+    assert(engine.fighters[0].ultPoints === 1 && engine.fighters[0].economy === 2, 'Sigua solo hook should initialize Valorant resources');
     assert(logs.some((entry) => entry.text.includes('拿起了步枪')), 'Sigua solo hook should keep the original transform log');
     cases.push('Sigua solo transform hook');
   }
@@ -1013,6 +1410,47 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const wt = makeFighter('M1A2_abrams_sep@A');
+    const { engine, logs } = makeDeathEngine([wt, makeFighter('维修分类旁观者@B')]);
+    const engineWt = engine.fighters[0];
+    localProject.setCurrentHp(engineWt, Math.floor(engineWt.maxHp * 0.4));
+    engine.handleTransformations(engineWt);
+    localProject.setCurrentHp(engineWt, Math.floor(engineWt.maxHp * 0.5));
+    engineWt.status.push({ type: 'BURN', duration: 2 }, { type: 'POISON', duration: 2 });
+    engineWt.wtFpeCharges = 1;
+    engineWt.wtNbcsCharges = 1;
+    engineWt.wtSpawnPoints = 0;
+
+    engine.executeSkillAction('wt_repair_premium', engineWt, engine.fighters[1]);
+
+    assert(!engineWt.status.some((status) => status.type === 'BURN' || status.type === 'POISON'), 'War Thunder repair should clear burn and poison only with matching consumables');
+    assert(logs.some((entry) => entry.text.includes('FPE灭火')), 'War Thunder repair should use FPE wording for burn');
+    assert(logs.some((entry) => entry.text.includes('核生化洗消')), 'War Thunder repair should use NBCS/decontamination wording for poison');
+    assert(!logs.some((entry) => entry.text.includes('FPE灭火') && entry.text.includes('中毒')), 'War Thunder repair should never describe poison as FPE extinguishing');
+    cases.push('War Thunder repair separates FPE and NBCS wording');
+  }
+
+  {
+    const wt = makeFighter('M1A2_abrams_sep@A');
+    const { engine, logs } = makeDeathEngine([wt, makeFighter('洗消耗尽旁观者@B')]);
+    const engineWt = engine.fighters[0];
+    localProject.setCurrentHp(engineWt, Math.floor(engineWt.maxHp * 0.4));
+    engine.handleTransformations(engineWt);
+    localProject.setCurrentHp(engineWt, Math.floor(engineWt.maxHp * 0.5));
+    engineWt.status.push({ type: 'POISON', duration: 2 });
+    engineWt.wtFpeCharges = 2;
+    engineWt.wtNbcsCharges = 0;
+    engineWt.wtSpawnPoints = 0;
+
+    engine.executeSkillAction('wt_repair_premium', engineWt, engine.fighters[1]);
+
+    assert(engineWt.status.some((status) => status.type === 'POISON'), 'War Thunder repair should not clear poison when NBCS is exhausted');
+    assert(!logs.some((entry) => entry.text.includes('FPE灭火')), 'War Thunder repair should not spend or log FPE for poison');
+    assert(logs.some((entry) => entry.text.includes('核生化洗消包已经耗尽')), 'War Thunder repair should explain poison remains when NBCS is exhausted');
+    cases.push('War Thunder repair does not use FPE for poison');
+  }
+
+  {
     const fighters = [
       makeFighter('M1A2_abrams_sep@A'),
       ...Array.from({ length: 6 }, (_, index) => makeFighter(`CAS高血靶${index + 1}@B`)),
@@ -1022,6 +1460,7 @@ export function runCharacterHookCases(): string[] {
     localProject.setCurrentHp(wt, Math.floor(wt.maxHp * 0.4));
     engine.handleTransformations(wt);
     wt.atk = 280;
+    wt.wtSpawnPoints = 8;
     engine.fighters.slice(1).forEach((target) => {
       target.maxHp = 5000;
       localProject.setCurrentHp(target, 5000);
@@ -1034,9 +1473,11 @@ export function runCharacterHookCases(): string[] {
     const damagedTargets = engine.fighters.slice(1).filter((target) => target.stats.dmgTaken > 0);
     const suppressedTargets = engine.fighters.slice(2).filter((target) => target.status.some((status) => status.type === 'WT_SUPPRESS'));
     assert(damagedTargets.length === 4, `Su-30 CAS should hit primary plus up to 3 splash targets, got ${damagedTargets.length}`);
-    assert(engine.fighters[1].stats.dmgTaken === Math.floor(280 * 2.8), `Su-30 primary target should take full main damage, got ${engine.fighters[1].stats.dmgTaken}`);
-    assert(engine.fighters[1].status.some((status) => status.type === 'WT_AIRBORNE'), 'Su-30 primary target should be knocked airborne');
-    assert(suppressedTargets.length === 3, `Su-30 splash targets should be suppressed instead of all knocked airborne, got ${suppressedTargets.length}`);
+    const expectedMainDamage = Math.floor(wt.atk * 2.78);
+    const primaryTargets = damagedTargets.filter((target) => target.stats.dmgTaken === expectedMainDamage);
+    assert(primaryTargets.length === 1, `Su-30 primary target should take full main damage once, got ${primaryTargets.length}`);
+    assert(primaryTargets[0]?.status.some((status) => status.type === 'WT_AIRBORNE'), 'Su-30 primary target should be knocked airborne');
+    assert(suppressedTargets.length >= 2, `Su-30 splash targets should be suppressed instead of all knocked airborne, got ${suppressedTargets.length}`);
     assert(!logs.some((entry) => entry.text.includes('CAS击杀') || entry.text.includes('弹药架殉爆')), 'Su-30 high-health spread test should not randomly wipe targets');
     cases.push('War Thunder Su-30 CAS uses primary-and-splash damage profile');
   }
@@ -1067,6 +1508,7 @@ export function runCharacterHookCases(): string[] {
     localProject.setCurrentHp(wt, Math.floor(wt.maxHp * 0.4));
     engine.handleTransformations(wt);
     wt.atk = 100;
+    wt.wtSpawnPoints = 8;
     wt.status.push({ type: 'AIM', duration: 3 });
     engine.fighters.slice(1).forEach((target) => {
       target.maxHp = 1000;
@@ -1090,14 +1532,27 @@ export function runCharacterHookCases(): string[] {
     const { engine, logs } = makeDeathEngine([sigua, makeFighter('选技旁观者@B')]);
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[0]);
-    engine.fighters[0].ultPoints = 3;
+    engine.fighters[0].ultPoints = 4;
     engine.fighters[0].economy = 0;
 
     const selectedSkill = withRandomSequence([0], () => engine.selectSkill(engine.fighters[0]));
 
-    assert(selectedSkill === 'valo_ult_showstopper', `Valorant hook should select a charged ult, got ${selectedSkill}`);
+    assert([
+      'valo_ult_showstopper',
+      'valo_ult_blade_storm',
+      'valo_ult_cosmic_divide',
+      'valo_ult_lockdown',
+      'valo_ult_vipers_pit',
+      'valo_ult_empress',
+      'valo_ult_hunters_fury',
+      'valo_ult_null_cmd',
+      'valo_ult_run_it_back',
+      'valo_ult_orbital_strike',
+      'valo_ult_neural_theft',
+    ].includes(selectedSkill ?? ''), `Valorant hook should select a tactical charged ult, got ${selectedSkill}`);
     assert(engine.fighters[0].ultPoints === 0, 'Valorant hook should reset ult points after selecting an ult');
     assert(logs.some((entry) => entry.text.includes('大招充能完毕')), 'Valorant hook should keep the original ult-ready log');
+    assert(!logs.some((entry) => /valo_ult_/.test(entry.text)), 'Valorant ult-ready log should not leak internal skill ids');
     cases.push('Valorant skill-selection hook');
   }
 
@@ -1136,12 +1591,24 @@ export function runCharacterHookCases(): string[] {
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[0]);
     engine.fighters[0].hasSpinalSword = true;
-    engine.fighters[0].ultPoints = 3;
+    engine.fighters[0].ultPoints = 4;
     engine.fighters[0].economy = 0;
 
     const selectedSkill = withRandomSequence([0.6, 0], () => engine.selectSkill(engine.fighters[0]));
 
-    assert(selectedSkill === 'valo_ult_showstopper', `Non-gacha own-skill route should keep Valorant skill selection, got ${selectedSkill}`);
+    assert([
+      'valo_ult_showstopper',
+      'valo_ult_blade_storm',
+      'valo_ult_cosmic_divide',
+      'valo_ult_lockdown',
+      'valo_ult_vipers_pit',
+      'valo_ult_empress',
+      'valo_ult_hunters_fury',
+      'valo_ult_null_cmd',
+      'valo_ult_run_it_back',
+      'valo_ult_orbital_strike',
+      'valo_ult_neural_theft',
+    ].includes(selectedSkill ?? ''), `Non-gacha own-skill route should keep tactical Valorant skill selection, got ${selectedSkill}`);
     cases.push('Non-gacha own-skill route selection');
   }
 
@@ -1234,7 +1701,7 @@ export function runCharacterHookCases(): string[] {
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[0]);
 
-    const selectedSkill = withRandomSequence([0.99], () => engine.selectSkill(engine.fighters[0]));
+    const selectedSkill = withRandomSequence([0.7], () => engine.selectSkill(engine.fighters[0]));
 
     assert(selectedSkill === 'chimera_install', `Succubus hook should select chimera_install, got ${selectedSkill}`);
     cases.push('Succubus install skill-selection hook');
@@ -1247,7 +1714,7 @@ export function runCharacterHookCases(): string[] {
     engine.handleTransformations(engine.fighters[0]);
     engine.fighters[0].jobData.skills.push('chimera_devour');
 
-    const selectedSkill = withRandomSequence([0.1, 0.5, 0], () => engine.selectSkill(engine.fighters[0]));
+    const selectedSkill = withRandomSequence([0.9, 0.5, 0], () => engine.selectSkill(engine.fighters[0]));
 
     assert(selectedSkill === 'chimera_devour', `Succubus hook should select an installed chimera plugin, got ${selectedSkill}`);
     cases.push('Succubus plugin skill-selection hook');

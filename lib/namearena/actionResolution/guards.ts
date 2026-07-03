@@ -3,6 +3,11 @@ import type {
   SkillDefinition,
 } from '../types';
 import type { ActionResolutionRuntime } from './types';
+import {
+  findDefenseStatus,
+  formatAttackInvul,
+  formatDefenseBreak,
+} from '../defenseStatus';
 
 export function missesSkill(
   user: Fighter,
@@ -11,11 +16,16 @@ export function missesSkill(
   isIntercepted: boolean,
 ): boolean {
   const userAgl = user.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(user.agl * 1.2) : user.agl;
-  const effectiveTargetAgl = target.status.some((status) => status.type === 'WT_SUPPRESS' || status.type === 'NEURAL_THEFT_DEBUFF') ? 0 : target.agl;
+  const effectiveTargetAgl = target.status.some((status) =>
+    status.type === 'WT_SUPPRESS' ||
+    status.type === 'WT_TRACK_DAMAGED' ||
+    status.type === 'NEURAL_THEFT_DEBUFF',
+  ) ? 0 : target.agl;
   const targetAgl = target.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(effectiveTargetAgl * 1.2) : effectiveTargetAgl;
   let hitChance = 0.95 + (userAgl - targetAgl) * 0.005;
   const guaranteedHit =
     user.status.some((status) => status.type === 'AIM') ||
+    (user.isWT && target.status.some((status) => status.type === 'WT_SCOUTED')) ||
     isIntercepted ||
     target.status.some((status) => status.type === 'NEURAL_THEFT_DEBUFF') ||
     skill.alwaysHit ||
@@ -39,12 +49,14 @@ export function breakAbsoluteDefense(
   target: Fighter,
 ): boolean {
   if (skillId === 'cosmic_slap' && target.status.some((status) => status.type === 'INVUL' || status.type === 'BKB')) {
+    const brokenStatuses = target.status.filter((status) => status.type === 'INVUL' || status.type === 'BKB');
     target.status = target.status.filter((status) => status.type !== 'INVUL' && status.type !== 'BKB');
-    runtime.log('skill', `🌌 所谓绝对防御，在神明眼中不过是层薄纸！${user.name} 强行捏碎了 ${target.name} 的无敌/金身！`);
+    runtime.log('skill', `🌌 所谓绝对防御，在神明眼中不过是层薄纸！${user.name} 强行捏碎了 ${formatDefenseBreak(brokenStatuses, target.name)}！`);
   }
-  if (!target.status.some((status) => status.type === 'INVUL')) return false;
+  const invul = findDefenseStatus(target, 'INVUL');
+  if (!invul) return false;
 
-  runtime.log('info', `🛡️ ${target.name} 免疫了 ${user.name} 的攻击！`);
+  runtime.log('info', formatAttackInvul(invul, target.name, user.name));
   return true;
 }
 

@@ -26,6 +26,25 @@ export function getSelectableTargets(runtime: TargetingRuntime, user: Fighter): 
   return runtime.fighters.filter((fighter) => isSelectableTargetFor(runtime, user, fighter));
 }
 
+function getTargetWeight(target: Fighter): number {
+  const waitingOnTokusatsuThrone = target.isTokusatsu &&
+    target.job === 'MIRACLE_BUJIN' &&
+    target.status.some((status) => status.type === 'WAIT_COUNTER');
+  return waitingOnTokusatsuThrone ? 3 : 1;
+}
+
+function pickWeightedTarget(targets: Fighter[]): Fighter {
+  const totalWeight = targets.reduce((sum, target) => sum + getTargetWeight(target), 0);
+  if (totalWeight <= 0) return targets[Math.floor(Math.random() * targets.length)]!;
+
+  let roll = Math.random() * totalWeight;
+  for (const target of targets) {
+    roll -= getTargetWeight(target);
+    if (roll <= 0) return target;
+  }
+  return targets[targets.length - 1]!;
+}
+
 export function resolveTarget(
   runtime: TargetingRuntime,
   user: Fighter,
@@ -35,7 +54,7 @@ export function resolveTarget(
   if (currentTargets.length === 0) return null;
 
   const forcedTargetValid = forcedTarget ? isSelectableTargetFor(runtime, user, forcedTarget) : false;
-  let target = forcedTargetValid ? forcedTarget! : currentTargets[Math.floor(Math.random() * currentTargets.length)];
+  let target = forcedTargetValid ? forcedTarget! : pickWeightedTarget(currentTargets);
   let isIntercepted = false;
   const protector = runtime.fighters.find((fighter) =>
     fighter.isSummon &&

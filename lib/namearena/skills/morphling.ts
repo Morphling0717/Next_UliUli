@@ -6,7 +6,7 @@ const { SKILL_TAGS } = Data;
 
 export const morphlingSkills: Record<string, SkillDefinition> = {
   universal_acid: { name: '万能酸液', tag: SKILL_TAGS.MAG, mult: 1.5, status: 'POISON', text: '🧪 {USER} 喷出高腐蚀性酸液，对 {TARGET} 造成 {VAL} 伤害并中毒！' },
-  liquid_mirage: { name: '镜花水月·波涌', tag: SKILL_TAGS.MAG, mult: 2.0, status: 'INVUL', text: '🌊 枪火在水面上只留下了倒影！{USER} 化作一滩流水穿透了 {TARGET} 的防线！造成 {VAL} 伤害并进入液化无敌状态！' },
+  liquid_mirage: { name: '镜花水月·波涌', tag: SKILL_TAGS.MAG, mult: 2.0, status: 'INVUL', statusSource: 'morphling_liquid_mirage', text: '🌊 枪火在水面上只留下了倒影！{USER} 化作一滩流水穿透了 {TARGET} 的防线！造成 {VAL} 伤害并进入液化无敌状态！' },
   divine_shift: {
     name: '神权·沸腾与绝对零度', tag: SKILL_TAGS.HEAL, mult: 5.0, cleanStatus: true,
     condition: (u) => u.hpPct < 0.3,
@@ -77,7 +77,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
       ctx.target.status.push({ type: 'NO_HEAL', duration: 3 });
     },
   },
-  linken_sphere: { name: '林肯法球', tag: SKILL_TAGS.BUFF, status: 'SPELL_BLOCK', text: '🔵 庇护之音响起！{USER} 周身凝结出林肯法球的蔚蓝光幕！免疫一切恶意，神明的威压不容侵犯！' },
+  linken_sphere: { name: '林肯法球', tag: SKILL_TAGS.BUFF, status: 'SPELL_BLOCK', statusSource: 'morphling_linken_sphere', text: '🔵 庇护之音响起！{USER} 周身凝结出林肯法球的蔚蓝光幕！免疫一切恶意，神明的威压不容侵犯！' },
   khanda: { name: '绝刃', tag: SKILL_TAGS.PHYS, mult: 3.5, ignoreDef: true, alwaysCrit: true, alwaysHit: true, text: '🔪 绝影无形，一击必杀！{USER} 唤醒绝刃，将法术的毁灭与利刃的锋芒融为一体，对 {TARGET} 斩出无法躲避的致命暴击（{VAL}伤害）！' },
   nullifier: {
     name: '否决挂件', tag: SKILL_TAGS.MAG, mult: 2.0, status: 'SILENCE',

@@ -21,12 +21,12 @@ export const gachaHook: CharacterHook = {
     const ordinarySummonCount = ownSummons.filter((fighter) => !fighter.isAdvancedSummon).length;
     const luck = actor.gachaLuck ?? 0;
     if (luck >= 3) return 'destiny_draw';
-    if (ownSummons.length === 0 && Math.random() < 0.85) return 'destiny_draw';
-    if (ordinarySummonCount >= 2 && Math.random() < 0.72) return 'destiny_draw';
-    if (actor.hpPct <= 0.45 && Math.random() < 0.8) return 'destiny_draw';
+    if (ownSummons.length === 0 && Math.random() < 0.77) return 'destiny_draw';
+    if (ordinarySummonCount >= 2 && Math.random() < 0.49) return 'destiny_draw';
+    if (actor.hpPct <= 0.45 && Math.random() < 0.65) return 'destiny_draw';
 
     const hasSummonLifesteal = actor.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS);
-    if (ownSummons.length > 0 && !hasSummonLifesteal && Math.random() < 0.75) return 'destiny_draw';
+    if (ownSummons.length > 0 && !hasSummonLifesteal && Math.random() < 0.53) return 'destiny_draw';
 
     return null;
   },

@@ -1,6 +1,11 @@
 import type { DamageApplicationOptions, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { isActiveCombatant } from '../combatState';
+import { healFighter, isActiveCombatant } from '../combatState';
+import {
+  consumeSpellBlock,
+  formatSpellBlock,
+  grantStatus,
+} from '../defenseStatus';
 
 const { SKILL_TAGS } = Data;
 
@@ -14,6 +19,19 @@ function activeEnemies(ctx: Parameters<NonNullable<SkillDefinition['onExecute']>
     ctx.getTeamId(fighter) !== myTeamId &&
     !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
   );
+}
+
+function consumeHeadSpellBlock(
+  ctx: Parameters<NonNullable<SkillDefinition['onExecute']>>[0],
+  headIndex: number,
+): boolean {
+  const spellBlock = consumeSpellBlock(ctx.target);
+  if (!spellBlock) return false;
+
+  const healed = healFighter(ctx.target, Math.floor(ctx.target.maxHp * 0.15));
+  const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
+  ctx.log('info', `🐉 第 ${headIndex} 颗龙首撞上 ${ctx.target.name} 的防护，被完全拦截：${formatSpellBlock(spellBlock, ctx.target.name, `${ctx.user.name}的【三重龙首】`, healText)}`);
+  return true;
 }
 
 export const duelMonsterSkills: Record<string, SkillDefinition> = {
@@ -73,7 +91,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         }
       }
       if (isActiveCombatant(ctx.user)) {
-        ctx.user.status.push({ type: 'SPELL_BLOCK', duration: 2 });
+        grantStatus(ctx.user, 'SPELL_BLOCK', 2, 'exodia_obliterate_guard');
       }
       return true;
     },
@@ -175,6 +193,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       ctx.log('skill', `🐉 【三重龙首】${ctx.user.name} 锁定 ${ctx.target.name}，三首依次发动攻击！`);
       for (let i = 1; i <= 3; i += 1) {
         if (!isActiveCombatant(ctx.user) || !isActiveCombatant(ctx.target)) break;
+        if (consumeHeadSpellBlock(ctx, i)) continue;
         const dmg = Math.floor(ctx.user.atk * 1.55 + ctx.user.mag * 0.7);
         const damageOptions: DamageApplicationOptions = { actionName: '三重龙首' };
         const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', false, ctx.user, damageOptions);

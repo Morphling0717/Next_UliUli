@@ -1,6 +1,11 @@
 import type { DamageApplicationOptions, SkillDefinition, StatKey, StylePoolEntry } from '../types';
 import { namerenaData as Data } from '../data';
 import { healFighter, isActiveCombatant, setCurrentHp } from '../combatState';
+import {
+  createStatusEntry,
+  findDefenseStatus,
+  formatControlBlocked,
+} from '../defenseStatus';
 
 const { SKILL_TAGS } = Data;
 
@@ -69,7 +74,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
     text: '🎤 {USER} 飙了个极度跑调的高音！魔音贯耳对 {TARGET} 造成了 {VAL} 点真实精神伤害并使其沉默！',
   },
   q_bunny_slide: {
-    name: '兔兔滑铲', tag: SKILL_TAGS.BUFF, status: 'INVUL',
+    name: '兔兔滑铲', tag: SKILL_TAGS.BUFF, status: 'INVUL', statusSource: 'rabbit_slide',
     text: '💨 {USER} "弹幕：太矮了根本打不到！" 利用体型优势极限滑铲，获得无敌状态！',
   },
   q_bunny_carrot: {
@@ -280,7 +285,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         Object.assign(ctx.user, ctx.user.baseStatsForStyle);
       }
 
-      const isEmperor = Math.random() < 0.05;
+      const isEmperor = Math.random() < 0.044;
       const normalPool = pool.filter((p) => p && p.status !== 'STYLE_EMPEROR');
 
       if (normalPool.length === 0) return true;
@@ -299,8 +304,8 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         const effectDesc: string[] = [];
 
         if (selectedStyle.status === 'STYLE_FAMILY') {
-          ctx.user.status.push({ type: 'SPELL_BLOCK', duration: 999 });
-          effectDesc.push('免疫魔法控制(林肯)');
+          ctx.user.status.push(createStatusEntry('SPELL_BLOCK', 999, 'rabbit_family_guard'));
+          effectDesc.push('顾家守护法术抵挡');
         }
         if (selectedStyle.status === 'STYLE_SEXY' || selectedStyle.status === 'STYLE_EMPEROR') {
           ctx.user.status.push({ type: 'CTR_CHARM', duration: 999 });
@@ -413,12 +418,18 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           ctx.flushDeferredDamageEvents?.();
           continue;
         }
-        const controlImmune = (e.status ?? []).some((s) => ['BKB', 'STYLE_FOOL', 'STYLE_EMPEROR'].includes(s.type));
+        const bkbImmune = findDefenseStatus(e, 'BKB');
+        const foolImmune = (e.status ?? []).some((s) => s.type === 'STYLE_FOOL');
+        const emperorImmune = (e.status ?? []).some((s) => s.type === 'STYLE_EMPEROR');
         let shouldStun = false;
         if (actualDmg <= 0) {
           ctx.log('info', `🔊 刺耳魔音擦身而过！${e.name} 没有承受实际伤害，也没有被眩晕！`);
-        } else if (controlImmune) {
-          ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 承受了 ${actualDmg} 点真实精神伤害，但免疫了眩晕！`);
+        } else if (bkbImmune) {
+          ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 承受了 ${actualDmg} 点真实精神伤害，但${formatControlBlocked(bkbImmune, e.name, '眩晕效果').replace(/^🟡\s*/, '')}`);
+        } else if (foolImmune) {
+          ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 承受了 ${actualDmg} 点真实精神伤害，但【笨蛋女人】的混沌脑回路把眩晕效果无视了！`);
+        } else if (emperorImmune) {
+          ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 承受了 ${actualDmg} 点真实精神伤害，但【帝皇铠甲】稳住了她的威仪，眩晕没有生效！`);
         } else {
           ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 承受了 ${actualDmg} 点真实精神伤害并被眩晕！`);
           shouldStun = true;

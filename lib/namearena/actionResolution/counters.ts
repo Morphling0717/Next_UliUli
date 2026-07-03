@@ -130,7 +130,10 @@ export function handleCounterStatus(
   }
   if (counterType === 'CTR_EXECUTE') {
     if (user.hpPct < 0.4) {
-      runtime.markDefeated(user, { message: `☠️ 【断头反击】${target.name} 让断头台落下！${user.name} 被直接处决！`, killer: target });
+      const defeated = runtime.markDefeated(user, { message: `☠️ 【断头反击】${target.name} 让断头台落下！${user.name} 被直接处决！`, killer: target });
+      if (!defeated && user.currentHp > 0 && !user.isDead && !user.isDeadAnnounced) {
+        runtime.log('info', `☠️ 【断头反击】${target.name} 的断头台已经落下，但 ${user.name} 的保命机制强行改写了处决结果，攻击中断！`);
+      }
       return true;
     }
     runtime.log('info', `☠️ 【断头反击】${target.name} 锁定 ${user.name}，但 ${user.name} 生命值尚高，逃过一劫！`);

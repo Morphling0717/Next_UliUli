@@ -11,6 +11,10 @@ import {
   formatSkillText,
   resolveSkillDefinition,
 } from '../skillResolution';
+import {
+  consumeSpellBlock,
+  formatPreSkillSpellBlock,
+} from '../defenseStatus';
 import { createSkillContext } from './context';
 import {
   handleCounterStatus,
@@ -25,6 +29,7 @@ import {
   handlePhysicalCounterReflect,
   handlePrimaryTargetDefeat,
   handleValorantWeaponDrop,
+  grantValorantHitRewards,
   triggerSuccubusBabyFollowup,
 } from './effects';
 import {
@@ -164,10 +169,12 @@ export function executeSkillAction(
   }
 
   if (skill.tag !== runtime.skillTags.HEAL && skill.tag !== runtime.skillTags.BUFF && target.status.some((status) => status.type === 'SPELL_BLOCK')) {
-    target.status = target.status.filter((status) => status.type !== 'SPELL_BLOCK');
+    const spellBlock = consumeSpellBlock(target);
     const healed = healFighter(target, Math.floor(target.maxHp * 0.15));
     const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
-    runtime.log('info', `🔵 庇护之音！${user.name} 的【${skill.name}】刚要命中 ${target.name}，林肯法球(或特种装甲)的光幕将其挡下${healText}！`);
+    runtime.log('info', spellBlock
+      ? formatPreSkillSpellBlock(spellBlock, user.name, skill.name, target.name, healText)
+      : `🔵 ${target.name} 的防护光幕挡下了 ${user.name} 的【${skill.name}】${healText}！`);
     refundInterruptedGacha('被法术抵挡挡下');
     return;
   }
@@ -301,9 +308,10 @@ export function executeSkillAction(
   consumeAimAfterAttack(runtime, user, skill);
 
   user.stats.dmgDealt += actualDmg;
+  grantValorantHitRewards(runtime, user, actualDmg);
   handlePrimaryTargetDefeat(runtime, user, target, skill);
 
-  applyLifestealEffects(runtime, user, skill, actualDmg, hpBeforeDamage);
+  applyLifestealEffects(runtime, user, target, skill, actualDmg, hpBeforeDamage);
   triggerSuccubusBabyFollowup(runtime, user, target, skillId, userTeamId, triggerDepth);
 
   if (actualDmg <= 0) runtime.handleTransformations(target);

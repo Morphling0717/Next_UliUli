@@ -4,6 +4,12 @@ import type {
 } from '../types';
 import { healFighter } from '../combatState';
 import type { ActionResolutionRuntime } from './types';
+import {
+  findDefenseStatus,
+  formatControlBlocked,
+  grantStatus,
+  statusSourceFromSkill,
+} from '../defenseStatus';
 
 const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
   chimera_devour: 'baby_feed',
@@ -15,6 +21,40 @@ const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
   chimera_warp: 'baby_speed',
   chimera_plague: 'baby_poison',
 };
+
+const VALO_FOCUS_MAX = 10;
+
+function hasStatus(fighter: Fighter, type: string): boolean {
+  return fighter.status.some((status) => status.type === type);
+}
+
+function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
+  grantStatus(fighter, type, duration, sourceId);
+}
+
+function gainValorantFocus(fighter: Fighter, amount: number): void {
+  fighter.crosshairFocus = Math.min(VALO_FOCUS_MAX, Math.max(0, (fighter.crosshairFocus ?? 0) + amount));
+}
+
+function restoreValorantOperatorMobility(fighter: Fighter): boolean {
+  if (!fighter.savedSpd) return false;
+  fighter.spd = fighter.savedSpd;
+  fighter.agl = fighter.savedAgl ?? fighter.agl;
+  delete fighter.savedSpd;
+  delete fighter.savedAgl;
+  fighter.status = fighter.status.filter((status) => status.type !== 'VALO_OPERATOR_PENALTY');
+  return true;
+}
+
+function activeEnemyCount(runtime: ActionResolutionRuntime, user: Fighter): number {
+  const userTeamId = runtime.getTeamId(user);
+  return runtime.fighters.filter((fighter) =>
+    runtime.isActiveCombatant(fighter) &&
+    fighter.id !== user.id &&
+    runtime.getTeamId(fighter) !== userTeamId &&
+    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+  ).length;
+}
 
 export function applySelfDamage(
   runtime: ActionResolutionRuntime,
@@ -65,11 +105,14 @@ export function applySkillStatusEffect(
 ): void {
   if (!skill.status) return;
 
-  if (target.status.some((status) => status.type === 'BKB') && ['STUN', 'FREEZE', 'SILENCE', 'CONFUSED', 'CHARMED'].includes(skill.status)) {
-    runtime.log('info', `🟡 ${target.name} 处于 BKB 状态，免疫了 ${runtime.statusEffects[skill.status]?.name ?? skill.status} 效果！`);
+  const controlImmune = findDefenseStatus(target, 'BKB');
+  if (controlImmune && ['STUN', 'FREEZE', 'SILENCE', 'CONFUSED', 'CHARMED'].includes(skill.status)) {
+    const effectName = `${runtime.statusEffects[skill.status]?.name ?? skill.status}效果`;
+    runtime.log('info', formatControlBlocked(controlImmune, target.name, effectName));
     return;
   }
-  target.status.push({ type: skill.status, duration: 2 });
+  const sourceId = statusSourceFromSkill(skill);
+  target.status.push({ type: skill.status, duration: 2, ...(sourceId ? { sourceId } : {}) });
 }
 
 export function handleValorantWeaponDrop(
@@ -103,6 +146,10 @@ export function handlePhysicalCounterReflect(
   if (skill.tag !== runtime.skillTags.PHYS || !target.status.some((status) => status.type === 'COUNTER')) return;
 
   target.status = target.status.filter((status) => status.type !== 'COUNTER');
+  if (!runtime.isActiveCombatant(user)) {
+    runtime.log('info', `💢 ${target.name} 的反击护盾亮起，但 ${user.name} 已经退场，反弹没有继续结算。`);
+    return;
+  }
   const reflectedDmg = runtime.applyDamage(user, actualDmg, 'reflect', false, target, { deferTransform: true });
   if (reflectedDmg > 0) {
     runtime.log('crit', `💢 ${target.name} 触发反击！将伤害弹回给了 ${user.name}，实际造成 ${reflectedDmg} 点反弹伤害！`);
@@ -123,7 +170,34 @@ export function grantValorantKillRewards(
 
   user.economy = (user.economy ?? 0) + 2;
   user.ultPoints = (user.ultPoints ?? 0) + 1;
-  runtime.log('info', `💰 ${user.name} 拿到击杀！大招充能+1，经济大幅增长(+2)！`);
+  gainValorantFocus(user, 1);
+  const restored = restoreValorantOperatorMobility(user);
+  refreshStatus(user, 'VALO_REPOSITION', 1);
+  refreshStatus(user, 'VALO_CLUTCH', 3);
+  refreshStatus(user, 'SPELL_BLOCK', 1, 'valo_reposition');
+  const enemyCount = activeEnemyCount(runtime, user);
+  if ((user.crosshairFocus ?? 0) >= 6 && (enemyCount <= 2 || (enemyCount <= 3 && hasStatus(user, 'VALO_ULT_EMPRESS')))) {
+    user.valoInstantActionQueued = true;
+  }
+  runtime.log('info', `💰 ${user.name} 拿到击杀！经济+2，大招充能+1，准星专注+1（${user.crosshairFocus ?? 0}/${VALO_FOCUS_MAX}），立刻再定位${restored ? '并甩掉冥驹笨重' : ''}！`);
+}
+
+export function grantValorantHitRewards(
+  runtime: ActionResolutionRuntime,
+  user: Fighter,
+  actualDmg: number,
+): void {
+  if (user.job !== 'VALO_JUNIOR' || actualDmg <= 0) return;
+
+  user.economy = Math.min(12, (user.economy ?? 0) + 1);
+  if (actualDmg < Math.max(300, user.atk)) return;
+  const before = user.crosshairFocus ?? 0;
+  gainValorantFocus(user, 1);
+  if (before < 5 && (user.crosshairFocus ?? 0) >= 5) {
+    runtime.log('buff', `🎯 【准星专注】${user.name} 手感升温，专注达到 ${user.crosshairFocus}/${VALO_FOCUS_MAX}，已能校准爆头线！`);
+  } else if (before < 8 && (user.crosshairFocus ?? 0) >= 8) {
+    runtime.log('buff', `🎯 【准星专注】${user.name} 完全进入状态，专注达到 ${user.crosshairFocus}/${VALO_FOCUS_MAX}，残局处决已就绪！`);
+  }
 }
 
 export function handlePrimaryTargetDefeat(
@@ -142,11 +216,12 @@ export function handlePrimaryTargetDefeat(
 export function applyLifestealEffects(
   runtime: ActionResolutionRuntime,
   user: Fighter,
+  target: Fighter,
   skill: SkillDefinition,
   actualDmg: number,
   hpBeforeDamage: number,
 ): void {
-  const tingBloodthirst = user.isTing ? (user.transformed ? 0.4 : 0.2) : 0;
+  const tingBloodthirst = user.isTing ? (user.transformed ? 0.55 : 0.25) : 0;
   const lsPct =
     (skill.lifesteal ?? 0) +
     tingBloodthirst +
@@ -160,7 +235,9 @@ export function applyLifestealEffects(
     return;
   }
 
-  const healBase = Math.min(hpBeforeDamage, actualDmg);
+  const tingOverkillCap = user.isTing ? Math.floor(target.maxHp * 0.4) : 0;
+  const maxHealBase = user.isTing ? Math.max(hpBeforeDamage, tingOverkillCap) : hpBeforeDamage;
+  const healBase = Math.min(actualDmg, maxHealBase);
   const healAmt = Math.floor(healBase * lsPct);
   if (healAmt <= 0) return;
 

@@ -1,5 +1,7 @@
 import type {
   BattleEngineData,
+  DamageApplicationOptions,
+  DefeatOptions,
   Fighter,
   SkillDefinition,
   StatKey,
@@ -9,6 +11,11 @@ import {
   COMMON_NEGATIVE_STATUS_TYPES,
   isStatusType,
 } from './statusRules';
+import {
+  createStatusEntry,
+  grantStatus,
+  statusSourceFromSkill,
+} from './defenseStatus';
 
 export interface SupportResolutionRuntime {
   fighters: Fighter[];
@@ -17,6 +24,15 @@ export interface SupportResolutionRuntime {
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   syncHpPct: (fighter: Fighter) => void;
+  applyDamage: (
+    target: Fighter,
+    amount: number,
+    source: string,
+    isTrueDamage?: boolean,
+    attacker?: Fighter,
+    options?: DamageApplicationOptions,
+  ) => number;
+  markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   formatSkillText: (skill: SkillDefinition, text: string) => string;
   log: (type: string, text: string) => void;
 }
@@ -39,7 +55,7 @@ export function spreadDivaSupport(
     if (skill.tag === runtime.skillTags.BUFF) {
       if (skill.status) {
         if (skill.status.startsWith('PLUG_')) mate.status = mate.status.filter((status) => status.type !== skill.status);
-        mate.status.push({ type: skill.status, duration: skill.status === 'INVUL' ? 1 : 3 });
+        mate.status.push(createStatusEntry(skill.status, skill.status === 'INVUL' ? 1 : 3, statusSourceFromSkill(skill)));
       }
       if (skill.statBuff) {
         const buff = skill.statBuff;
@@ -67,26 +83,230 @@ export function applyStatBuff(target: Fighter, buff: Partial<Record<StatKey | 'c
   });
 }
 
-export function handleChimeraUltimateEvolution(
-  runtime: SupportResolutionRuntime,
-  target: Fighter,
-): void {
-  const chimeraPluginSkills = new Set(
+function getChimeraPluginSkillSet(runtime: SupportResolutionRuntime): Set<string> {
+  return new Set(
     (runtime.data.CHIMERA_PLUGIN_POOL ?? [])
       .map((entry) => entry.newSkill)
       .filter((entry): entry is string => !!entry),
   );
-  const currentPlugCount = target.jobData.skills.filter((skillId) => chimeraPluginSkills.has(skillId)).length;
+}
+
+function getChimeraPluginCount(runtime: SupportResolutionRuntime, target: Fighter): number {
+  const chimeraPluginSkills = getChimeraPluginSkillSet(runtime);
+  return target.jobData.skills.filter((skillId) => chimeraPluginSkills.has(skillId)).length;
+}
+
+function activeEnemiesOf(runtime: SupportResolutionRuntime, user: Fighter): Fighter[] {
+  const userTeamId = runtime.getTeamId(user);
+  return runtime.fighters.filter((fighter) =>
+    fighter.id !== user.id &&
+    runtime.isActiveCombatant(fighter) &&
+    runtime.getTeamId(fighter) !== userTeamId,
+  );
+}
+
+function pickRandomEnemy(runtime: SupportResolutionRuntime, user: Fighter): Fighter | null {
+  const enemies = activeEnemiesOf(runtime, user);
+  if (enemies.length === 0) return null;
+  return enemies[Math.floor(Math.random() * enemies.length)] ?? null;
+}
+
+function cleanseOneCommonNegativeStatus(target: Fighter): string | null {
+  const index = target.status.findIndex((status) => isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
+  if (index < 0) return null;
+  const [removed] = target.status.splice(index, 1);
+  return removed?.type ?? null;
+}
+
+function applyChimeraSideDamage(
+  runtime: SupportResolutionRuntime,
+  user: Fighter,
+  target: Fighter,
+  amount: number,
+  actionName: string,
+  logText: (actual: number) => string,
+): number {
+  const actual = runtime.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, user, {
+    actionName,
+    respectDefenses: true,
+    canTriggerWaitCounter: false,
+  });
+  user.stats.dmgDealt += actual;
+  runtime.log(actual > 0 ? 'skill' : 'info', logText(actual));
+  if (target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
+    runtime.markDefeated(target, {
+      message: `💀 【${actionName}】${target.name} 被 ${user.name} 安装插件时爆发的异变余波击倒！`,
+      killer: user,
+    });
+  }
+  return actual;
+}
+
+function applyChimeraInstallSideEffect(
+  runtime: SupportResolutionRuntime,
+  user: Fighter,
+  skill: SkillDefinition,
+): void {
+  if (!user.isSuccubus || !user.transformed || !skill.status?.startsWith('PLUG_')) return;
+
+  if (skill.status === 'PLUG_HEART') {
+    const healed = healFighter(user, Math.floor(user.maxHp * 0.12));
+    const cleaned = cleanseOneCommonNegativeStatus(user);
+    grantStatus(user, 'REGEN', 3);
+    runtime.syncHpPct(user);
+    const cleanText = cleaned ? `，排出了【${runtime.data.STATUS_EFFECTS[cleaned]?.name ?? cleaned}】` : '';
+    runtime.log('heal', `☢️ 【永动炉心】${user.name} 的新心脏开始泵动，恢复 ${healed} 点生命${cleanText}，并获得再生！`);
+    return;
+  }
+
+  if (skill.status === 'PLUG_SKIN') {
+    const healed = healFighter(user, Math.floor(user.maxHp * 0.06));
+    grantStatus(user, 'BKB', 1, 'chimera_adaptive_skin');
+    grantStatus(user, 'SPELL_BLOCK', 1, 'chimera_adaptive_skin');
+    runtime.syncHpPct(user);
+    runtime.log('buff', `🛡️ 【纳米皮肤】${user.name} 的外壳完成自适应硬化，恢复 ${healed} 点生命，并获得短暂抗控制与法术抵挡！`);
+    return;
+  }
+
+  if (skill.status === 'PLUG_LEG') {
+    grantStatus(user, 'AIM', 1);
+    runtime.log('buff', `🦶 【反重力足】${user.name} 的机动回路重新校准，下一次攻击进入锁定状态！`);
+    return;
+  }
+
+  const enemy = pickRandomEnemy(runtime, user);
+  if (!enemy) return;
+
+  if (skill.status === 'PLUG_HEAD') {
+    const actual = applyChimeraSideDamage(
+      runtime,
+      user,
+      enemy,
+      user.atk * 0.55 + user.mag * 0.25,
+      '暴食之口启动',
+      (damage) => `🦷 【暴食之口启动】${user.name} 的新口器咬向 ${enemy.name}，实际造成 ${damage} 点伤害！`,
+    );
+    const healed = healFighter(user, Math.floor(actual * 0.45));
+    runtime.syncHpPct(user);
+    if (healed > 0) runtime.log('heal', `🦷 【暴食回流】${user.name} 吞下生命力，恢复 ${healed} 点生命！`);
+    return;
+  }
+
+  if (skill.status === 'PLUG_ARM') {
+    applyChimeraSideDamage(
+      runtime,
+      user,
+      enemy,
+      user.atk * 0.78,
+      '斩舰巨刃校准',
+      (damage) => `⚔️ 【斩舰巨刃校准】${user.name} 挥动新生巨刃试斩 ${enemy.name}，实际造成 ${damage} 点伤害！`,
+    );
+    return;
+  }
+
+  if (skill.status === 'PLUG_BACK') {
+    const enemies = activeEnemiesOf(runtime, user).sort(() => Math.random() - 0.5).slice(0, 2);
+    enemies.forEach((target) => {
+      applyChimeraSideDamage(
+        runtime,
+        user,
+        target,
+        user.mag * 0.42,
+        '浮游炮试射',
+        (damage) => `🛸 【浮游炮试射】${user.name} 的浮游炮锁定 ${target.name}，实际造成 ${damage} 点魔法伤害！`,
+      );
+    });
+    return;
+  }
+
+  if (skill.status === 'PLUG_EYE') {
+    const actual = applyChimeraSideDamage(
+      runtime,
+      user,
+      enemy,
+      user.mag * 0.35,
+      '石化魔眼校准',
+      (damage) => damage > 0
+        ? `👁️ 【石化魔眼校准】${user.name} 看穿 ${enemy.name} 的破绽，实际造成 ${damage} 点魔法伤害并施加虚弱！`
+        : `👁️ 【石化魔眼校准】${user.name} 试图看穿 ${enemy.name} 的破绽，但没有造成实际伤害，虚弱没有生效！`,
+    );
+    if (actual > 0) grantStatus(enemy, 'WEAK', 2);
+    return;
+  }
+
+  if (skill.status === 'PLUG_TAIL') {
+    grantStatus(enemy, 'POISON', 2);
+    applyChimeraSideDamage(
+      runtime,
+      user,
+      enemy,
+      user.mag * 0.45 + user.atk * 0.25,
+      '灾厄毒尾甩击',
+      (damage) => `🦂 【灾厄毒尾甩击】${user.name} 的毒尾扫中 ${enemy.name}，实际造成 ${damage} 点伤害并注入剧毒！`,
+    );
+  }
+}
+
+function applyChimeraMilestoneRewards(
+  runtime: SupportResolutionRuntime,
+  target: Fighter,
+  plugCount: number,
+): void {
+  if (!target.isSuccubus || !target.transformed) return;
+  const currentMilestone = target.chimeraMilestoneLevel ?? 0;
+
+  if (currentMilestone < 2 && plugCount >= 2) {
+    target.chimeraMilestoneLevel = 2;
+    const healed = healFighter(target, Math.floor(target.maxHp * 0.155));
+    const cleaned = cleanseOneCommonNegativeStatus(target);
+    grantStatus(target, 'REGEN', 3);
+    runtime.syncHpPct(target);
+    const cleanText = cleaned ? `，排出了【${runtime.data.STATUS_EFFECTS[cleaned]?.name ?? cleaned}】` : '';
+    runtime.log('heal', `🧬 【合成稳定】${target.name} 的第 2 个插件接入完成，恢复 ${healed} 点生命${cleanText}，身体开始稳定再生！`);
+  }
+
+  if (currentMilestone < 4 && plugCount >= 4) {
+    target.chimeraMilestoneLevel = 4;
+    target.chimeraInstantActionQueued = true;
+    target.atk = Math.floor(target.atk * 1.068);
+    target.mag = Math.floor(target.mag * 1.068);
+    target.spd = Math.floor(target.spd * 1.05);
+    grantStatus(target, 'AIM', 1);
+    grantStatus(target, 'BKB', 1, 'chimera_startup_core');
+    runtime.log('buff', `🧬 【兽性苏醒】${target.name} 的第 4 个插件接入完成，攻击、魔力与速度小幅裂变，锁定猎物并准备立刻追加一次插件行动！`);
+  }
+
+  if (currentMilestone < 6 && plugCount >= 6) {
+    target.chimeraMilestoneLevel = 6;
+    target.atk = Math.floor(target.atk * 1.14);
+    target.mag = Math.floor(target.mag * 1.14);
+    target.def = Math.floor(target.def * 1.105);
+    target.res = Math.floor(target.res * 1.105);
+    target.maxHp = Math.floor(target.maxHp * 1.14);
+    target.currentHp = Math.min(target.maxHp, target.currentHp + Math.floor(target.maxHp * 0.235));
+    runtime.syncHpPct(target);
+    grantStatus(target, 'INVUL', 1, 'chimera_disaster_omen');
+    grantStatus(target, 'SPELL_BLOCK', 2, 'chimera_disaster_omen');
+    grantStatus(target, 'AIM', 1);
+    runtime.log('buff', `☣️ 【灾厄预兆】${target.name} 的第 6 个插件接入完成，肉体进入半成型裂变，并短暂脱离常理！`);
+  }
+}
+
+export function handleChimeraUltimateEvolution(
+  runtime: SupportResolutionRuntime,
+  target: Fighter,
+): void {
+  const currentPlugCount = getChimeraPluginCount(runtime, target);
   if (currentPlugCount < 8 || target.hasUltimateEvolved) return;
 
   target.hasUltimateEvolved = true;
   target.jobData.skills = target.jobData.skills.filter((skillId) => skillId !== 'chimera_install' && skillId !== 'chimera_strike');
-  target.atk = Math.floor(target.atk * 3.0);
-  target.mag = Math.floor(target.mag * 3.0);
-  target.def = Math.floor(target.def * 2.0);
-  target.res = Math.floor(target.res * 2.0);
-  target.spd = Math.floor(target.spd * 1.5);
-  target.maxHp = Math.floor(target.maxHp * 1.8);
+  target.atk = Math.floor(target.atk * 2.26);
+  target.mag = Math.floor(target.mag * 2.26);
+  target.def = Math.floor(target.def * 1.62);
+  target.res = Math.floor(target.res * 1.62);
+  target.spd = Math.floor(target.spd * 1.23);
+  target.maxHp = Math.floor(target.maxHp * 1.53);
   target.currentHp = target.maxHp;
   runtime.syncHpPct(target);
   runtime.log('buff', `🧬 警告！${target.name} 已完成究极进化！全插件安装完毕！\n封印解除，全属性引发恐怖的裂变！化身为最高级别的神级灾厄！`);
@@ -125,6 +345,10 @@ export function executeSupportSkill(
     return true;
   }
 
+  let installedChimeraPlug = false;
+  let chimeraPlugCountAfterInstall = 0;
+  let shouldCheckChimeraUltimate = false;
+
   if (skill.status) {
     let duration = skill.status === 'INVUL' ? 1 : (skill.status.startsWith('CTR_') ? 5 : 3);
     if (skill.status.startsWith('CTR_')) targetForBuff.status = targetForBuff.status.filter((status) => !status.type.startsWith('CTR_'));
@@ -132,19 +356,26 @@ export function executeSupportSkill(
       if (skill.statBuff) applyStatBuff(targetForBuff, skill.statBuff);
       if (skill.newSkill && !targetForBuff.jobData.skills.includes(skill.newSkill)) {
         targetForBuff.jobData.skills.push(skill.newSkill);
-        handleChimeraUltimateEvolution(runtime, targetForBuff);
+        installedChimeraPlug = !!targetForBuff.isSuccubus && !!targetForBuff.transformed;
+        chimeraPlugCountAfterInstall = getChimeraPluginCount(runtime, targetForBuff);
+        shouldCheckChimeraUltimate = true;
       }
       duration = 999;
     }
     if (skill.status.startsWith('PLUG_')) {
       targetForBuff.status = targetForBuff.status.filter((status) => status.type !== skill.status);
     }
-    targetForBuff.status.push({ type: skill.status, duration });
+    grantStatus(targetForBuff, skill.status, duration, statusSourceFromSkill(skill));
   }
   if (skill.statBuff && !skill.status?.startsWith('PLUG_')) {
     applyStatBuff(targetForBuff, skill.statBuff);
   }
   if (skill.cleanStatus) cleanseCommonNegativeStatuses(targetForBuff);
   runtime.log('buff', runtime.formatSkillText(skill, skill.text ?? '').replace(/{USER}/g, user.name).replace(/{TARGET}/g, targetForBuff.name));
+  if (installedChimeraPlug && skill.status?.startsWith('PLUG_')) {
+    applyChimeraInstallSideEffect(runtime, targetForBuff, skill);
+    applyChimeraMilestoneRewards(runtime, targetForBuff, chimeraPlugCountAfterInstall);
+    if (shouldCheckChimeraUltimate) handleChimeraUltimateEvolution(runtime, targetForBuff);
+  }
   return true;
 }

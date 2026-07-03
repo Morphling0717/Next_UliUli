@@ -9,9 +9,10 @@ const gamer_skills: string[] = [
 
 const all_platform_gamer_skills: string[] = [
   'gamer_headshot_line', 'gamer_perfect_parry', 'gamer_estus_cancel',
-  'gamer_tactical_pause', 'gamer_wombo_combo', 'gamer_qte_execute',
-  'gamer_speedrun_route', 'gamer_read_inputs', 'gamer_world_combo',
-  'awp_shot', 'waterfowl', 'bkb_dota', 'judgment_cut', 'zonia',
+  'gamer_tactical_pause', 'gamer_wombo_combo', 'gamer_crack_confirm',
+  'gamer_speedrun_route', 'gamer_resource_macro', 'gamer_read_inputs',
+  'gamer_clutch_ace', 'gamer_world_combo',
+  'awp_shot', 'waterfowl', 'bkb_dota', 'judgment_cut',
 ];
 
 // God Slime full skill pool
@@ -89,17 +90,17 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
   TOKU_FAN: {
     name: '特摄粉', icon: '🦔',
     hp: 1.3, atk: 1.2, def: 1.2, spd: 1.1, agl: 1.0, mag: 0.8, res: 1.0, wis: 0.9,
-    skills: ['rider_kick', 'tokusatsu_basic'],
+    skills: ['rider_kick', 'tokusatsu_basic', 'henshin_rehearsal', 'tokusatsu_soul'],
   },
   MIRACLE_BUJIN: {
     name: '奇迹武刃', icon: '🦗',
     hp: 3.0, atk: 4.0, def: 3.5, spd: 2.5, agl: 3.5, mag: 3.0, res: 3.0, wis: 2.5,
-    skills: ['bujin_slash', 'miracle_magic', 'bujin_chair'],
+    skills: ['bujin_slash', 'black_mist_wave', 'adversity_flash', 'miracle_magic', 'miracle_alchemy', 'alchemy_armor', 'bujin_chair'],
   },
   MIRACLE_MONSTER_BUJIN: {
     name: '奇迹怪兽武刃', icon: '🦖',
     hp: 4.0, atk: 6.0, def: 4.5, spd: 3.0, agl: 4.0, mag: 4.0, res: 4.0, wis: 3.0,
-    skills: ['rainbow_fever', 'monster_punch', 'bujin_slash', 'miracle_magic'],
+    skills: ['rainbow_fever', 'monster_punch', 'energy_crush', 'miracle_armor', 'bujin_monster_combo', 'monster_roar', 'bujin_slash', 'black_mist_wave', 'adversity_flash', 'miracle_magic', 'miracle_alchemy', 'alchemy_armor'],
   },
 
   // ── 牢鳄系 ──────────────────────────────────────────────────────────────
@@ -164,7 +165,7 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
   WT_TOP_TIER: {
     name: '顶级房霸主', icon: '🪖',
     hp: 4.5, atk: 5.5, def: 4.5, spd: 1.2, agl: 0.8, mag: 0.1, res: 3.5, wis: 3.5,
-    skills: ['wt_laser_rangefinder', 'wt_bmpt_suppress', 'wt_t58_knockup', 'wt_su30_cas', 'wt_magic_ricochet_premium', 'wt_repair_premium'],
+    skills: ['wt_laser_rangefinder', 'wt_apfsds', 'wt_bmpt_suppress', 'wt_t58_knockup', 'wt_su30_cas', 'wt_magic_ricochet_premium', 'wt_repair_premium'],
   },
 
   // ── 基础职业与隐藏彩蛋 ──────────────────────────────────────────────────

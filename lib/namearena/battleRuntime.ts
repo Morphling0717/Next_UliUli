@@ -139,6 +139,8 @@ export function buildSupportResolutionRuntime(host: BattleRuntimeHost): SupportR
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
+    applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+    markDefeated: (target, options) => host.markDefeated(target, options),
     formatSkillText: (skill, text) => host.formatSkillText(skill, text),
     log: (type, text) => host.log(type, text),
   };

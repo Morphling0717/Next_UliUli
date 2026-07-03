@@ -24,8 +24,8 @@ export const jokerHook: CharacterHook = {
 
   onDefeated: ({ fighter, runtime }) => {
     if (fighter.isJoker && !fighter.hasResurrected) {
-      fighter.reviveTurns = 5;
-      runtime.log('info', `🃏 ${fighter.name} 没有真正退场，进入 5 次结算的返场倒计时！`);
+      fighter.reviveTurns = 4;
+      runtime.log('info', `🃏 ${fighter.name} 没有真正退场，进入 4 次结算的返场倒计时！`);
     }
   },
 
@@ -69,13 +69,13 @@ export const jokerHook: CharacterHook = {
     if (GOD_OF_TROLLS) {
       fighter.jobData = cloneJobDefinition(GOD_OF_TROLLS);
       fighter.job = 'GOD_OF_TROLLS';
-      fighter.maxHp = Math.floor(fighter.maxHp * 1.5);
+      fighter.maxHp = Math.floor(fighter.maxHp * 1.575);
       fighter.currentHp = fighter.maxHp;
       fighter.spd = 150;
       fighter.atk = Math.max(100, fighter.atk * 2);
       fighter.def = Math.max(80, fighter.def * 2);
       fighter.res = Math.max(150, fighter.res * 2);
-      fighter.mag = Math.max(220, fighter.mag * 3);
+      fighter.mag = Math.max(220, fighter.mag * 3.0);
       fighter.agl = Math.max(250, fighter.agl * 3);
       fighter.wis = Math.max(200, fighter.wis * 3);
     } else {
@@ -87,7 +87,7 @@ export const jokerHook: CharacterHook = {
 
     const enemies = runtime.fighters.filter((enemy) => runtime.isActiveCombatant(enemy) && runtime.getTeamId(enemy) !== myTeamId);
     if (enemies.length > 0) {
-      const aoeDmg = Math.floor(fighter.mag * 2.0);
+      const aoeDmg = Math.floor(fighter.mag * 2.04);
       runtime.log('skill', `💥 【谢幕返场】${fighter.name} 的地狱笑话席卷 ${enemies.length} 名敌人：${enemies.map((enemy) => enemy.name).join('、')}！`);
       for (const enemy of enemies) {
         if (!runtime.isActiveCombatant(fighter)) break;

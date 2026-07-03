@@ -1,10 +1,28 @@
 import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from '../statusRules';
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
+import { grantStatus } from '../defenseStatus';
 
 type GamerRuntime = Pick<CharacterHookRuntime, 'fighters' | 'getTeamId' | 'isActiveCombatant' | 'jobs' | 'log'>;
 
 const MAX_APM = 12;
+const WORLD_STAGE_THRESHOLD = 11;
+const WORLD_STAGE_DURATION = 2;
+
+const CHAMPION_SKILL_COST: Record<string, number> = {
+  gamer_headshot_line: 2,
+  gamer_perfect_parry: 2,
+  gamer_estus_cancel: 2,
+  gamer_tactical_pause: 3,
+  gamer_wombo_combo: 3,
+  gamer_crack_confirm: 3,
+  gamer_qte_execute: 3,
+  gamer_speedrun_route: 1,
+  gamer_resource_macro: 0,
+  gamer_read_inputs: 2,
+  gamer_clutch_ace: 4,
+  gamer_world_combo: 6,
+};
 
 function scaleStat(value: number, multiplier: number, floor: number): number {
   return Math.max(floor, Math.floor(value * multiplier));
@@ -14,8 +32,32 @@ function isOriginalGamer(actor: Fighter): boolean {
   return Boolean(actor.isGamer && !actor.isSon && (actor.job === 'HIGH_END_GAMER' || actor.job === 'ALL_PLATFORM_CHAMPION'));
 }
 
-function gainApm(actor: Fighter, amount = 1): void {
-  actor.apm = Math.min(MAX_APM, (actor.apm ?? 0) + amount);
+function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
+  grantStatus(fighter, type, duration, sourceId);
+}
+
+function hasStatus(fighter: Fighter, type: string): boolean {
+  return fighter.status.some((status) => status.type === type);
+}
+
+function enterWorldStage(actor: Fighter, runtime: Pick<GamerRuntime, 'log'>, reason: string): void {
+  if (actor.job !== 'ALL_PLATFORM_CHAMPION' || actor.hasUsedGamerWorldStage) return;
+  actor.hasUsedGamerWorldStage = true;
+  actor.gamerBoostReady = true;
+  refreshStatus(actor, 'GAMER_WORLD_STAGE', WORLD_STAGE_DURATION);
+  refreshStatus(actor, 'BKB', 1, 'gamer_world_stage');
+  runtime.log('crit', `🏆 【世界赛舞台】${actor.name} APM 拉到 ${actor.apm ?? 0}/${MAX_APM}，${reason}，所有冠军技能短暂进入强化版！`);
+}
+
+function gainApm(actor: Fighter, amount = 1, runtime?: Pick<GamerRuntime, 'log'>, reason?: string): void {
+  const before = actor.apm ?? 0;
+  actor.apm = Math.min(MAX_APM, before + amount);
+  if (runtime && reason && actor.apm > before && actor.job === 'ALL_PLATFORM_CHAMPION') {
+    const crossedWorldStage = before < WORLD_STAGE_THRESHOLD && actor.apm >= WORLD_STAGE_THRESHOLD;
+    if (crossedWorldStage) {
+      enterWorldStage(actor, runtime, reason);
+    }
+  }
 }
 
 function getEnemies(actor: Fighter, runtime: Pick<GamerRuntime, 'fighters' | 'getTeamId' | 'isActiveCombatant'>): Fighter[] {
@@ -36,35 +78,106 @@ function getAllies(actor: Fighter, runtime: Pick<GamerRuntime, 'fighters' | 'get
   );
 }
 
-function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((status) => status.type === type);
-}
-
 function hasCommonNegativeStatus(fighter: Fighter): boolean {
   return fighter.status.some((status) => isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
+}
+
+function effectiveCost(actor: Fighter, skillId: string): number {
+  const baseCost = CHAMPION_SKILL_COST[skillId] ?? 0;
+  if (baseCost <= 0) return 0;
+  const worldDiscount = hasStatus(actor, 'GAMER_WORLD_STAGE') ? 1 : 0;
+  const bufferDiscount = Math.min(actor.gamerInputBuffer ?? 0, 1);
+  return Math.max(1, baseCost - worldDiscount - bufferDiscount);
+}
+
+function canAfford(actor: Fighter, skillId: string): boolean {
+  return (actor.apm ?? 0) >= effectiveCost(actor, skillId);
+}
+
+function lowHealthEnemy(enemies: Fighter[]): Fighter | undefined {
+  return enemies
+    .filter((enemy) => enemy.hpPct <= 0.42 || enemy.currentHp <= Math.max(900, enemy.maxHp * 0.34))
+    .sort((a, b) => a.currentHp - b.currentHp)[0];
+}
+
+function markedEnemy(actor: Fighter, enemies: Fighter[]): Fighter | undefined {
+  const markedId = actor.gamerMarkedTargetId;
+  if (!markedId) return undefined;
+  return enemies.find((enemy) => enemy.id === markedId);
+}
+
+function pickWeighted(items: Array<[string, number]>): string {
+  const total = items.reduce((sum, [, weight]) => sum + weight, 0);
+  let roll = Math.random() * total;
+  for (const [skillId, weight] of items) {
+    roll -= weight;
+    if (roll <= 0) return skillId;
+  }
+  return items[items.length - 1]?.[0] ?? 'gamer_resource_macro';
+}
+
+function affordableWeightedPool(actor: Fighter, items: Array<[string, number]>): Array<[string, number]> {
+  return items.filter(([skillId]) => canAfford(actor, skillId));
 }
 
 function selectChampionSkill(actor: Fighter, runtime: GamerRuntime): string {
   const enemies = getEnemies(actor, runtime);
   const allies = getAllies(actor, runtime);
   const apm = actor.apm ?? 0;
+  const isWorldStage = hasStatus(actor, 'GAMER_WORLD_STAGE');
+  const isClutch =
+    actor.hpPct <= 0.45 ||
+    enemies.length <= 3 ||
+    (actor.gamerClutchWindow ?? 0) > 0 ||
+    allies.length === 0 && enemies.length <= 4 && actor.hpPct <= 0.62;
+  const hasMarkedEnemy = Boolean(markedEnemy(actor, enemies));
+  const woundedEnemy = lowHealthEnemy(enemies);
 
-  if (apm >= 5 && hasStatus(actor, 'GAMER_WORLD_STAGE') && Math.random() < 0.4) return 'gamer_world_combo';
-  if (allies.length === 0 && enemies.length >= 2 && actor.hpPct < 0.8 && apm >= 3 && Math.random() < 0.8) {
+  if (apm >= WORLD_STAGE_THRESHOLD) {
+    enterWorldStage(actor, runtime, '终于抓到接管比赛的窗口');
+  }
+
+  if (isWorldStage && !actor.hasUsedGamerChampionCombo && canAfford(actor, 'gamer_world_combo') && Math.random() < 0.45) {
+    return 'gamer_world_combo';
+  }
+
+  if (hasCommonNegativeStatus(actor) && canAfford(actor, 'gamer_estus_cancel') && !hasStatus(actor, 'NO_HEAL')) return 'gamer_estus_cancel';
+  if (actor.hpPct < 0.34 && canAfford(actor, 'gamer_estus_cancel') && !hasStatus(actor, 'NO_HEAL')) return 'gamer_estus_cancel';
+
+  if (apm <= 1 && !isWorldStage) return 'gamer_resource_macro';
+  if (apm <= 2 && Math.random() < 0.7 && !isWorldStage) return 'gamer_resource_macro';
+
+  if (isClutch && canAfford(actor, 'gamer_clutch_ace') && Math.random() < (isWorldStage ? 0.53 : 0.355)) {
     return 'gamer_clutch_ace';
   }
-  if (hasCommonNegativeStatus(actor) && apm >= 2 && !hasStatus(actor, 'NO_HEAL')) return 'gamer_estus_cancel';
-  if (actor.hpPct < 0.55 && apm >= 2 && !hasStatus(actor, 'NO_HEAL')) return 'gamer_estus_cancel';
-  if (enemies.some((enemy) => enemy.currentHp / enemy.maxHp < 0.45) && apm >= 4 && Math.random() < 0.65) {
-    return 'gamer_qte_execute';
-  }
-  if (enemies.length >= 2 && apm >= 3 && Math.random() < 0.5) return 'gamer_wombo_combo';
-  if (enemies.some((enemy) => !hasStatus(enemy, 'STUN')) && apm >= 2 && Math.random() < 0.35) return 'gamer_tactical_pause';
-  if (apm >= 3 && Math.random() < 0.3) return 'gamer_read_inputs';
-  if (apm >= 2 && Math.random() < 0.3) return 'gamer_speedrun_route';
 
-  const basicPool = ['gamer_headshot_line', 'gamer_perfect_parry', 'awp_shot', 'waterfowl', 'judgment_cut'];
-  return basicPool[Math.floor(Math.random() * basicPool.length)] ?? 'gamer_headshot_line';
+  if (hasMarkedEnemy && canAfford(actor, 'gamer_crack_confirm') && Math.random() < 0.72) return 'gamer_crack_confirm';
+  if (woundedEnemy && canAfford(actor, 'gamer_headshot_line') && Math.random() < 0.68) return 'gamer_headshot_line';
+  if (woundedEnemy && canAfford(actor, 'gamer_crack_confirm') && Math.random() < 0.55) return 'gamer_crack_confirm';
+
+  if (enemies.length >= 3 && canAfford(actor, 'gamer_wombo_combo') && Math.random() < (isWorldStage ? 0.67 : 0.515)) {
+    return 'gamer_wombo_combo';
+  }
+  if (enemies.some((enemy) => !hasStatus(enemy, 'STUN')) && canAfford(actor, 'gamer_tactical_pause') && Math.random() < 0.34) {
+    return 'gamer_tactical_pause';
+  }
+  if (canAfford(actor, 'gamer_perfect_parry') && actor.hpPct < 0.68 && Math.random() < 0.38) return 'gamer_perfect_parry';
+  if (canAfford(actor, 'gamer_read_inputs') && Math.random() < 0.32) return 'gamer_read_inputs';
+  if (canAfford(actor, 'gamer_speedrun_route') && Math.random() < 0.32) return 'gamer_speedrun_route';
+
+  const weightedPool = affordableWeightedPool(actor, [
+    ['gamer_headshot_line', woundedEnemy ? 22 : 12],
+    ['gamer_wombo_combo', enemies.length >= 3 ? 20 : 8],
+    ['gamer_tactical_pause', 12],
+    ['gamer_read_inputs', 11],
+    ['gamer_perfect_parry', actor.hpPct < 0.7 ? 12 : 6],
+    ['gamer_speedrun_route', 10],
+    ['gamer_resource_macro', apm <= 3 ? 15 : 4],
+  ]);
+
+  if (weightedPool.length > 0) return pickWeighted(weightedPool);
+
+  return 'gamer_resource_macro';
 }
 
 function transformBonusText(apm: number): string {
@@ -80,7 +193,7 @@ export const gamerHook: CharacterHook = {
   selectSkill: ({ actor, runtime, phase }) => {
     if (phase !== 'preMechanics' || !isOriginalGamer(actor)) return null;
 
-    gainApm(actor);
+    gainApm(actor, 1, runtime, '通过自身行动把节奏拉满');
     if (actor.job !== 'ALL_PLATFORM_CHAMPION') return null;
 
     return selectChampionSkill(actor, runtime);
@@ -92,21 +205,31 @@ export const gamerHook: CharacterHook = {
 
     const apmBeforeTransform = fighter.apm ?? 0;
     transform('ALL_PLATFORM_CHAMPION', `🎮 ${fighter.name} 血线跌破半场线，但操作没有断！${transformBonusText(apmBeforeTransform)}转职为【${ALL_PLATFORM_CHAMPION.name}】！`, () => {
-      fighter.maxHp = Math.max(3200, Math.min(3700, Math.floor(fighter.maxHp * 3.15)));
+      fighter.maxHp = Math.max(3650, Math.min(4125, Math.floor(fighter.maxHp * 3.39)));
       fighter.currentHp = fighter.maxHp;
-      fighter.atk = scaleStat(fighter.atk, 4.5, 240);
-      fighter.mag = scaleStat(fighter.mag, 4.5, 240);
-      fighter.def = scaleStat(fighter.def, 3.8, 165);
-      fighter.res = scaleStat(fighter.res, 3.8, 165);
-      fighter.spd = scaleStat(fighter.spd, 4.2, 175);
-      fighter.agl = scaleStat(fighter.agl, 4.2, 175);
-      fighter.wis = scaleStat(fighter.wis, 3.6, 200);
-      fighter.apm = Math.min(MAX_APM, apmBeforeTransform + 2);
+      fighter.atk = scaleStat(fighter.atk, 4.66, 262);
+      fighter.mag = scaleStat(fighter.mag, 4.66, 262);
+      fighter.def = scaleStat(fighter.def, 4.28, 204);
+      fighter.res = scaleStat(fighter.res, 4.28, 204);
+      fighter.spd = scaleStat(fighter.spd, 4.4, 204);
+      fighter.agl = scaleStat(fighter.agl, 4.4, 204);
+      fighter.wis = scaleStat(fighter.wis, 3.9, 230);
+      fighter.apm = Math.min(MAX_APM, Math.max(7, apmBeforeTransform + 3));
+      fighter.gamerMastery = Math.max(fighter.gamerMastery ?? 0, 1);
+      fighter.gamerInputBuffer = Math.max(fighter.gamerInputBuffer ?? 0, 1);
+      fighter.gamerBoostReady = true;
+      fighter.gamerClutchWindow = Math.max(fighter.gamerClutchWindow ?? 0, 2);
+      fighter.gamerInstantActionQueued = true;
+      fighter.hasUsedGamerTransformAction = true;
 
       fighter.status = fighter.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
-      fighter.status.push({ type: 'BKB', duration: apmBeforeTransform >= 4 ? 2 : 1 });
-      if (apmBeforeTransform >= 7) fighter.status.push({ type: 'AIM', duration: 2 });
-      if (apmBeforeTransform >= 10) fighter.status.push({ type: 'GAMER_WORLD_STAGE', duration: 4 });
+      refreshStatus(fighter, 'BKB', 2, 'gamer_clutch_focus');
+      refreshStatus(fighter, 'REGEN', 2);
+      refreshStatus(fighter, 'SPELL_BLOCK', 1, 'gamer_clutch_focus');
+      if (apmBeforeTransform >= 5) refreshStatus(fighter, 'AIM', 2);
+      if ((fighter.apm ?? 0) >= WORLD_STAGE_THRESHOLD) {
+        enterWorldStage(fighter, runtime, '半血变身时已经完成手感预热');
+      }
     });
     return true;
   },

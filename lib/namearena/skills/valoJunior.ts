@@ -2,6 +2,7 @@ import type { DamageApplicationOptions, Fighter, SkillDefinition } from '../type
 import { namerenaData as Data } from '../data';
 import { isActiveCombatant } from '../combatState';
 import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
+import { grantStatus } from '../defenseStatus';
 
 const { SKILL_TAGS } = Data;
 
@@ -22,6 +23,8 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_operator_shot: { name: '冥驹(Operator)', tag: SKILL_TAGS.PHYS, mult: 5.0, ignoreDef: true, text: '🔭 {USER} 屏息凝神... 砰！冥驹轰鸣，一枪穿透了 {TARGET}！造成 {VAL} 真实伤害！' },
   valo_holding_angle: { name: '架枪预瞄', tag: SKILL_TAGS.BUFF, status: 'VALO_HOLDING_ANGLE', text: '🔭 {USER} 停止移动，进入了架枪预瞄姿态！' },
   valo_pre_fire: { name: '提前枪', tag: SKILL_TAGS.PHYS, mult: 1.5, minDamagePct: 0.18, status: 'VALO_AIM_PUNCH', text: '🔫 {USER} 扣下扳机，精准的提前枪击中了 {TARGET} 并附加了【截停】！' },
+  valo_clutch_headshot: { name: '残局爆头线', tag: SKILL_TAGS.PHYS, mult: 2.6, minDamagePct: 0.42, ignoreDef: true, alwaysHit: true, alwaysCrit: true, text: '🎯 【残局爆头线】{USER} 架好准星，peek 出去的一瞬间爆头命中 {TARGET}，造成 {VAL} 真实伤害！' },
+  valo_clutch_execute: { name: '残局处决', tag: SKILL_TAGS.PHYS, mult: 3.8, minDamagePct: 0.6, ignoreDef: true, alwaysHit: true, alwaysCrit: true, text: '🏆 【残局处决】{USER} 抓住 {TARGET} 的破绽，冷静收下这一分，造成 {VAL} 真实伤害！' },
 
   valo_ult_showstopper: {
     name: '晚安火炮', tag: SKILL_TAGS.PHYS, mult: 3.0, text: '🚀 {USER} 掏出火箭筒："FIRE IN THE HOLE！" 轰炸了 {TARGET}，造成 {VAL} 毁灭伤害！',
@@ -106,7 +109,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
       const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && !f.isDeadAnnounced && f.currentHp > 0 && ctx.getTeamId(f) === userTeamId);
       allies.forEach((a) => {
         a.status = a.status ?? [];
-        a.status.push({ type: 'INVUL', duration: 1 });
+        grantStatus(a, 'INVUL', 1, 'valorant_astra_cosmic_divide');
         a.status = a.status.filter(
           (s) => !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_AIM_PUNCH', 'NEURAL_THEFT_DEBUFF'].includes(s.type),
         );

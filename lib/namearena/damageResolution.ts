@@ -28,7 +28,8 @@ export function calculateDamage(
   let logType = usedSkillId ? 'skill' : 'attack';
   const sexyTrueDamage = user.status.some((status) => status.type === 'STYLE_SEXY' || status.type === 'STYLE_EMPEROR');
   const ignoreDefOverride = !!skill.ignoreDef || sexyTrueDamage;
-  const weakOutputMultiplier = user.status.some((status) => status.type === 'WEAK') ? 0.5 : 1;
+  let weakOutputMultiplier = user.status.some((status) => status.type === 'WEAK') ? 0.5 : 1;
+  if (user.status.some((status) => status.type === 'WT_BREECH_DAMAGED')) weakOutputMultiplier *= 0.62;
 
   if (skill.tag === runtime.skillTags.PHYS || skill.tag === runtime.skillTags.SPECIAL) {
     const atk = user.atk * weakOutputMultiplier * (user.status.some((status) => status.type === 'RAGE') ? 1.5 : 1) * (user.hasSpinalSword ? 2.5 : 1);
@@ -64,6 +65,7 @@ export function calculateDamage(
 
   const isCrit =
     user.status.some((status) => status.type === 'AIM') ||
+    (user.isWT && target.status.some((status) => status.type === 'WT_SCOUTED')) ||
     target.status.some((status) => status.type === 'NEURAL_THEFT_DEBUFF') ||
     skill.alwaysCrit ||
     Math.random() < (user.critRate + user.agl * 0.001) ||
@@ -79,6 +81,18 @@ export function calculateDamage(
   }
 
   if (skill.hits) dmg *= skill.hits;
+  if (
+    user.isSuccubus &&
+    user.transformed &&
+    usedSkillId?.startsWith('chimera_') &&
+    usedSkillId !== 'chimera_install' &&
+    usedSkillId !== 'chimera_strike' &&
+    dmg > 0
+  ) {
+    const plugCount = user.status.filter((status) => status.type.startsWith('PLUG_')).length;
+    if (plugCount >= 6) dmg = Math.floor(dmg * 1.17);
+    else if (plugCount >= 4) dmg = Math.floor(dmg * 1.09);
+  }
   if (skill.minDamagePct && (skill.tag === runtime.skillTags.PHYS || skill.tag === runtime.skillTags.SPECIAL)) {
     const minDamageBase = user.atk * weakOutputMultiplier * (skill.mult ?? 1) * (skill.hits ?? 1);
     dmg = Math.max(dmg, Math.floor(minDamageBase * skill.minDamagePct));

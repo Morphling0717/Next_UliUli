@@ -5,6 +5,7 @@ import {
   isStatusType,
 } from '../statusRules';
 import type { CharacterHook } from './types';
+import { createStatusEntry } from '../defenseStatus';
 import { selectBabySupportSkill } from './sigua';
 import { selectValorantSkill } from './valoJunior';
 
@@ -76,8 +77,8 @@ export function executeSlackingSynergy(ctx: SkillContext): boolean {
             (status) => !['VALO_HOLDING_ANGLE', 'WAIT_COUNTER', 'COUNTER', 'AIM'].includes(status.type) && !status.type.startsWith('CTR_'),
           );
           participant.status.push({ type: 'SYNERGY_SLACKING', duration: 5 });
-          participant.status.push({ type: 'INVUL', duration: 5 });
-          participant.status.push({ type: 'BKB', duration: 5 });
+          participant.status.push(createStatusEntry('INVUL', 5, 'slacking_off_field'));
+          participant.status.push(createStatusEntry('BKB', 5, 'slacking_off_field'));
           participant.status.push({ type: 'STUN', duration: 5 });
           participant.wasSynergySlacking = true;
         };

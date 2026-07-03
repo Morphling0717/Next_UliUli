@@ -7,6 +7,17 @@ import {
   getStatusTickMode,
   isStatusType,
 } from './statusRules';
+import {
+  findDefenseStatus,
+  formatControlCleanse,
+} from './defenseStatus';
+import {
+  addTokusatsuThroneResonance,
+  canUseTokusatsuThrone,
+  enterTokusatsuThroneStance,
+  getTokusatsuControlThroneChance,
+  TOKUSATSU_THRONE_RESONANCE_MAX,
+} from './tokusatsuMechanics';
 
 export interface StatusProcessingRuntime {
   fighters: Fighter[];
@@ -63,6 +74,20 @@ export function advanceGlobalTimedStatuses(fighters: Fighter[], turnCount: numbe
   });
 }
 
+function tryTokusatsuControlThrone(runtime: StatusProcessingRuntime, actor: Fighter): boolean {
+  if (!canUseTokusatsuThrone(actor)) return false;
+  const hadControl = actor.status.some((status) => isStatusType(status.type, CONTROL_STATUS_TYPES));
+  if (!hadControl) return false;
+
+  const resonance = addTokusatsuThroneResonance(actor, 1);
+  if (Math.random() >= getTokusatsuControlThroneChance(actor)) return false;
+
+  actor.status = actor.status.filter((status) => !isStatusType(status.type, BKB_BLOCKED_STATUS_TYPES));
+  enterTokusatsuThroneStance(actor, 2, 2);
+  runtime.log('buff', `🪑 【悲愿共鸣】${actor.name} 被控制逼到极限，王座共鸣升至 ${resonance}/${TOKUSATSU_THRONE_RESONANCE_MAX}，强行坐上【武神王座】等待反击！`);
+  return true;
+}
+
 export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter): boolean {
   let canAct = true;
   const newStatus: typeof actor.status = [];
@@ -114,12 +139,13 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
     return false;
   }
 
-  if (actor.status.some((status) => status.type === 'BKB') && !actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
+  const controlImmune = findDefenseStatus(actor, 'BKB');
+  if (controlImmune && !actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
     const hadBlocked = actor.status.some((status) => isStatusType(status.type, BKB_BLOCKED_STATUS_TYPES));
     if (hadBlocked) {
       actor.status = actor.status.filter((status) => !isStatusType(status.type, BKB_BLOCKED_STATUS_TYPES));
       canAct = true;
-      runtime.log('info', `🟡 ${actor.name} 处于 BKB 状态，强行免疫了控制与沉默效果！`);
+      runtime.log('info', formatControlCleanse(controlImmune, actor.name));
     }
   }
 
@@ -136,6 +162,9 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
     canAct = true;
     actor.status = actor.status.filter((status) => !isStatusType(status.type, CONTROL_STATUS_TYPES));
     runtime.log('buff', `👑 ${actor.name} 发动了钞能力！解除了控制状态！`);
+  }
+  if (!canAct && tryTokusatsuControlThrone(runtime, actor)) {
+    canAct = true;
   }
   return canAct;
 }

@@ -42,6 +42,7 @@ import {
   runCharacterSkillSelectionHooks,
   runCharacterTransformHooks,
 } from './characterHooks';
+import { enterTokusatsuMonsterForm } from './characterHooks/tokusatsu';
 import {
   selectSpinalSwordRouteSkill,
   selectSpinalSwordSpecialSkill,
@@ -103,12 +104,27 @@ import {
 } from './battleRuntime';
 import {
   applyGachaSummonLifesteal,
+  consumeGachaLuck,
   GACHA_LUCK_MAX,
   GACHA_RA_PHOENIX_STATUS,
   grantGachaLuck,
+  isAdvancedSummonName,
   isLuckEmperor,
   triggerGachaDeathSave,
 } from './gachaMechanics';
+import { REVIVE_CLEAN_STATUS_TYPES } from './statusRules';
+import {
+  consumeSpellBlock,
+  findDefenseStatus,
+  formatInvul,
+  formatSpellBlock,
+  grantStatus,
+} from './defenseStatus';
+import {
+  addTokusatsuThroneResonance,
+  canUseTokusatsuThrone,
+  TOKUSATSU_THRONE_RESONANCE_MAX,
+} from './tokusatsuMechanics';
 
 const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   skill: '技能伤害',
@@ -141,6 +157,54 @@ function formatIncomingDamageSource(source: string, attacker?: Fighter, actionNa
 
 function getSummonBaseName(fighter: Fighter): string {
   return fighter.summonBaseName ?? fighter.name;
+}
+
+const TING_CROC_KILL_CLEAN_STATUS_TYPES = new Set(REVIVE_CLEAN_STATUS_TYPES);
+const TOKUSATSU_DEFIANCE_CLEAN_STATUS_TYPES = new Set(REVIVE_CLEAN_STATUS_TYPES);
+const GACHA_BLUE_EYES_GUARD_COOLDOWN = 'GACHA_BLUE_EYES_GUARD_COOLDOWN';
+const GACHA_ULTIMATE_GUARD_COOLDOWN = 'GACHA_ULTIMATE_GUARD_COOLDOWN';
+const GACHA_TRAP_GUARD_COOLDOWN = 'GACHA_TRAP_GUARD_COOLDOWN';
+const GAMER_APM_MAX = 12;
+const GAMER_WORLD_STAGE_THRESHOLD = 11;
+const GAMER_WORLD_STAGE_DURATION = 2;
+const WT_SPAWN_POINT_MAX = 8;
+
+const GACHA_TING_GUARD_TRAP_SUMMON: SkillDefinition = {
+  name: '护主陷阱',
+  tag: 'special',
+  isSummon: true,
+  summonName: '护主栗子球',
+  summonJob: 'WARRIOR',
+  stats: { hp: 1200, atk: 20, def: 160, res: 160, spd: 90, agl: 80, mag: 20, wis: 80 },
+  text: '🪤 {USER} 翻开覆盖的「护主陷阱」，临时召唤「护主栗子球」挡在身前！',
+};
+
+function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
+  grantStatus(fighter, type, duration, sourceId);
+}
+
+function grantWarThunderSpawnPoints(fighter: Fighter, amount: number): number {
+  if (!fighter.isWT || fighter.job !== 'WT_TOP_TIER' || amount <= 0) return fighter.wtSpawnPoints ?? 0;
+  const before = fighter.wtSpawnPoints ?? 0;
+  fighter.wtSpawnPoints = Math.min(WT_SPAWN_POINT_MAX, before + amount);
+  return fighter.wtSpawnPoints;
+}
+
+function restoreZeroedStatsIfNeeded(fighter: Fighter): void {
+  if (!fighter.baseStatsForZero) return;
+  fighter.atk = fighter.baseStatsForZero.atk;
+  fighter.def = fighter.baseStatsForZero.def;
+  fighter.res = fighter.baseStatsForZero.res;
+  delete fighter.baseStatsForZero;
+  fighter.wasZeroed = false;
+}
+
+function hasStatus(fighter: Fighter, type: string): boolean {
+  return fighter.status.some((status) => status.type === type);
+}
+
+function isOriginalGamer(fighter?: Fighter): fighter is Fighter {
+  return Boolean(fighter?.isGamer && !fighter.isSon && (fighter.job === 'HIGH_END_GAMER' || fighter.job === 'ALL_PLATFORM_CHAMPION'));
 }
 
 export class BattleEngine {
@@ -205,7 +269,10 @@ export class BattleEngine {
 
   getFatigueDamageBonus(): number {
     if (this.turnCount <= 500) return 0;
-    return Math.min(120, Math.floor((this.turnCount - 500) / 25));
+    const steadyFatigue = Math.min(80, Math.floor((this.turnCount - 500) / 25));
+    if (this.turnCount <= 900) return steadyFatigue;
+    const collapseFatigue = Math.floor((this.turnCount - 900) / 3) * 6;
+    return Math.min(900, steadyFatigue + collapseFatigue);
   }
 
   getTeamId(f: Fighter): string {
@@ -245,6 +312,7 @@ export class BattleEngine {
         deferTransform: true,
         actionName: '神不死鸟',
         respectDefenses: true,
+        canTriggerWaitCounter: false,
       });
       if (actualDmg > 0) {
         this.log('crit', `🔥 【神不死鸟】太阳火焰反扑 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
@@ -257,6 +325,68 @@ export class BattleEngine {
       }
     });
 
+    return true;
+  }
+
+  triggerTokusatsuThroneFromDamage(
+    target: Fighter,
+    amount: number,
+    source: string,
+    attacker: Fighter | undefined,
+    options: DamageApplicationOptions,
+  ): number {
+    if (amount <= 0) return amount;
+    if (options.canTriggerWaitCounter === false) return amount;
+    if (!target.isTokusatsu || target.counterUsed || !target.status.some((status) => status.type === 'WAIT_COUNTER')) return amount;
+    if (!attacker || attacker.id === target.id || this.getTeamId(attacker) === this.getTeamId(target)) return amount;
+    if (source !== 'skill' && source !== 'counter') return amount;
+
+    const actionText = options.actionName ? `【${options.actionName}】` : getDamageSourceLabel(source);
+    this.log('info', `⚔️ ${attacker.name} 的${actionText}波及坐在【武神王座】上的 ${target.name}，触发等待反击判定！`);
+    enterTokusatsuMonsterForm(target, this.createCharacterHookRuntime(), attacker, 0);
+
+    const reducedAmount = Math.floor(amount * 0.25);
+    const blocked = Math.max(0, amount - reducedAmount);
+    this.log('info', `🪑 【武神王座】${target.name} 的怪兽形态压碎来袭攻势，削减 ${blocked} 点伤害，余波只剩 ${reducedAmount} 点！`);
+    return reducedAmount;
+  }
+
+  grantTokusatsuHeavyDamageResonance(target: Fighter, actualDmg: number, source: string, options: DamageApplicationOptions): void {
+    if (actualDmg <= 0 || target.currentHp <= 0 || !canUseTokusatsuThrone(target)) return;
+    if (source !== 'skill' && source !== 'counter' && source !== 'reflect') return;
+    if (actualDmg < target.maxHp * 0.16) return;
+
+    const before = target.tokusatsuThroneResonance ?? 0;
+    const after = addTokusatsuThroneResonance(target, 1);
+    if (after > before && after >= 2) {
+      this.queueOrLogDamageEvent(target, options, 'buff', `🪑 【悲愿共鸣】${target.name} 承受重创，王座共鸣 ${after}/${TOKUSATSU_THRONE_RESONANCE_MAX}！`);
+    }
+  }
+
+  triggerTokusatsuDefiance(target: Fighter, options: DamageApplicationOptions): boolean {
+    if (
+      !target.isTokusatsu ||
+      target.job !== 'MIRACLE_MONSTER_BUJIN' ||
+      target.hasUsedTokusatsuDefiance ||
+      target.isDead ||
+      target.isDeadAnnounced
+    ) {
+      return false;
+    }
+
+    target.hasUsedTokusatsuDefiance = true;
+    target.tokusatsuInstantActionQueued = true;
+    restoreZeroedStatsIfNeeded(target);
+    target.status = target.status.filter((status) => !TOKUSATSU_DEFIANCE_CLEAN_STATUS_TYPES.has(status.type));
+    refreshStatus(target, 'TOKUSATSU_DEFIANCE', 2);
+    refreshStatus(target, 'BKB', 1, 'tokusatsu_defiance');
+    refreshStatus(target, 'REGEN', 2);
+    target.currentHp = Math.max(1, Math.floor(target.maxHp * 0.15));
+    target.atk = Math.floor(target.atk * 1.03);
+    target.mag = Math.floor(target.mag * 1.03);
+    target.spd = Math.floor(target.spd * 1.02);
+    this.syncHpPct(target);
+    this.queueOrLogDamageEvent(target, options, 'buff', `🔥 【悲愿不倒】${target.name} 的奇迹怪兽武刃拒绝退场！强行恢复到 ${target.currentHp}/${target.maxHp}，清除异常并准备立刻反扑！`);
     return true;
   }
 
@@ -292,6 +422,63 @@ export class BattleEngine {
     return buildTurnFlowRuntime(this);
   }
 
+  maybeEnterGamerWorldStage(fighter: Fighter, reason: string, options: DamageApplicationOptions = {}): void {
+    if (!isOriginalGamer(fighter) || fighter.job !== 'ALL_PLATFORM_CHAMPION' || fighter.hasUsedGamerWorldStage) return;
+    if ((fighter.apm ?? 0) < GAMER_WORLD_STAGE_THRESHOLD) return;
+
+    fighter.hasUsedGamerWorldStage = true;
+    fighter.gamerBoostReady = true;
+    refreshStatus(fighter, 'GAMER_WORLD_STAGE', GAMER_WORLD_STAGE_DURATION);
+    refreshStatus(fighter, 'BKB', 1, 'gamer_world_stage');
+    this.queueOrLogDamageEvent(fighter, options, 'crit', `🏆 【世界赛舞台】${fighter.name} APM 拉到 ${fighter.apm ?? 0}/${GAMER_APM_MAX}，${reason}，所有冠军技能短暂进入强化版！`);
+  }
+
+  grantGamerApm(fighter: Fighter, amount: number, reason: string, options: DamageApplicationOptions = {}): void {
+    if (!isOriginalGamer(fighter) || amount <= 0) return;
+    const before = fighter.apm ?? 0;
+    fighter.apm = Math.min(GAMER_APM_MAX, before + amount);
+    if (fighter.apm <= before) return;
+    if (fighter.job === 'ALL_PLATFORM_CHAMPION' && before < GAMER_WORLD_STAGE_THRESHOLD && fighter.apm >= GAMER_WORLD_STAGE_THRESHOLD) {
+      this.maybeEnterGamerWorldStage(fighter, reason, options);
+    }
+  }
+
+  grantGamerDamageReward(attacker: Fighter | undefined, actualDmg: number, target: Fighter, options: DamageApplicationOptions): void {
+    if (!isOriginalGamer(attacker) || actualDmg <= 0 || !this.isActiveCombatant(attacker)) return;
+    if (attacker.job === 'ALL_PLATFORM_CHAMPION') return;
+    if (attacker.gamerDamageRewardTurn === this.turnCount) return;
+    const meaningfulDamage = Math.max(260, Math.floor(target.maxHp * 0.08));
+    if (actualDmg < meaningfulDamage) return;
+
+    attacker.gamerDamageRewardTurn = this.turnCount;
+    this.grantGamerApm(attacker, 1, '通过有效伤害把节奏续上', options);
+  }
+
+  grantGamerHeavyHitReward(target: Fighter, actualDmg: number, attacker: Fighter | undefined, source: string, options: DamageApplicationOptions): void {
+    if (!isOriginalGamer(target) || target.job !== 'ALL_PLATFORM_CHAMPION' || actualDmg <= 0 || source === 'status') return;
+    if (hasStatus(target, 'GAMER_WORLD_STAGE')) return;
+    if (target.gamerHeavyHitRewardTurn === this.turnCount) return;
+    if (actualDmg < target.maxHp * 0.16) return;
+
+    target.gamerHeavyHitRewardTurn = this.turnCount;
+    if (attacker && attacker.id !== target.id) {
+      target.gamerMarkedTargetId = attacker.id;
+      target.gamerClutchWindow = Math.max(target.gamerClutchWindow ?? 0, 2);
+    }
+    this.grantGamerApm(target, 1, '被重创后读到对手习惯', options);
+    this.queueOrLogDamageEvent(target, options, 'buff', `🎮 【游戏理解】${target.name} 被重创后没有断线，反而读到对手习惯，APM +1！（当前 ${target.apm ?? 0}/${GAMER_APM_MAX}）`);
+  }
+
+  grantGamerKillMomentum(killer: Fighter, target: Fighter): void {
+    if (!isOriginalGamer(killer) || killer.job !== 'ALL_PLATFORM_CHAMPION' || !this.isActiveCombatant(killer)) return;
+
+    killer.gamerClutchWindow = Math.max(killer.gamerClutchWindow ?? 0, 3);
+    killer.gamerInputBuffer = Math.min(3, (killer.gamerInputBuffer ?? 0) + 1);
+    refreshStatus(killer, 'AIM', 1);
+    this.grantGamerApm(killer, 1, '击杀后进入收割节奏');
+    this.log('buff', `🎮 【击杀滚动】${killer.name} 击败 ${target.name} 后进入残局处理，APM +1，输入缓存 +1！（当前 ${killer.apm ?? 0}/${GAMER_APM_MAX}）`);
+  }
+
   applyDamage(
     target: Fighter,
     amount: number,
@@ -304,24 +491,34 @@ export class BattleEngine {
     if (target.status.some((s) => s.type === 'SYNERGY_SLACKING')) return 0;
 
     if (options.respectDefenses) {
-      if (target.status.some((status) => status.type === 'INVUL')) {
+      const invul = findDefenseStatus(target, 'INVUL');
+      if (invul) {
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
-        this.log('info', `🛡️ ${target.name} 处于无敌状态，免疫了${incomingSource}！`);
+        this.log('info', formatInvul(invul, target.name, incomingSource));
         return 0;
       }
 
       const spellBlock = target.status.find((status) => status.type === 'SPELL_BLOCK');
       if (spellBlock && (source === 'skill' || source === 'transfer')) {
-        target.status = target.status.filter((status) => status !== spellBlock);
+        consumeSpellBlock(target);
         const healed = healFighter(target, Math.floor(target.maxHp * 0.15));
         const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
-        this.log('info', `🔵 庇护之音！林肯法球(或特种装甲)的光幕为 ${target.name} 挡下了${incomingSource}${healText}！`);
+        this.log('info', formatSpellBlock(spellBlock, target.name, incomingSource, healText));
         return 0;
       }
     }
 
     if (target.jobData?.name === '欧皇' && !isTrueDamage) amount = Math.floor(amount * 0.6);
+    if (
+      target.isWT &&
+      target.transformed &&
+      target.status.some((status) => status.type === 'WT_ERA') &&
+      source !== 'status'
+    ) {
+      const eraMultiplier = source === 'reflect' || source === 'counter' ? 0.78 : (isTrueDamage ? 0.9 : 0.82);
+      amount = Math.max(1, Math.floor(amount * eraMultiplier));
+    }
 
     const isProtected =
       target.isMorphling || target.isJoker || target.isTokusatsu || target.isGacha ||
@@ -380,6 +577,21 @@ export class BattleEngine {
       }
     }
 
+    if (isLuckEmperor(target) && attacker?.isTing && amount > 0 && source !== 'status') {
+      amount = this.applyGachaTingGuardianEffects(target, amount, attacker);
+      if (amount <= 0) {
+        target.gachaTingGuardTrapReady = false;
+        this.syncHpPct(target);
+        return 0;
+      }
+    }
+
+    amount = this.triggerTokusatsuThroneFromDamage(target, amount, source, attacker, options);
+    if (amount <= 0) {
+      this.syncHpPct(target);
+      return 0;
+    }
+
     const hpBeforeDamage = target.currentHp;
     target.currentHp -= amount;
     target.stats.dmgTaken += amount;
@@ -393,11 +605,17 @@ export class BattleEngine {
         turn: this.turnCount,
       };
     }
+    this.grantGamerDamageReward(attacker, amount, target, options);
+    this.grantGamerHeavyHitReward(target, amount, attacker, source, options);
+    this.grantTokusatsuHeavyDamageResonance(target, amount, source, options);
     if (isLuckEmperor(target) && amount > 0) {
       if (amount >= target.maxHp * 0.2) {
         grantGachaLuck(target, 1, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), '承受重创');
       }
       if (attacker?.isTing) {
+        if (!hasStatus(target, GACHA_TRAP_GUARD_COOLDOWN)) {
+          target.gachaTingGuardTrapReady = true;
+        }
         grantGachaLuck(target, 1, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), '被小汀针对');
       }
     }
@@ -411,6 +629,9 @@ export class BattleEngine {
       return amount;
     }
     if (target.currentHp <= 0 && triggerGachaDeathSave(target, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), (fighter) => this.syncHpPct(fighter))) {
+      return amount;
+    }
+    if (target.currentHp <= 0 && this.triggerTokusatsuDefiance(target, options)) {
       return amount;
     }
     if (target.currentHp <= 0 && target.isTing && target.transformed && !target.isDead && !target.isDeadAnnounced) {
@@ -440,6 +661,148 @@ export class BattleEngine {
     return amount;
   }
 
+  activeFriendlySummonsFor(owner: Fighter): Fighter[] {
+    const ownerTeamId = this.getTeamId(owner);
+    return this.fighters.filter((fighter) =>
+      fighter.isSummon &&
+      fighter.summonerId === owner.id &&
+      this.isActiveCombatant(fighter) &&
+      this.getTeamId(fighter) === ownerTeamId,
+    );
+  }
+
+  activeFriendlySummonByBaseName(owner: Fighter, baseName: string): Fighter | undefined {
+    return this.activeFriendlySummonsFor(owner).find((fighter) => getSummonBaseName(fighter) === baseName);
+  }
+
+  activeOrdinaryFriendlySummons(owner: Fighter): Fighter[] {
+    return this.activeFriendlySummonsFor(owner).filter((fighter) => !isAdvancedSummonName(getSummonBaseName(fighter)));
+  }
+
+  applyGuardianDamage(
+    guardian: Fighter,
+    amount: number,
+    attacker: Fighter,
+    actionName: string,
+  ): number {
+    if (amount <= 0 || !this.isActiveCombatant(guardian)) return 0;
+    const actual = this.applyDamage(guardian, amount, 'skill', true, attacker, {
+      deferTransform: true,
+      actionName,
+      respectDefenses: false,
+    });
+    if (actual > 0) {
+      this.log('info', `🛡️ 【${actionName}】${guardian.name} 为护主承受 ${actual} 点反冲伤害！`);
+      this.flushDeferredDamageEvents(guardian);
+    }
+    if (guardian.currentHp <= 0 && !guardian.isDead && !guardian.isDeadAnnounced) {
+      this.markDefeated(guardian, { message: `💀 【${actionName}】${guardian.name} 为护住召唤师承受伤害，被 ${attacker.name} 击溃！`, killer: attacker });
+    }
+    return actual;
+  }
+
+  applyGachaTingGuardianEffects(
+    target: Fighter,
+    incomingAmount: number,
+    attacker: Fighter,
+  ): number {
+    let amount = incomingAmount;
+    const emit = (type: string, text: string) => this.log(type, text);
+    const lethal = amount >= target.currentHp;
+    const heavy = amount >= target.maxHp * 0.18;
+
+    const exodia = this.activeFriendlySummonByBaseName(target, '黑暗大法师');
+    if (lethal && exodia && !exodia.hasUsedExodiaGuard) {
+      exodia.hasUsedExodiaGuard = true;
+      refreshStatus(exodia, 'BKB', 2, 'exodia_seal_wall');
+      refreshStatus(exodia, 'SPELL_BLOCK', 2, 'exodia_seal_wall');
+      emit('crit', `🧙‍♂️ 【封印护壁】黑暗大法师 展开禁忌封印，直接无效化 ${attacker.name} 对 ${target.name} 的致死伤害！`);
+      target.gachaTingGuardTrapReady = false;
+      return 0;
+    }
+
+    const ra = this.activeFriendlySummonByBaseName(target, '翼神龙');
+    if (lethal && ra && !ra.hasUsedRaTingGuard) {
+      ra.hasUsedRaTingGuard = true;
+      const burnCost = Math.min(ra.currentHp - 1, Math.max(1, Math.floor(ra.maxHp * 0.24)));
+      const reducedTo = Math.max(0, target.currentHp - 1);
+      const blocked = Math.max(0, amount - reducedTo);
+      amount = reducedTo;
+      emit('crit', `☀️ 【太阳神护主】翼神龙 燃烧神力替 ${target.name} 抹去 ${blocked} 点致死伤害，将其强行保在 1 点生命！`);
+      if (burnCost > 0) this.applyGuardianDamage(ra, burnCost, attacker, '太阳神护主');
+      const retaliation = Math.max(1, Math.floor(ra.mag * 2.1 + ra.atk * 0.9));
+      const actualRetaliation = this.applyDamage(attacker, retaliation, 'skill', true, ra, {
+        deferTransform: true,
+        actionName: '太阳神护主',
+        respectDefenses: true,
+      });
+      if (actualRetaliation > 0) this.flushDeferredDamageEvents(attacker);
+      if (!hasStatus(attacker, 'BURN')) attacker.status.push({ type: 'BURN', duration: 2 });
+      emit('crit', `☀️ 【护主神炎】翼神龙 反灼 ${attacker.name}，实际造成 ${actualRetaliation} 点真实伤害！`);
+      if (attacker.currentHp <= 0 && !attacker.isDead && !attacker.isDeadAnnounced) {
+        this.markDefeated(attacker, { message: `💀 【太阳神护主】${attacker.name} 被翼神龙的护主神炎反噬击倒！`, killer: ra });
+      }
+      target.gachaTingGuardTrapReady = false;
+      return amount;
+    }
+
+    const ultimate = this.activeFriendlySummonByBaseName(target, '青眼究极龙');
+    if ((lethal || heavy) && ultimate && (ultimate.blueEyesUltimateGuardCount ?? 0) < 3 && !hasStatus(ultimate, GACHA_ULTIMATE_GUARD_COOLDOWN)) {
+      const block = Math.max(1, Math.floor(amount * (lethal ? 0.62 : 0.48)));
+      ultimate.blueEyesUltimateGuardCount = (ultimate.blueEyesUltimateGuardCount ?? 0) + 1;
+      ultimate.blueEyesUltimateStrain = (ultimate.blueEyesUltimateStrain ?? 0) + 1;
+      refreshStatus(ultimate, GACHA_ULTIMATE_GUARD_COOLDOWN, 2);
+      const guardDamage = Math.max(1, Math.floor(block * 0.85));
+      emit('buff', `🐉 【三首护主】青眼究极龙 第 ${ultimate.blueEyesUltimateGuardCount}/3 颗龙首替 ${target.name} 咬碎小汀攻势，分担 ${block} 点伤害！（融合负荷上升）`);
+      this.applyGuardianDamage(ultimate, guardDamage, attacker, '三首护主');
+      amount = Math.max(0, amount - block);
+      target.gachaTingGuardTrapReady = false;
+      return amount;
+    }
+
+    const blueEyes = this.activeFriendlySummonByBaseName(target, '青眼白龙');
+    if (blueEyes && !hasStatus(blueEyes, GACHA_BLUE_EYES_GUARD_COOLDOWN)) {
+      const block = Math.max(1, Math.floor(amount * 0.22));
+      refreshStatus(blueEyes, GACHA_BLUE_EYES_GUARD_COOLDOWN, 3);
+      refreshStatus(blueEyes, 'SPELL_BLOCK', 1, 'blue_eyes_guard');
+      emit('buff', `🐲 【白龙护主】青眼白龙 振翼护在 ${target.name} 身前，削去 ${block} 点来自 ${attacker.name} 的伤害！`);
+      this.applyGuardianDamage(blueEyes, Math.max(1, Math.floor(block * 0.8)), attacker, '白龙护主');
+      amount = Math.max(0, amount - block);
+      target.gachaTingGuardTrapReady = false;
+      return amount;
+    }
+
+    const ordinarySummons = this.activeOrdinaryFriendlySummons(target)
+      .sort((a, b) => (a.currentHp / a.maxHp) - (b.currentHp / b.maxHp));
+    let guard = ordinarySummons[0];
+    const trapCanFlip =
+      !guard &&
+      !hasStatus(target, GACHA_TRAP_GUARD_COOLDOWN) &&
+      (target.gachaTingGuardTrapReady || (target.gachaLuck ?? 0) >= 3 || lethal);
+    if (trapCanFlip) {
+      const spent = consumeGachaLuck(target, 1);
+      target.gachaTingGuardTrapReady = false;
+      refreshStatus(target, GACHA_TRAP_GUARD_COOLDOWN, 2);
+      emit('buff', `🪤 【护主陷阱】${target.name} ${spent > 0 ? `消耗 ${spent} 点欧气，` : ''}翻开预先覆盖的防御牌，呼叫替身挡刀！`);
+      this.executeSummonSkill(GACHA_TING_GUARD_TRAP_SUMMON, target, this.getTeamId(target));
+      guard = this.activeOrdinaryFriendlySummons(target)
+        .filter((summon) => getSummonBaseName(summon) === '护主栗子球')
+        .sort((a, b) => a.currentHp - b.currentHp)[0] ?? guard;
+    }
+
+    if (guard && Math.random() < (getSummonBaseName(guard) === '护主栗子球' ? 1 : 0.42)) {
+      const isTrapGuard = getSummonBaseName(guard) === '护主栗子球';
+      const block = Math.max(1, Math.floor(amount * (isTrapGuard ? 0.36 : 0.28)));
+      emit('buff', `🛡️ 【召唤物护主】${guard.name} 冲到 ${target.name} 身前，替召唤师分担 ${block} 点小汀伤害！`);
+      this.applyGuardianDamage(guard, block, attacker, '召唤物护主');
+      amount = Math.max(0, amount - block);
+      target.gachaTingGuardTrapReady = false;
+      return amount;
+    }
+
+    return amount;
+  }
+
   markDefeated(target: Fighter, options: DefeatOptions = {}): boolean {
     if (target.isDead || target.isDeadAnnounced) return false;
     if (triggerGachaDeathSave(target, (type, text) => this.log(type, text), (fighter) => this.syncHpPct(fighter))) return false;
@@ -452,10 +815,77 @@ export class BattleEngine {
     const shouldAwardKill = options.awardKill ?? true;
     if (shouldAwardKill && options.killer && options.killer.id !== target.id) {
       options.killer.stats.kills += 1;
+      this.grantGamerKillMomentum(options.killer, target);
+      this.grantWarThunderKillMomentum(options.killer, target);
+      this.grantTingCrocKillMomentum(options.killer, target);
+      this.grantGachaSummonRevenge(target, options.killer);
     }
     this.tryMorphlingSonRescue(target);
 
+    if (target.status.some((status) => status.type === 'VALO_ULT_RUN_IT_BACK')) {
+      target.currentHp = target.maxHp;
+      this.syncHpPct(target);
+      target.status = target.status.filter((status) => status.type !== 'VALO_ULT_RUN_IT_BACK');
+      target.isDead = false;
+      target.isDeadAnnounced = false;
+      target.defeatHooksResolved = false;
+      this.log('heal', `🔥 浴火重生！${target.name} 受到致命伤，触发【再火一回】，原地满血复活！`);
+    }
+
     return true;
+  }
+
+  grantWarThunderKillMomentum(killer: Fighter, target: Fighter): void {
+    if (!killer.isWT || killer.job !== 'WT_TOP_TIER' || !this.isActiveCombatant(killer)) return;
+
+    const before = killer.wtSpawnPoints ?? 0;
+    const current = grantWarThunderSpawnPoints(killer, 1);
+    killer.wtKillStreak = (killer.wtKillStreak ?? 0) + 1;
+    refreshStatus(killer, 'AIM', 1);
+    if (current > before) {
+      this.log('buff', `🪖 【战雷击杀收益】${killer.name} 击毁 ${target.name}，出生点 +${current - before}，火控进入短暂锁定！（当前 SP ${current}/${WT_SPAWN_POINT_MAX}）`);
+    } else {
+      this.log('buff', `🪖 【战雷击杀收益】${killer.name} 击毁 ${target.name}，出生点已满，火控进入短暂锁定！（当前 SP ${current}/${WT_SPAWN_POINT_MAX}）`);
+    }
+  }
+
+  grantTingCrocKillMomentum(killer: Fighter, target: Fighter): void {
+    if (!killer.isTing || !target.isGacha || !this.isActiveCombatant(killer)) return;
+
+    restoreZeroedStatsIfNeeded(killer);
+    const statusCountBeforeCleanse = killer.status.length;
+    killer.status = killer.status.filter((status) => !TING_CROC_KILL_CLEAN_STATUS_TYPES.has(status.type));
+    const cleansed = killer.status.length !== statusCountBeforeCleanse;
+    refreshStatus(killer, 'INVUL', 1, 'ting_croc_kill_embers');
+    refreshStatus(killer, 'BKB', 2, 'ting_croc_kill_embers');
+    refreshStatus(killer, 'SPELL_BLOCK', 1, 'ting_croc_kill_embers');
+    refreshStatus(killer, 'REGEN', 4);
+    const healed = healFighter(killer, Math.floor(killer.maxHp * 0.35));
+    const cleanseText = cleansed ? '，清除负面状态' : '';
+    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    this.log('buff', `🩸 【爆鳄余烬】${killer.name} 亲手击倒 ${target.name}，怨念回流${cleanseText}，${healText}，并获得爆鳄余烬护体、怨念抗性、法术抵挡与再生！`);
+  }
+
+  grantGachaSummonRevenge(summoner: Fighter, killer: Fighter): void {
+    if (!summoner.isGacha || !killer.isTing || !this.isActiveCombatant(killer)) return;
+
+    const advancedSummons = this.activeFriendlySummonsFor(summoner)
+      .filter((summon) => isAdvancedSummonName(getSummonBaseName(summon)) || summon.isAdvancedSummon)
+      .sort((a, b) => (b.atk + b.mag + b.spd) - (a.atk + a.mag + a.spd));
+    if (advancedSummons.length === 0) return;
+
+    for (const summon of advancedSummons) {
+      summon.atk = Math.floor(summon.atk * 1.08);
+      summon.mag = Math.floor(summon.mag * 1.08);
+      refreshStatus(summon, 'BKB', 1, 'summon_revenge_order');
+      refreshStatus(summon, 'REGEN', 2);
+    }
+
+    this.log('buff', `🧿 【召唤师遗产】${summoner.name} 被 ${killer.name} 击倒，${advancedSummons.length} 只高级召唤物继承最后指令，短暂强化并锁定复仇目标！`);
+    const leader = advancedSummons[0];
+    if (!leader || !this.isActiveCombatant(leader) || !this.isActiveCombatant(killer)) return;
+    this.log('skill', `🧿 【复仇指令】${leader.name} 响应 ${summoner.name} 的最后命令，立刻压制 ${killer.name}！`);
+    this.executeSkillAction(null, leader, killer, 1);
   }
 
   tryMorphlingSonRescue(fighter: Fighter): boolean {
@@ -538,6 +968,10 @@ export class BattleEngine {
   finishStep(spinalSwordRef: SpinalSwordRef): void {
     this.handleDeathsAndRevives(spinalSwordRef);
     this.resolveGachaInstantActions(spinalSwordRef);
+    this.resolveTokusatsuInstantActions(spinalSwordRef);
+    this.resolveChimeraInstantActions(spinalSwordRef);
+    this.resolveValorantInstantActions(spinalSwordRef);
+    this.resolveGamerInstantActions(spinalSwordRef);
     this.advanceGlobalTimedStatuses();
     runCharacterReentryHooks({ runtime: this.createCharacterHookRuntime() });
   }
@@ -570,6 +1004,142 @@ export class BattleEngine {
     }
 
     this.log('info', '⚠️ 欧气插队结算次数过多，本轮剩余插队已被中止以防止循环。');
+  }
+
+  resolveTokusatsuInstantActions(spinalSwordRef: SpinalSwordRef): void {
+    let safety = 0;
+    const maxInstantActions = Math.max(1, this.fighters.length);
+
+    while (safety < maxInstantActions) {
+      const actor = this.fighters.find((fighter) =>
+        fighter.tokusatsuInstantActionQueued &&
+        fighter.isTokusatsu &&
+        fighter.job === 'MIRACLE_MONSTER_BUJIN' &&
+        this.isActiveCombatant(fighter) &&
+        getSelectableTargets(this.createTargetingRuntime(), fighter).length > 0,
+      );
+      if (!actor) return;
+
+      safety += 1;
+      actor.tokusatsuInstantActionQueued = false;
+      this.fighters.forEach((fighter) => { fighter.isActing = false; });
+      actor.isActing = true;
+      this.handleSpinalSwordDrop(actor, spinalSwordRef);
+
+      this.log('skill', `🔥 【悲愿反扑】${actor.name} 借【悲愿不倒】抢回一个镜头，立刻发动怪兽形态反击！`);
+      const skillId = actor.jobData.skills.includes('bujin_monster_combo') ? 'bujin_monster_combo' : this.selectSkill(actor);
+      this.executeSkillAction(skillId, actor);
+      this.handleDeathsAndRevives(spinalSwordRef);
+    }
+
+    this.log('info', '⚠️ 刺猬人悲愿反扑结算次数过多，本轮剩余反扑已被中止以防止循环。');
+  }
+
+  resolveChimeraInstantActions(spinalSwordRef: SpinalSwordRef): void {
+    let safety = 0;
+    const maxInstantActions = Math.max(1, this.fighters.length);
+
+    while (safety < maxInstantActions) {
+      const actor = this.fighters.find((fighter) =>
+        fighter.chimeraInstantActionQueued &&
+        fighter.isSuccubus &&
+        fighter.transformed &&
+        this.isActiveCombatant(fighter) &&
+        getSelectableTargets(this.createTargetingRuntime(), fighter).length > 0,
+      );
+      if (!actor) return;
+
+      safety += 1;
+      actor.chimeraInstantActionQueued = false;
+      this.fighters.forEach((fighter) => { fighter.isActing = false; });
+      actor.isActing = true;
+      this.handleSpinalSwordDrop(actor, spinalSwordRef);
+
+      const pluginSkills = actor.jobData.skills.filter((skillId) =>
+        skillId.startsWith('chimera_') &&
+        skillId !== 'chimera_install' &&
+        skillId !== 'chimera_strike' &&
+        this.SKILLS[skillId],
+      );
+      const skillId = pluginSkills.length > 0
+        ? pluginSkills[Math.floor(Math.random() * pluginSkills.length)]
+        : 'chimera_strike';
+      this.log('skill', `🧬 【兽性苏醒】${actor.name} 的插件神经同时点火，立刻追加一次合成兽行动！`);
+      this.executeSkillAction(skillId ?? 'chimera_strike', actor, null, 1);
+      this.handleDeathsAndRevives(spinalSwordRef);
+    }
+
+    this.log('info', '⚠️ 克蕾儿兽性苏醒结算次数过多，本轮剩余追加行动已被中止以防止循环。');
+  }
+
+  resolveValorantInstantActions(spinalSwordRef: SpinalSwordRef): void {
+    let safety = 0;
+    const maxInstantActions = Math.max(1, this.fighters.length);
+
+    while (safety < maxInstantActions) {
+      const actor = this.fighters.find((fighter) =>
+        fighter.valoInstantActionQueued &&
+        fighter.job === 'VALO_JUNIOR' &&
+        this.isActiveCombatant(fighter) &&
+        getSelectableTargets(this.createTargetingRuntime(), fighter).length > 0,
+      );
+      if (!actor) return;
+
+      safety += 1;
+      actor.valoInstantActionQueued = false;
+      this.fighters.forEach((fighter) => { fighter.isActing = false; });
+      actor.isActing = true;
+      this.handleSpinalSwordDrop(actor, spinalSwordRef);
+
+      let skillId = 'valo_pre_fire';
+      if ((actor.crosshairFocus ?? 0) >= 9) {
+        actor.crosshairFocus = Math.max(0, (actor.crosshairFocus ?? 0) - 9);
+        skillId = 'valo_clutch_execute';
+        this.log('skill', `🧭 【再定位补枪】${actor.name} 击杀后立刻换位，用 9 层准星专注接上残局处决！`);
+      } else if ((actor.crosshairFocus ?? 0) >= 6) {
+        actor.crosshairFocus = Math.max(0, (actor.crosshairFocus ?? 0) - 6);
+        skillId = 'valo_clutch_headshot';
+        this.log('skill', `🧭 【再定位补枪】${actor.name} 击杀后拉开身位，用 6 层准星专注接上爆头线！`);
+      } else {
+        this.log('skill', `🧭 【再定位补枪】${actor.name} 击杀后快速换点，补出一发提前枪截停追击者！`);
+      }
+
+      this.executeSkillAction(skillId, actor, null, 1);
+      this.handleDeathsAndRevives(spinalSwordRef);
+    }
+
+    this.log('info', '⚠️ 瓦学妹再定位补枪次数过多，本轮剩余补枪已被中止以防止循环。');
+  }
+
+  resolveGamerInstantActions(spinalSwordRef: SpinalSwordRef): void {
+    let safety = 0;
+    const maxInstantActions = Math.max(1, this.fighters.length);
+
+    while (safety < maxInstantActions) {
+      const actor = this.fighters.find((fighter) =>
+        fighter.gamerInstantActionQueued &&
+        fighter.job === 'ALL_PLATFORM_CHAMPION' &&
+        this.isActiveCombatant(fighter) &&
+        getSelectableTargets(this.createTargetingRuntime(), fighter).length > 0,
+      );
+      if (!actor) return;
+
+      safety += 1;
+      actor.gamerInstantActionQueued = false;
+      this.fighters.forEach((fighter) => { fighter.isActing = false; });
+      actor.isActing = true;
+      this.handleSpinalSwordDrop(actor, spinalSwordRef);
+
+      let skillId = this.selectSkill(actor);
+      if (hasStatus(actor, 'GAMER_WORLD_STAGE') && !actor.hasUsedGamerChampionCombo && (actor.apm ?? 0) >= 5) {
+        skillId = 'gamer_world_combo';
+      }
+      this.log('skill', `🎮 【高光抢回合】${actor.name} 抓住变身/世界赛窗口，立刻追加一次冠军操作！`);
+      this.executeSkillAction(skillId, actor, null, 1);
+      this.handleDeathsAndRevives(spinalSwordRef);
+    }
+
+    this.log('info', '⚠️ 玄凝高光抢回合结算次数过多，本轮剩余操作已被中止以防止循环。');
   }
 
   advanceBunnyStyleClock(actor: Fighter): void {
@@ -831,11 +1401,12 @@ export class BattleEngine {
 
   applyLifestealEffects(
     user: Fighter,
+    target: Fighter,
     skill: SkillDefinition,
     actualDmg: number,
     hpBeforeDamage: number,
   ): void {
-    applyLifestealEffectsAction(this.createActionResolutionRuntime(), user, skill, actualDmg, hpBeforeDamage);
+    applyLifestealEffectsAction(this.createActionResolutionRuntime(), user, target, skill, actualDmg, hpBeforeDamage);
   }
 
   consumeAimAfterAttack(user: Fighter, skill: SkillDefinition): void {
@@ -886,6 +1457,9 @@ export class BattleEngine {
     this.turnCount += 1;
     if (this.turnCount === 501) {
       this.log('info', '⏳ 久战不决，战场进入疲劳阶段！所有伤害会随回合推进逐步提高，防止战斗无限拖延。');
+    }
+    if (this.turnCount === 901) {
+      this.log('info', '⏳ 战斗拖入深度疲劳阶段！久战者的防线开始崩坏，伤害提升速度加快。');
     }
 
     const actor = this.determineActor(alive);

@@ -32,8 +32,8 @@ export function hasStatus(fighter: Fighter, type: string): boolean {
   return fighter.status.some((s) => s.type === type);
 }
 
-export function addStatus(fighter: Fighter, type: string, duration: number): void {
-  fighter.status.push({ type, duration });
+export function addStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
+  fighter.status.push({ type, duration, ...(sourceId ? { sourceId } : {}) });
 }
 
 export function removeStatuses(fighter: Fighter, shouldRemove: (status: StatusEntry) => boolean): void {
