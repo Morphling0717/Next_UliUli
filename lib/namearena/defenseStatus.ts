@@ -161,7 +161,7 @@ const DEFENSE_STATUS_PROFILES: Record<string, DefenseStatusProfile> = {
     controlCleanseText: '⭐ 【GREAT MONSTER VICTORY】的星光回流护住 {target}，清掉了控制与沉默效果！',
   },
   tokusatsu_defiance: {
-    name: '悲愿不倒',
+    name: '悲愿抗性护层',
     invulText: '🔥 【悲愿不倒】让 {target} 强行锁住战线，避开了{source}！',
     attackInvulText: '🔥 【悲愿不倒】让 {target} 强行锁住战线，避开了 {user} 的攻击！',
     controlBlockText: '🔥 【悲愿不倒】让 {target} 拒绝退场，免疫了{effect}！',
@@ -365,6 +365,11 @@ function profileFor(status: StatusEntry, kind: DefenseStatusKind): DefenseStatus
   if (kind === 'SPELL_BLOCK') return DEFENSE_STATUS_PROFILES.generic_spell_block;
   if (kind === 'BKB') return DEFENSE_STATUS_PROFILES.generic_control_immunity;
   return DEFENSE_STATUS_PROFILES.generic_invul;
+}
+
+export function getDefenseStatusDisplayName(status: StatusEntry): string | undefined {
+  if (!isDefenseStatusType(status.type)) return undefined;
+  return profileFor(status, status.type).name;
 }
 
 function applyTemplate(template: string, vars: DefenseTemplateVars): string {

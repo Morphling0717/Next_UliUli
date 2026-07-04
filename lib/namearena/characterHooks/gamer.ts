@@ -205,14 +205,14 @@ export const gamerHook: CharacterHook = {
 
     const apmBeforeTransform = fighter.apm ?? 0;
     transform('ALL_PLATFORM_CHAMPION', `🎮 ${fighter.name} 血线跌破半场线，但操作没有断！${transformBonusText(apmBeforeTransform)}转职为【${ALL_PLATFORM_CHAMPION.name}】！`, () => {
-      fighter.maxHp = Math.max(3650, Math.min(4125, Math.floor(fighter.maxHp * 3.39)));
+      fighter.maxHp = Math.max(3650, Math.min(4125, Math.floor(fighter.maxHp * 3.38)));
       fighter.currentHp = fighter.maxHp;
-      fighter.atk = scaleStat(fighter.atk, 4.66, 262);
-      fighter.mag = scaleStat(fighter.mag, 4.66, 262);
-      fighter.def = scaleStat(fighter.def, 4.28, 204);
-      fighter.res = scaleStat(fighter.res, 4.28, 204);
-      fighter.spd = scaleStat(fighter.spd, 4.4, 204);
-      fighter.agl = scaleStat(fighter.agl, 4.4, 204);
+      fighter.atk = scaleStat(fighter.atk, 4.64, 262);
+      fighter.mag = scaleStat(fighter.mag, 4.64, 262);
+      fighter.def = scaleStat(fighter.def, 4.26, 203);
+      fighter.res = scaleStat(fighter.res, 4.26, 203);
+      fighter.spd = scaleStat(fighter.spd, 4.38, 203);
+      fighter.agl = scaleStat(fighter.agl, 4.38, 203);
       fighter.wis = scaleStat(fighter.wis, 3.9, 230);
       fighter.apm = Math.min(MAX_APM, Math.max(7, apmBeforeTransform + 3));
       fighter.gamerMastery = Math.max(fighter.gamerMastery ?? 0, 1);
@@ -223,7 +223,7 @@ export const gamerHook: CharacterHook = {
       fighter.hasUsedGamerTransformAction = true;
 
       fighter.status = fighter.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
-      refreshStatus(fighter, 'BKB', 2, 'gamer_clutch_focus');
+      refreshStatus(fighter, 'BKB', 1, 'gamer_clutch_focus');
       refreshStatus(fighter, 'REGEN', 2);
       refreshStatus(fighter, 'SPELL_BLOCK', 1, 'gamer_clutch_focus');
       if (apmBeforeTransform >= 5) refreshStatus(fighter, 'AIM', 2);

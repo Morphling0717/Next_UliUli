@@ -161,6 +161,8 @@ function getSummonBaseName(fighter: Fighter): string {
 
 const TING_CROC_KILL_CLEAN_STATUS_TYPES = new Set(REVIVE_CLEAN_STATUS_TYPES);
 const TOKUSATSU_DEFIANCE_CLEAN_STATUS_TYPES = new Set(REVIVE_CLEAN_STATUS_TYPES);
+const ACTIVE_DEATH_SAVE_STATUS_TYPES = new Set(['TING_DEFIANCE', 'TOKUSATSU_DEFIANCE']);
+const TING_DEFIANCE_DURATION = 3;
 const GACHA_BLUE_EYES_GUARD_COOLDOWN = 'GACHA_BLUE_EYES_GUARD_COOLDOWN';
 const GACHA_ULTIMATE_GUARD_COOLDOWN = 'GACHA_ULTIMATE_GUARD_COOLDOWN';
 const GACHA_TRAP_GUARD_COOLDOWN = 'GACHA_TRAP_GUARD_COOLDOWN';
@@ -378,15 +380,29 @@ export class BattleEngine {
     target.tokusatsuInstantActionQueued = true;
     restoreZeroedStatsIfNeeded(target);
     target.status = target.status.filter((status) => !TOKUSATSU_DEFIANCE_CLEAN_STATUS_TYPES.has(status.type));
-    refreshStatus(target, 'TOKUSATSU_DEFIANCE', 2);
+    refreshStatus(target, 'TOKUSATSU_DEFIANCE', 1);
     refreshStatus(target, 'BKB', 1, 'tokusatsu_defiance');
     refreshStatus(target, 'REGEN', 2);
-    target.currentHp = Math.max(1, Math.floor(target.maxHp * 0.15));
-    target.atk = Math.floor(target.atk * 1.03);
-    target.mag = Math.floor(target.mag * 1.03);
-    target.spd = Math.floor(target.spd * 1.02);
+    target.currentHp = Math.max(1, Math.floor(target.maxHp * 0.13));
+    target.atk = Math.floor(target.atk * 1.02);
+    target.mag = Math.floor(target.mag * 1.02);
+    target.spd = Math.floor(target.spd * 1.01);
     this.syncHpPct(target);
     this.queueOrLogDamageEvent(target, options, 'buff', `🔥 【悲愿不倒】${target.name} 的奇迹怪兽武刃拒绝退场！强行恢复到 ${target.currentHp}/${target.maxHp}，清除异常并准备立刻反扑！`);
+    return true;
+  }
+
+  rewriteActiveDeathSaveDamage(target: Fighter, options: DamageApplicationOptions): boolean {
+    const activeSave = target.status.find((status) => ACTIVE_DEATH_SAVE_STATUS_TYPES.has(status.type));
+    if (!activeSave || target.isDead || target.isDeadAnnounced) return false;
+
+    target.currentHp = 1;
+    this.syncHpPct(target);
+    if (activeSave.type === 'TING_DEFIANCE') {
+      this.queueOrLogDamageEvent(target, options, 'info', `🩸 ${target.name} 仍处于【不甘倒下】，怨念把致死伤害强行压回 1 点生命！`);
+    } else {
+      this.queueOrLogDamageEvent(target, options, 'info', `🔥 ${target.name} 仍处于【悲愿不倒】，奇迹怪兽武刃把致死伤害强行压回 1 点生命！`);
+    }
     return true;
   }
 
@@ -631,6 +647,9 @@ export class BattleEngine {
     if (target.currentHp <= 0 && triggerGachaDeathSave(target, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), (fighter) => this.syncHpPct(fighter))) {
       return amount;
     }
+    if (target.currentHp <= 0 && this.rewriteActiveDeathSaveDamage(target, options)) {
+      return amount;
+    }
     if (target.currentHp <= 0 && this.triggerTokusatsuDefiance(target, options)) {
       return amount;
     }
@@ -639,7 +658,7 @@ export class BattleEngine {
       if (hasActiveDefiance || !target.hasTriggeredTingDefiance) {
         target.currentHp = 1;
         if (!hasActiveDefiance) {
-          target.status.push({ type: 'TING_DEFIANCE', duration: 3 });
+          target.status.push({ type: 'TING_DEFIANCE', duration: TING_DEFIANCE_DURATION });
         }
         if (!target.hasTriggeredTingDefiance) {
           target.hasTriggeredTingDefiance = true;
@@ -954,7 +973,7 @@ export class BattleEngine {
   }
 
   determineActor(alive: Fighter[]): Fighter | null {
-    return determineActor(alive);
+    return determineActor(alive, this.createTurnFlowRuntime());
   }
 
   handleSelfTimedStatusExpiry(actor: Fighter, type: string): void {
@@ -962,7 +981,7 @@ export class BattleEngine {
   }
 
   advanceGlobalTimedStatuses(): void {
-    advanceGlobalTimedStatuses(this.fighters, this.turnCount);
+    advanceGlobalTimedStatuses(this.fighters, this.turnCount, (type, text) => this.log(type, text));
   }
 
   finishStep(spinalSwordRef: SpinalSwordRef): void {

@@ -283,6 +283,9 @@ export interface SkillContext {
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   flushDeferredDamageEvents?: () => void;
+  queuePreResolutionLog?: (type: string, text: string) => void;
+  /** Whether the current primary target had already entered phase 2 before this skill's damage landed. */
+  targetWasTransformedBeforeDamage?: boolean;
   triggerDepth: number;
   executeSkillAction: (
     id: string | null,
@@ -418,6 +421,7 @@ export interface BattleEngineData {
   GACHA_SSR_POOL: GachaEntry[];
   EXODIA_CARD: GachaEntry;
   CHIMERA_PLUGIN_POOL?: GachaEntry[];
+  SUCCUBUS_COUNTER_POOL?: GachaEntry[];
 }
 
 // ---------------------------------------------------------------------------

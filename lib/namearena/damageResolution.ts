@@ -36,13 +36,16 @@ export function calculateDamage(
     let def = (target.status.some((status) => status.type === 'FREEZE') || ignoreDefOverride || sexyTrueDamage)
       ? 0
       : (user.jobData?.name === '欧皇' ? Math.floor(target.def * 0.5) : target.def);
+    if (target.status.some((status) => status.type === 'VALO_CYPHER_REVEALED')) def = Math.floor(def * 0.68);
+    if (target.status.some((status) => status.type === 'BABY_WEAKNESS_MARK')) def = Math.floor(def * 0.62);
     if (target.status.some((status) => status.type === 'WT_ERA')) def = Math.floor(def * 2.0);
     dmg = Math.max(1, Math.floor((atk * (1 + Math.random() * 0.2) - def * 0.5) * (skill.mult ?? 1)));
     if (target.status.some((status) => status.type === 'LIQUID_BODY')) dmg = Math.floor(dmg * 0.5);
   }
 
   if (skill.tag === runtime.skillTags.MAG || skill.tag === runtime.skillTags.DEBUFF) {
-    const res = (ignoreDefOverride || sexyTrueDamage) ? 0 : (user.jobData?.name === '欧皇' ? Math.floor(target.res * 0.5) : target.res);
+    let res = (ignoreDefOverride || sexyTrueDamage) ? 0 : (user.jobData?.name === '欧皇' ? Math.floor(target.res * 0.5) : target.res);
+    if (target.status.some((status) => status.type === 'BABY_WEAKNESS_MARK')) res = Math.floor(res * 0.62);
     dmg = Math.max(1, Math.floor((user.mag * weakOutputMultiplier * (1 + Math.random() * 0.2) - res * 0.5) * (skill.mult ?? 1)));
     if (skill.tag === runtime.skillTags.DEBUFF) dmg = Math.max(1, Math.floor(dmg * 0.5));
     if (target.status.some((status) => status.type === 'ETHEREAL')) {

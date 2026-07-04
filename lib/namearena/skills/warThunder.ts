@@ -1,6 +1,6 @@
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, isActiveCombatant, setCurrentHp } from '../combatState';
+import { healFighter, isActiveCombatant } from '../combatState';
 import {
   consumeSpellBlock,
   findDefenseStatus,
@@ -9,6 +9,7 @@ import {
   formatSpellBlock,
   grantStatus,
 } from '../defenseStatus';
+import { tryExecuteDefeat } from '../executionGuards';
 
 const { SKILL_TAGS } = Data;
 
@@ -26,7 +27,7 @@ const WT_CAS_COST = 5;
 const WT_PRECISE_CAS_COST = 4;
 
 const WT_CONTROL_CLEAN = new Set([
-  'STUN', 'FREEZE', 'CONFUSED', 'CHARMED', 'WT_SUPPRESS', 'WT_AIRBORNE', 'VALO_AIM_PUNCH', 'NEURAL_THEFT_DEBUFF', 'ZEROED',
+  'STUN', 'FREEZE', 'CONFUSED', 'CHARMED', 'WT_SUPPRESS', 'WT_AIRBORNE', 'AIRBORNE', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED',
 ]);
 
 const WT_MODULE_STATUSES = new Set(['WT_BREECH_DAMAGED', 'WT_TRACK_DAMAGED', 'WT_AMMO_EXPOSED', 'WT_SCOUTED']);
@@ -103,11 +104,9 @@ function maybeAmmoRack(ctx: SkillContext, target: Fighter, actualDmg: number, ac
   const threshold = exposed ? 0.34 : 0.24;
   const chance = exposed ? 0.34 : 0.18;
   if (target.hpPct >= threshold || Math.random() >= chance) return false;
-  setCurrentHp(target, 0);
-  return ctx.markDefeated(target, {
+  return tryExecuteDefeat(ctx, target, '弹药架殉爆', {
     message: `☠️ 【弹药架殉爆】${actionName} 精准命中 ${target.name} 的弹药区，炮塔飞上天！`,
     killer: ctx.user,
-    setHpZero: false,
   });
 }
 
@@ -243,7 +242,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       ctx.user.status = ctx.user.status.filter((status) =>
         !WT_CONTROL_CLEAN.has(status.type) &&
         !WT_MODULE_STATUSES.has(status.type) &&
-        !['BLIND', 'SILENCE', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'NEURAL_THEFT_DEBUFF', 'WEAK', 'ZEROED'].includes(status.type),
+        !['BLIND', 'SILENCE', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'WEAK', 'ZEROED'].includes(status.type),
       );
       refreshStatus(ctx.user, 'INVUL', 1, 'war_thunder_top_ricochet');
       refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'war_thunder_top_ricochet');
@@ -291,8 +290,10 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         exposeModule(ctx, ctx.target, 'WT_AMMO_EXPOSED', 3, `💥 【弹药架暴露】T-58 大口径碎甲让 ${ctx.target.name} 的内部弹药区完全暴露！`);
       }
       if (ctx.target.currentHp > 0 && ctx.target.hpPct < (hasStatus(ctx.target, 'WT_AMMO_EXPOSED') ? 0.34 : 0.26) && !ctx.target.transformed && Math.random() < 0.36) {
-        setCurrentHp(ctx.target, 0);
-        ctx.markDefeated(ctx.target, { message: `☠️ 【弹药架殉爆】轰！！！T-58 的动能直接引爆了 ${ctx.target.name} 的弹药架！炮塔被炸飞了十几米高！完成极硬核斩杀！`, killer: ctx.user, setHpZero: false });
+        tryExecuteDefeat(ctx, ctx.target, '弹药架殉爆', {
+          message: `☠️ 【弹药架殉爆】轰！！！T-58 的动能直接引爆了 ${ctx.target.name} 的弹药架！炮塔被炸飞了十几米高！完成极硬核斩杀！`,
+          killer: ctx.user,
+        });
       }
     },
   },
@@ -371,8 +372,10 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
           ? (hasLaserDesignation ? CAS_DESIGNATED_MAIN_AMMO_RACK_PCT : CAS_MAIN_AMMO_RACK_PCT)
           : (hasLaserDesignation ? CAS_DESIGNATED_SPLASH_AMMO_RACK_PCT : CAS_SPLASH_AMMO_RACK_PCT);
         if (!lethalOutcomeTriggered && actualDmg > 0 && e.currentHp > 0 && e.hpPct < ammoRackPct) {
-          setCurrentHp(e, 0);
-          lethalOutcomeTriggered = ctx.markDefeated(e, { message: `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`, killer: ctx.user, setHpZero: false }) || lethalOutcomeTriggered;
+          lethalOutcomeTriggered = tryExecuteDefeat(ctx, e, '弹药架殉爆', {
+            message: `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`,
+            killer: ctx.user,
+          }) || lethalOutcomeTriggered;
         }
 
         if (e.currentHp <= 0 && !e.isDeadAnnounced && !e.isDead) {

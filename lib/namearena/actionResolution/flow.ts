@@ -127,6 +127,7 @@ export function executeSkillAction(
   }
 
   const deferredTransformTargets: Fighter[] = [];
+  const queuedPreResolutionLogs: Array<{ type: string; text: string }> = [];
   const trackDeferredDamageTarget = (fighter: Fighter) => {
     if (!deferredTransformTargets.some((targetCandidate) => targetCandidate.id === fighter.id)) {
       deferredTransformTargets.push(fighter);
@@ -136,6 +137,12 @@ export function executeSkillAction(
     while (deferredTransformTargets.length > 0) {
       const damagedTarget = deferredTransformTargets.shift();
       if (damagedTarget) runtime.flushDeferredDamageEvents(damagedTarget);
+    }
+  };
+  const flushQueuedPreResolutionLogs = () => {
+    while (queuedPreResolutionLogs.length > 0) {
+      const entry = queuedPreResolutionLogs.shift();
+      if (entry) runtime.log(entry.type, entry.text);
     }
   };
 
@@ -148,6 +155,7 @@ export function executeSkillAction(
     incomingActionName,
     trackDeferredDamageTarget,
     flushDeferredDamageEvents,
+    (type, text) => queuedPreResolutionLogs.push({ type, text }),
   );
   const refundInterruptedGacha = (reason: string) => {
     if (!skill.isGacha) return;
@@ -235,6 +243,7 @@ export function executeSkillAction(
   }
 
   skillCtx.target = target;
+  skillCtx.targetWasTransformedBeforeDamage = !!target.transformed;
   const hpBeforeDamage = target.currentHp;
   const usesPreResolutionDamageLog = !isIntercepted && preMitigationDmg > 0 && canJokerRedirectSkillDamage(target, skill.tag, runtime);
 
@@ -256,6 +265,7 @@ export function executeSkillAction(
     }
     runtime.log(logType, (logType === 'crit' ? '💥 暴击！' : '') + msg.replace(/{USER}/g, user.name).replace(/{TARGET}/g, target.name).replace(/{VAL}/g, String(preMitigationDmg)));
   }
+  flushQueuedPreResolutionLogs();
 
   applySelfDamage(runtime, user, skill);
 

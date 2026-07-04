@@ -13,6 +13,7 @@ export function createSkillContext(
   actionName?: string,
   trackDeferredDamageTarget?: (fighter: Fighter) => void,
   flushDeferredDamageEvents?: () => void,
+  queuePreResolutionLog?: (type: string, text: string) => void,
 ): SkillContext {
   return {
     user,
@@ -40,6 +41,7 @@ export function createSkillContext(
     },
     markDefeated: (defeatTarget, options) => runtime.markDefeated(defeatTarget, options),
     flushDeferredDamageEvents,
+    queuePreResolutionLog,
     triggerDepth,
     executeSkillAction: (id, skillUser, skillTarget, depth) => runtime.executeSkillAction(id, skillUser, skillTarget, depth),
     executeSummonSkill: (skill, skillUser, userTeamId) => runtime.executeSummonSkill(skill, skillUser, userTeamId),

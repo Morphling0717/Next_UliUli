@@ -9,10 +9,10 @@ import type {
 import { healFighter } from './combatState';
 import {
   COMMON_NEGATIVE_STATUS_TYPES,
+  COUNTER_STANCE_STATUS_TYPES,
   isStatusType,
 } from './statusRules';
 import {
-  createStatusEntry,
   grantStatus,
   statusSourceFromSkill,
 } from './defenseStatus';
@@ -37,6 +37,17 @@ export interface SupportResolutionRuntime {
   log: (type: string, text: string) => void;
 }
 
+function isSpreadableDivaStatus(statusType: string): boolean {
+  if (statusType.startsWith('PLUG_')) return false;
+  if (statusType.startsWith('CTR_')) return false;
+  if (statusType.startsWith('STYLE_')) return false;
+  if (statusType.startsWith('WT_')) return false;
+  if (statusType.startsWith('GAMER_')) return false;
+  if (statusType.startsWith('VALO_')) return false;
+  if (statusType.startsWith('BABY_')) return false;
+  return true;
+}
+
 export function spreadDivaSupport(
   runtime: SupportResolutionRuntime,
   skill: SkillDefinition,
@@ -53,9 +64,8 @@ export function spreadDivaSupport(
       }
     }
     if (skill.tag === runtime.skillTags.BUFF) {
-      if (skill.status) {
-        if (skill.status.startsWith('PLUG_')) mate.status = mate.status.filter((status) => status.type !== skill.status);
-        mate.status.push(createStatusEntry(skill.status, skill.status === 'INVUL' ? 1 : 3, statusSourceFromSkill(skill)));
+      if (skill.status && isSpreadableDivaStatus(skill.status)) {
+        grantStatus(mate, skill.status, skill.status === 'INVUL' ? 1 : 3, statusSourceFromSkill(skill));
       }
       if (skill.statBuff) {
         const buff = skill.statBuff;
@@ -94,6 +104,16 @@ function getChimeraPluginSkillSet(runtime: SupportResolutionRuntime): Set<string
 function getChimeraPluginCount(runtime: SupportResolutionRuntime, target: Fighter): number {
   const chimeraPluginSkills = getChimeraPluginSkillSet(runtime);
   return target.jobData.skills.filter((skillId) => chimeraPluginSkills.has(skillId)).length;
+}
+
+function isChimeraPluginInstall(runtime: SupportResolutionRuntime, target: Fighter, skill: SkillDefinition): boolean {
+  if (!skill.status?.startsWith('PLUG_')) return false;
+  if (!target.isSuccubus || !target.transformed) return false;
+  return (runtime.data.CHIMERA_PLUGIN_POOL ?? []).some((entry) =>
+    entry.status === skill.status &&
+    !!entry.newSkill &&
+    entry.newSkill === skill.newSkill,
+  );
 }
 
 function activeEnemiesOf(runtime: SupportResolutionRuntime, user: Fighter): Fighter[] {
@@ -350,9 +370,17 @@ export function executeSupportSkill(
   let shouldCheckChimeraUltimate = false;
 
   if (skill.status) {
-    let duration = skill.status === 'INVUL' ? 1 : (skill.status.startsWith('CTR_') ? 5 : 3);
-    if (skill.status.startsWith('CTR_')) targetForBuff.status = targetForBuff.status.filter((status) => !status.type.startsWith('CTR_'));
-    if (skill.status.startsWith('PLUG_')) {
+    const isCounterStance = isStatusType(skill.status, COUNTER_STANCE_STATUS_TYPES);
+    const isPlugStatus = skill.status.startsWith('PLUG_');
+    const isValidChimeraPlug = isPlugStatus && isChimeraPluginInstall(runtime, targetForBuff, skill);
+    if (isPlugStatus && !isValidChimeraPlug) {
+      runtime.log('info', `⚠️ 【状态归属校验】${skill.name ?? '未知技能'} 试图给 ${targetForBuff.name} 安装克蕾儿插件【${runtime.data.STATUS_EFFECTS[skill.status]?.name ?? skill.status}】，已被拦截。`);
+      return true;
+    }
+
+    let duration = skill.status === 'INVUL' ? 1 : (isCounterStance ? 5 : 3);
+    if (isCounterStance) targetForBuff.status = targetForBuff.status.filter((status) => !isStatusType(status.type, COUNTER_STANCE_STATUS_TYPES));
+    if (isValidChimeraPlug) {
       if (skill.statBuff) applyStatBuff(targetForBuff, skill.statBuff);
       if (skill.newSkill && !targetForBuff.jobData.skills.includes(skill.newSkill)) {
         targetForBuff.jobData.skills.push(skill.newSkill);
@@ -362,7 +390,7 @@ export function executeSupportSkill(
       }
       duration = 999;
     }
-    if (skill.status.startsWith('PLUG_')) {
+    if (isValidChimeraPlug) {
       targetForBuff.status = targetForBuff.status.filter((status) => status.type !== skill.status);
     }
     grantStatus(targetForBuff, skill.status, duration, statusSourceFromSkill(skill));

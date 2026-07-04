@@ -133,6 +133,54 @@ function assertDataPools(): void {
   });
 }
 
+function assertStatusOwnership(): void {
+  const chimeraPluginStatuses = new Set(
+    (localProject.data.CHIMERA_PLUGIN_POOL ?? [])
+      .map((entry) => entry.status)
+      .filter((status): status is string => !!status),
+  );
+  const succubusCounterStatuses = new Set(
+    (localProject.data.SUCCUBUS_COUNTER_POOL ?? [])
+      .map((entry) => entry.status)
+      .filter((status): status is string => !!status),
+  );
+
+  const assertOwnedStatus = (status: string | undefined, owner: string): void => {
+    if (!status) return;
+    if (status.startsWith('PLUG_')) {
+      assert(chimeraPluginStatuses.has(status), `${owner} uses chimera plug status ${status} outside CHIMERA_PLUGIN_POOL`);
+    }
+    if (status.startsWith('CTR_')) {
+      assert(succubusCounterStatuses.has(status), `${owner} uses counter stance ${status} outside SUCCUBUS_COUNTER_POOL`);
+    }
+    if (status === 'WT_AIRBORNE') {
+      assert(owner.includes('warThunder') || owner.includes('WT_') || owner.includes('wt_'), `${owner} uses WT_AIRBORNE outside War Thunder; use AIRBORNE for generic knock-up`);
+    }
+  };
+
+  Object.entries(localProject.data).forEach(([key, value]) => {
+    if (!Array.isArray(value)) return;
+    value.forEach((entry, index) => {
+      if (!isGachaEntryLike(entry)) return;
+      const owner = `data.${key}[${index}]`;
+      if (key === 'CHIMERA_PLUGIN_POOL' || key === 'SUCCUBUS_COUNTER_POOL') return;
+      assertOwnedStatus(entry.status, owner);
+    });
+  });
+
+  Object.entries(localProject.skills).forEach(([skillId, skill]) => {
+    const owner = `skill ${skillId}`;
+    if (skillId === 'chimera_install' || skillId === 'succubus_counter') return;
+    assertOwnedStatus(skill.status, owner);
+    if (Array.isArray(skill.pool)) {
+      skill.pool.forEach((entry, index) => {
+        if (typeof entry === 'string') return;
+        assertOwnedStatus(entry.status, `${owner}.pool[${index}]`);
+      });
+    }
+  });
+}
+
 function assertExclusiveSkillOwnership(): void {
   const exclusiveSkills = new Map<string, Set<string>>([
     ['bujin_chair', new Set(['MIRACLE_BUJIN'])],
@@ -180,12 +228,14 @@ export function runRuleContractCases(): string[] {
     assertJobDefinition(jobId, job);
   });
   assertDataPools();
+  assertStatusOwnership();
   assertExclusiveSkillOwnership();
   assertSpecialMappings();
 
   return [
     'all jobs reference registered skills',
     'all skills and pool entries reference registered tags/statuses/jobs',
+    'exclusive status prefixes stay in their owning systems',
     'exclusive special skills stay on their allowed owners',
     'special fighter names map to registered starter jobs',
   ];

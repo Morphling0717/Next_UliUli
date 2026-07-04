@@ -1,11 +1,13 @@
 import type { DamageApplicationOptions, SkillDefinition, StatKey, StylePoolEntry } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, isActiveCombatant, setCurrentHp } from '../combatState';
+import { healFighter, isActiveCombatant } from '../combatState';
 import {
   createStatusEntry,
   findDefenseStatus,
   formatControlBlocked,
 } from '../defenseStatus';
+import { tryExecuteDefeat } from '../executionGuards';
+import { formatRemovedStatusList, getImportantRemovedStatuses } from '../statusRemovalLog';
 
 const { SKILL_TAGS } = Data;
 
@@ -238,11 +240,13 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         delete ctx.target.baseStatsForStyle;
       }
       const preservedDebuffs = new Set([
-        'STUN', 'FREEZE', 'CONFUSED', 'CHARMED', 'WATER_PRISON', 'WT_SUPPRESS', 'WT_AIRBORNE', 'WT_REPAIRING',
-        'POISON', 'BURN', 'BLIND', 'SILENCE', 'NO_HEAL', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'NEURAL_THEFT_DEBUFF',
+        'STUN', 'FREEZE', 'CONFUSED', 'CHARMED', 'WATER_PRISON', 'WT_SUPPRESS', 'WT_AIRBORNE', 'AIRBORNE', 'WT_REPAIRING',
+        'POISON', 'BURN', 'BLIND', 'SILENCE', 'NO_HEAL', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK',
         'ETHEREAL', 'ZEROED',
       ]);
+      const statusesBeforeZero = [...(ctx.target.status ?? [])];
       ctx.target.status = (ctx.target.status ?? []).filter((s) => preservedDebuffs.has(s.type));
+      const removedStatuses = getImportantRemovedStatuses(statusesBeforeZero, ctx.target.status);
 
       if (!(ctx.target.status ?? []).some((s) => s.type === 'ZEROED')) {
         ctx.target.baseStatsForZero = { atk: ctx.target.atk, def: ctx.target.def, res: ctx.target.res };
@@ -260,6 +264,9 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       refreshStatus(ctx.user.status, 'RABBIT_ZERO_HASTE', 2);
 
       ctx.log('skill', `🧮 【归零】降维打击！${ctx.target.name} 的所有正面状态被强行清空，攻击、防御、魔抗在接下来的回合内暴跌至 10%！\n✨ 同时 ${ctx.user.name} 吸收了算力，进入【归零超频】状态，接下来 2 次自身行动出手频率提升 30%！`);
+      if (removedStatuses.length > 0) {
+        ctx.log('info', `🧮 【归零】明确剥离了 ${ctx.target.name} 的${formatRemovedStatusList(removedStatuses, ctx.STATUS_EFFECTS)}，后续伤害将正常结算！`);
+      }
 
       return true;
     },
@@ -353,8 +360,10 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         realtimeHpPct < 0.5 &&
         !ctx.target.transformed
       ) {
-        setCurrentHp(ctx.target, 0);
-        ctx.markDefeated(ctx.target, { message: `☠️ 【斩杀处决】处于暴躁女人的极怒状态，${ctx.user.name} 用计算器将残血的 ${ctx.target.name} 直接砸成了肉泥！`, killer: ctx.user, setHpZero: false });
+        tryExecuteDefeat(ctx, ctx.target, '斩杀处决', {
+          message: `☠️ 【斩杀处决】处于暴躁女人的极怒状态，${ctx.user.name} 用计算器将残血的 ${ctx.target.name} 直接砸成了肉泥！`,
+          killer: ctx.user,
+        });
       }
     },
   },
@@ -379,7 +388,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
             a.wasZeroed = false;
             delete a.baseStatsForZero;
           }
-          return !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'NEURAL_THEFT_DEBUFF', 'ZEROED'].includes(s.type);
+          return !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED'].includes(s.type);
         });
         if (!(a.status ?? []).some((s) => s.type === 'NO_HEAL')) {
           const healed = healFighter(a, healAmt);

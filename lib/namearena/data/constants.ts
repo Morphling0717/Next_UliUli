@@ -43,6 +43,8 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   VALO_CLUTCH: { name: '残局模式', icon: '🎯', desc: '瓦学妹进入残局专注，枪线、身位与技能选择更偏向收割' },
   VALO_REPOSITION: { name: '再定位', icon: '🧭', desc: '击杀后快速换位，清除架枪笨重并准备补枪' },
   VALO_OPERATOR_PENALTY: { name: '冥驹笨重', icon: '🔭', desc: '本轮架枪后身位暴露，直到下一次行动前速度与闪避下降' },
+  VALO_HARBOR_WALL: { name: '海港水墙', icon: '🌊', desc: 'Harbor 水墙阻挡火力，短暂提升防御与魔抗' },
+  VALO_CYPHER_REVEALED: { name: '情报暴露', icon: '📷', desc: '被 Cypher 读取位置，防御下降' },
   NEURAL_THEFT_DEBUFF: { name: '被窃取情报', icon: '📷', desc: '闪避归零，受到伤害必暴击' },
 
   CTR_CHARM: { name: '魅惑反击', icon: '💕', desc: '受击时魅惑对手' },
@@ -67,6 +69,10 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
 
   VALO_FLASH: { name: '闪光曲球', icon: '🔆', desc: '被致盲，命中率大幅下降' },
   DIVA_SONG:  { name: '歌姬祝福', icon: '🎵', desc: '受到丝瓜uli的激励，属性提升' },
+  DIVA_HEADPHONE_GUARD: { name: '耳机隔音', icon: '🎧', desc: '隔绝噪音与干扰，魔抗大幅提升' },
+  DIVA_FINAL_CHORUS: { name: '燃曲压轴', icon: '🔥', desc: '歌姬压轴演出，全属性短暂提升' },
+  BABY_LOVE_BOTTLE: { name: '爱心奶瓶', icon: '🍼', desc: '丝瓜 baby 递上的专属支援，全属性提升' },
+  BABY_WEAKNESS_MARK: { name: '弱点标记', icon: '👀', desc: '被指出破绽，防御与魔抗下降' },
   Q_BUNNY_IDOL_AGL: { name: '爱豆闪避加成', icon: '✨', desc: '偶像打歌加护：闪避提升20%' },
   GAMER_WORLD_STAGE: { name: '世界赛模式', icon: '🏆', desc: 'APM 爆表后进入高压竞技状态，解锁终局连段' },
 
@@ -76,6 +82,9 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   SPELL_BLOCK: { name: '法术抵挡', icon: '🔵', desc: '抵挡下一次技能伤害或控制' },
   NO_HEAL: { name: '禁疗', icon: '🥀', desc: '无法恢复生命值' },
   GACHA_SUMMON_LIFESTEAL: { name: '吸血牌', icon: '🧛', desc: '召唤物造成的部分伤害会转化为牢鳄的治疗' },
+  GACHA_TRAP_GUARD_COOLDOWN: { name: '护主陷阱冷却', icon: '🪤', desc: '护主陷阱刚刚发动，短时间内不能再次翻开' },
+  GACHA_BLUE_EYES_GUARD_COOLDOWN: { name: '白龙护主冷却', icon: '🐲', desc: '青眼白龙刚刚护主，正在重整姿态' },
+  GACHA_ULTIMATE_GUARD_COOLDOWN: { name: '究极龙护主冷却', icon: '🐉', desc: '青眼究极龙刚刚分担伤害，龙首需要短暂恢复' },
   RA_PHOENIX: { name: '神不死鸟', icon: '🔥', desc: '翼神龙受到致死伤害时一场一次复燃反扑' },
 
   SLACKING: { name: '摸鱼', icon: '🐟', desc: '场外OB，无敌且无法被选中与行动' },
@@ -92,6 +101,7 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
 
   WT_SUPPRESS:  { name: '火力压制', icon: '🚧', desc: '被机炮弹雨压制，无法行动，闪避归零' },
   WT_AIRBORNE:  { name: '击飞', icon: '🚀', desc: '被大口径主炮物理击飞，重重摔落，眩晕一回合' },
+  AIRBORNE: { name: '击飞', icon: '🚀', desc: '被强力冲击击飞，眩晕一回合' },
   WT_REPAIRING: { name: '抢修中', icon: '🔧', desc: '长按F修车中，无法行动，受到伤害增加但疯狂回血' },
   WT_ERA:       { name: '爆反装甲', icon: '🧱', desc: '披挂爆炸反应装甲，获得高额减伤' },
   WT_SCOUTED:   { name: '战雷侦察', icon: '🔭', desc: '被热成像/测距仪锁定，M1 后续火力更容易命中与处决' },

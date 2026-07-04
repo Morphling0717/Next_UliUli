@@ -1,4 +1,4 @@
-import type { DamageApplicationOptions, DefeatOptions, Fighter, SpinalSwordRef, StatusEffectsMap } from './types';
+import type { DamageApplicationOptions, DefeatOptions, Fighter, SpinalSwordRef, StatusEffectsMap, StatusEntry } from './types';
 import { healFighter } from './combatState';
 import {
   BKB_BLOCKED_STATUS_TYPES,
@@ -52,7 +52,24 @@ export function handleSelfTimedStatusExpiry(
   runtime.log('info', `🧮 ${actor.name} 的【归零】状态结束，被降维的属性恢复了！`);
 }
 
-export function advanceGlobalTimedStatuses(fighters: Fighter[], turnCount: number): void {
+function handleGlobalTimedStatusExpiry(
+  log: StatusProcessingRuntime['log'] | undefined,
+  fighter: Fighter,
+  type: string,
+): void {
+  if (!log) return;
+  if (type === 'TING_DEFIANCE') {
+    log('info', `🩸 ${fighter.name} 的【不甘倒下】怨念耗尽，下一次致命伤将无法再被压回！`);
+  } else if (type === 'TOKUSATSU_DEFIANCE') {
+    log('info', `🔥 ${fighter.name} 的【悲愿不倒】奇迹余火熄灭，后续致命伤不会再被强行改写！`);
+  }
+}
+
+export function advanceGlobalTimedStatuses(
+  fighters: Fighter[],
+  turnCount: number,
+  log?: StatusProcessingRuntime['log'],
+): void {
   fighters.forEach((fighter) => {
     if (fighter.isDead) return;
 
@@ -69,6 +86,7 @@ export function advanceGlobalTimedStatuses(fighters: Fighter[], turnCount: numbe
       if (status.duration > 1) {
         return [{ ...status, duration: status.duration - 1, appliedTurn }];
       }
+      handleGlobalTimedStatusExpiry(log, fighter, status.type);
       return [];
     });
   });
@@ -90,10 +108,12 @@ function tryTokusatsuControlThrone(runtime: StatusProcessingRuntime, actor: Figh
 
 export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter): boolean {
   let canAct = true;
-  const newStatus: typeof actor.status = [];
+  const nextStatusEntries: Array<{ original: StatusEntry; next: StatusEntry }> = [];
+  const processedStatuses = new Set(actor.status);
+  const statusesToProcess = [...actor.status];
   const isSlacking = actor.status.some((status) => status.type === 'SYNERGY_SLACKING');
 
-  for (const status of actor.status) {
+  for (const status of statusesToProcess) {
     if (actor.currentHp <= 0 || actor.isDead || actor.isDeadAnnounced) break;
 
     if (isStatusType(status.type, CONTROL_STATUS_TYPES)) canAct = false;
@@ -112,7 +132,11 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
         break;
       }
     }
-    if (!isSlacking && ['PLUG_HEART', 'REGEN', 'STYLE_FAMILY'].includes(status.type) && actor.currentHp < actor.maxHp) {
+    const canAutoRecover =
+      status.type === 'REGEN' ||
+      status.type === 'STYLE_FAMILY' ||
+      (status.type === 'PLUG_HEART' && !!actor.isSuccubus && !!actor.transformed);
+    if (!isSlacking && canAutoRecover && actor.currentHp < actor.maxHp) {
       if (actor.status.some((candidate) => candidate.type === 'NO_HEAL')) {
         runtime.log('info', `🥀 ${actor.name} 处于禁疗状态，无法自动回复生命！`);
       } else {
@@ -124,15 +148,25 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
       }
     }
     const tickMode = getStatusTickMode(status.type);
+    const statusStillPresent = actor.status.includes(status);
+    if (!statusStillPresent) {
+      continue;
+    }
     if (tickMode !== 'self') {
-      newStatus.push(status);
+      nextStatusEntries.push({ original: status, next: status });
     } else if (status.duration > 1) {
-      newStatus.push({ ...status, duration: status.duration - 1 });
+      nextStatusEntries.push({ original: status, next: { ...status, duration: status.duration - 1 } });
     } else if (status.duration <= 1) {
       handleSelfTimedStatusExpiry(runtime, actor, status.type);
     }
   }
-  actor.status = newStatus;
+  const statusesAddedDuringProcessing = actor.status.filter((status) => !processedStatuses.has(status));
+  actor.status = [
+    ...nextStatusEntries
+      .filter(({ original }) => actor.status.includes(original))
+      .map(({ next }) => next),
+    ...statusesAddedDuringProcessing,
+  ];
   syncSpinalSwordState(runtime, actor, true);
 
   if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {

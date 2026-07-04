@@ -6,6 +6,7 @@ export const CONTROL_STATUS_TYPES: string[] = [
   'WATER_PRISON',
   'WT_SUPPRESS',
   'WT_AIRBORNE',
+  'AIRBORNE',
   'WT_REPAIRING',
 ];
 
@@ -25,7 +26,9 @@ export const COMMON_NEGATIVE_STATUS_TYPES: string[] = [
   'CHARMED',
   'VALO_FLASH',
   'VALO_AIM_PUNCH',
+  'VALO_CYPHER_REVEALED',
   'NEURAL_THEFT_DEBUFF',
+  'BABY_WEAKNESS_MARK',
 ];
 
 export const DOT_STATUS_TYPES: string[] = [
@@ -49,6 +52,19 @@ export const TRIGGER_TIMED_STATUS_TYPES: string[] = [
   'SPELL_BLOCK',
   'VALO_HOLDING_ANGLE',
   'WAIT_COUNTER',
+];
+
+export const COUNTER_STANCE_STATUS_TYPES: string[] = [
+  'CTR_CHARM',
+  'CTR_STUN',
+  'CTR_DRAIN',
+  'CTR_POISON',
+  'CTR_BURN',
+  'CTR_FREEZE',
+  'CTR_VOID',
+  'CTR_WEAK',
+  'CTR_CONFUSE',
+  'CTR_EXECUTE',
 ];
 
 export const PERMANENT_STATUS_TYPES: string[] = [
@@ -82,11 +98,14 @@ export const REVIVE_CLEAN_STATUS_TYPES: string[] = [
   'WATER_PRISON',
   'WT_SUPPRESS',
   'WT_AIRBORNE',
+  'AIRBORNE',
   'WT_REPAIRING',
   'WT_BREECH_DAMAGED',
   'WT_TRACK_DAMAGED',
   'WT_AMMO_EXPOSED',
   'WT_SCOUTED',
+  'VALO_CYPHER_REVEALED',
+  'BABY_WEAKNESS_MARK',
   'NO_HEAL',
   'WEAK',
   'ZEROED',

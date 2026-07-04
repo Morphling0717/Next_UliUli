@@ -73,6 +73,20 @@ export function runStatusClockCases(): string[] {
   }
 
   {
+    const waiter = makeFighter('等待反击者@A');
+    const mover = makeFighter('普通行动者@B');
+    waiter.spd = 999999;
+    mover.spd = 1;
+    waiter.status = [{ type: 'WAIT_COUNTER', duration: 4 }];
+    const { engine } = makeDeathEngine([waiter, mover]);
+    const alive = engine.fighters.filter((fighter) => engine.isActiveCombatant(fighter));
+    for (let i = 0; i < 20; i += 1) {
+      assert(engine.determineActor(alive)?.id === engine.fighters[1].id, 'waiting counter holders should yield active turns until someone attacks them');
+    }
+    cases.push('waiting counter holders yield active turn selection');
+  }
+
+  {
     const fighter = makeFighter('个人计时测试@A');
     fighter.status = [
       { type: 'STUN', duration: 2 },
@@ -87,6 +101,57 @@ export function runStatusClockCases(): string[] {
     assert(engine.fighters[0].status.find((status) => status.type === 'CTR_CHARM')?.duration === 4, 'non-passive counter stance should tick down if it is not triggered');
     assert(engine.fighters[0].stats.dmgTaken > 0, 'self-timed DoT should apply damage on owner turn');
     cases.push('self-timed statuses tick on owner turns');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const opponent = makeFighter('悲愿旁观者@B');
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for status processing defiance tests');
+    tokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    tokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    tokusatsu.transformed = true;
+    tokusatsu.maxHp = 4000;
+    localProject.setCurrentHp(tokusatsu, 100);
+    tokusatsu.status = [
+      { type: 'CONFUSED', duration: 2 },
+      { type: 'POISON', duration: 2 },
+    ];
+    const { engine } = makeDeathEngine([tokusatsu, opponent]);
+    const canAct = engine.processStatus(engine.fighters[0]);
+    const remainingTypes = engine.fighters[0].status.map((status) => status.type);
+
+    assert(!canAct, 'lethal DoT defiance should not turn a controlled self tick into a normal action');
+    assert(engine.fighters[0].currentHp > 0, 'Tokusatsu defiance should survive lethal DoT during status processing');
+    assert(!remainingTypes.includes('CONFUSED'), 'cleansed control should not be restored after lethal DoT defiance');
+    assert(!remainingTypes.includes('POISON'), 'cleansed DoT should not be restored after lethal DoT defiance');
+    assert(remainingTypes.includes('TOKUSATSU_DEFIANCE'), 'defiance status should remain visible after status processing');
+    assert(remainingTypes.includes('BKB'), 'newly granted control immunity should survive status processing');
+    assert(engine.fighters[0].tokusatsuInstantActionQueued, 'lethal DoT defiance should queue the instant counter');
+    cases.push('lethal DoT defiance does not restore cleansed statuses');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const opponent = makeFighter('持续伤害旁观者@B');
+    const grudgeJob = localProject.jobs.GRUDGE_SUICIDER;
+    assert(grudgeJob, 'GRUDGE_SUICIDER job should exist for active defiance status tests');
+    ting.job = 'GRUDGE_SUICIDER';
+    ting.jobData = JSON.parse(JSON.stringify(grudgeJob)) as typeof grudgeJob;
+    ting.transformed = true;
+    ting.maxHp = 3700;
+    localProject.setCurrentHp(ting, 1);
+    ting.status = [
+      { type: 'TING_DEFIANCE', duration: 3 },
+      { type: 'BURN', duration: 2 },
+    ];
+    const { engine, logs } = makeDeathEngine([ting, opponent]);
+    engine.processStatus(engine.fighters[0]);
+
+    assert(engine.fighters[0].currentHp === 1, 'active Ting defiance should keep lethal DoT at 1 HP');
+    assert(!engine.fighters[0].isDead && !engine.fighters[0].isDeadAnnounced, 'active Ting defiance should prevent DoT death');
+    assert(logs.some((entry) => entry.text.includes('不甘倒下') && entry.text.includes('压回 1 点生命')), 'active Ting defiance should explain the rewritten lethal DoT');
+    cases.push('active Ting defiance rewrites lethal DoT');
   }
 
   {

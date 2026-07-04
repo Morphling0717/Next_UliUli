@@ -154,7 +154,7 @@ function executeCrackConfirm(ctx: SkillContext, label = '破绽确认'): boolean
   const vulnerable =
     marked ||
     ctx.target.hpPct <= (boosted ? 0.48 : 0.35) ||
-    ctx.target.status.some((status) => ['STUN', 'FREEZE', 'NEURAL_THEFT_DEBUFF', 'VALO_AIM_PUNCH', 'BLIND'].includes(status.type));
+    ctx.target.status.some((status) => ['STUN', 'FREEZE', 'NEURAL_THEFT_DEBUFF', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'BABY_WEAKNESS_MARK', 'BLIND'].includes(status.type));
   const base = Math.max(ctx.user.atk, ctx.user.mag);
   const multiplier = boosted ? (vulnerable ? 3.45 : 2.62) : (vulnerable ? 2.85 : 2.14);
   const dmg = Math.floor(base * multiplier + ctx.user.wis * (boosted ? 1.0 : 0.66));

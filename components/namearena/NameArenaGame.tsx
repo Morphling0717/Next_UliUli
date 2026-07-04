@@ -5,9 +5,11 @@ import { BattleEngine } from "@/lib/namearena/battleEngine";
 import { cloneFighters, isActiveCombatant } from "@/lib/namearena/combatState";
 import { namerenaCore } from "@/lib/namearena/core";
 import { namerenaData } from "@/lib/namearena/data";
+import { getDefenseStatusDisplayName } from "@/lib/namearena/defenseStatus";
 import { generateNameArenaFighter } from "@/lib/namearena/fighterFactory";
 import { namerenaJobs } from "@/lib/namearena/jobs";
 import { namerenaSkills } from "@/lib/namearena/skills";
+import { getStatusTickMode } from "@/lib/namearena/statusRules";
 import type { Fighter, StatusEntry } from "@/lib/namearena/types";
 
 type BattleLogEntry = { type: string; text: string };
@@ -179,13 +181,589 @@ const Icons = {
   BarChart: (p: IconProps) => <Icon {...p} d="M18 20V10 M12 20V4 M6 20v-6" />,
 };
 
-function StatusIcon({ type }: { type: string }) {
-  const effect = namerenaData.STATUS_EFFECTS?.[type as keyof typeof namerenaData.STATUS_EFFECTS];
-  if (!effect) return null;
+type StatusCategory =
+  | 'control'
+  | 'defense'
+  | 'counter'
+  | 'damage'
+  | 'recovery'
+  | 'special'
+  | 'buff'
+  | 'debuff'
+  | 'unknown';
+
+type StatusDisplayInfo = {
+  type: string;
+  name: string;
+  icon: string;
+  desc: string;
+  sourceName?: string;
+  category: StatusCategory;
+  priority: number;
+  durationLabel?: string;
+  isUnknown: boolean;
+};
+
+type StatusDisplayItem = {
+  status: StatusEntry;
+  count: number;
+  info: StatusDisplayInfo;
+};
+
+type ResourceTone = 'luck' | 'tech' | 'combat' | 'support' | 'neutral';
+
+type ResourceChip = {
+  icon: string;
+  label: string;
+  value: string;
+  title: string;
+  tone: ResourceTone;
+  priority: number;
+};
+
+type StatTone = 'physical' | 'defense' | 'magic' | 'speed' | 'mental' | 'kill';
+
+type StatChip = {
+  key: string;
+  icon: string;
+  label: string;
+  tone: StatTone;
+  value: (fighter: Fighter) => number;
+};
+
+const STATUS_CHIP_LIMIT = 5;
+const RESOURCE_CHIP_LIMIT = 4;
+
+const STATUS_CATEGORY_STYLES: Record<StatusCategory, string> = {
+  control: 'border-purple-400/40 bg-purple-500/10 text-purple-100',
+  defense: 'border-sky-400/40 bg-sky-500/10 text-sky-100',
+  counter: 'border-orange-400/40 bg-orange-500/10 text-orange-100',
+  damage: 'border-red-400/40 bg-red-500/10 text-red-100',
+  recovery: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100',
+  special: 'border-amber-300/40 bg-amber-400/10 text-amber-100',
+  buff: 'border-indigo-300/40 bg-indigo-500/10 text-indigo-100',
+  debuff: 'border-slate-300/40 bg-slate-500/10 text-slate-100',
+  unknown: 'border-rose-300/40 bg-rose-500/10 text-rose-100',
+};
+
+const RESOURCE_TONE_STYLES: Record<ResourceTone, string> = {
+  luck: 'border-yellow-300/40 bg-yellow-400/10 text-yellow-100',
+  tech: 'border-cyan-300/40 bg-cyan-400/10 text-cyan-100',
+  combat: 'border-red-300/40 bg-red-400/10 text-red-100',
+  support: 'border-emerald-300/40 bg-emerald-400/10 text-emerald-100',
+  neutral: 'border-slate-300/30 bg-slate-700/40 text-slate-200',
+};
+
+const STAT_TONE_STYLES: Record<StatTone, string> = {
+  physical: 'border-red-300/25 bg-red-400/5 text-red-100',
+  defense: 'border-sky-300/25 bg-sky-400/5 text-sky-100',
+  magic: 'border-violet-300/25 bg-violet-400/5 text-violet-100',
+  speed: 'border-amber-300/25 bg-amber-400/5 text-amber-100',
+  mental: 'border-pink-300/25 bg-pink-400/5 text-pink-100',
+  kill: 'border-rose-300/30 bg-rose-400/10 text-rose-100',
+};
+
+const STAT_CHIPS: StatChip[] = [
+  { key: 'atk', icon: '🗡️', label: '攻击', tone: 'physical', value: (fighter) => fighter.atk },
+  { key: 'def', icon: '🛡️', label: '防御', tone: 'defense', value: (fighter) => fighter.def },
+  { key: 'mag', icon: '🔮', label: '魔力', tone: 'magic', value: (fighter) => fighter.mag },
+  { key: 'res', icon: '💠', label: '魔抗', tone: 'defense', value: (fighter) => fighter.res },
+  { key: 'spd', icon: '⚡', label: '速度', tone: 'speed', value: (fighter) => fighter.spd },
+  { key: 'agl', icon: '🦶', label: '敏捷', tone: 'speed', value: (fighter) => fighter.agl },
+  { key: 'wis', icon: '🧠', label: '智力', tone: 'mental', value: (fighter) => fighter.wis },
+  { key: 'kills', icon: '☠️', label: '击杀', tone: 'kill', value: (fighter) => fighter.stats.kills },
+];
+
+const CONTROL_STATUS_TYPES = new Set([
+  'STUN',
+  'FREEZE',
+  'CONFUSED',
+  'CHARMED',
+  'SILENCE',
+  'WATER_PRISON',
+  'WT_SUPPRESS',
+  'WT_AIRBORNE',
+  'AIRBORNE',
+  'WT_REPAIRING',
+]);
+
+const DEFENSE_STATUS_TYPES = new Set([
+  'INVUL',
+  'BKB',
+  'SPELL_BLOCK',
+  'TING_DEFIANCE',
+  'TOKUSATSU_DEFIANCE',
+  'RA_PHOENIX',
+  'VALO_ULT_RUN_IT_BACK',
+  'VALO_HARBOR_WALL',
+]);
+
+const DAMAGE_STATUS_TYPES = new Set([
+  'BURN',
+  'POISON',
+  'WATER_PRISON',
+  'NO_HEAL',
+  'WEAK',
+  'ZEROED',
+  'VALO_AIM_PUNCH',
+  'VALO_CYPHER_REVEALED',
+  'NEURAL_THEFT_DEBUFF',
+  'BABY_WEAKNESS_MARK',
+  'WT_SCOUTED',
+  'WT_BREECH_DAMAGED',
+  'WT_TRACK_DAMAGED',
+  'WT_AMMO_EXPOSED',
+]);
+
+const RECOVERY_STATUS_TYPES = new Set([
+  'REGEN',
+  'PLUG_HEART',
+  'GACHA_SUMMON_LIFESTEAL',
+  'STYLE_FAMILY',
+]);
+
+const SPECIAL_STATUS_TYPES = new Set([
+  'SYNERGY_SLACKING',
+  'SLACKING',
+  'SPINAL_SWORD',
+  'PUPPET_MASTER',
+  'GAMER_WORLD_STAGE',
+  'LIQUID_BODY',
+  'ETHEREAL',
+  'VALO_ULT_EMPRESS',
+  'VALO_CLUTCH',
+  'VALO_REPOSITION',
+  'VALO_OPERATOR_PENALTY',
+  'RABBIT_CALC_HASTE',
+  'RABBIT_ZERO_HASTE',
+  'GACHA_TRAP_GUARD_COOLDOWN',
+  'GACHA_BLUE_EYES_GUARD_COOLDOWN',
+  'GACHA_ULTIMATE_GUARD_COOLDOWN',
+  'WT_ERA',
+]);
+
+const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
+  SYNERGY_SLACKING: 0,
+  SLACKING: 0,
+  STUN: 5,
+  FREEZE: 6,
+  CHARMED: 7,
+  CONFUSED: 8,
+  WATER_PRISON: 9,
+  WT_SUPPRESS: 10,
+  WT_AIRBORNE: 11,
+  AIRBORNE: 11,
+  WT_REPAIRING: 12,
+  TING_DEFIANCE: 18,
+  TOKUSATSU_DEFIANCE: 19,
+  INVUL: 20,
+  SPELL_BLOCK: 21,
+  BKB: 22,
+  VALO_ULT_RUN_IT_BACK: 23,
+  RA_PHOENIX: 24,
+  WAIT_COUNTER: 30,
+  COUNTER: 31,
+  SPINAL_SWORD: 40,
+  PUPPET_MASTER: 41,
+  GAMER_WORLD_STAGE: 42,
+  WT_ERA: 43,
+  GACHA_TRAP_GUARD_COOLDOWN: 44,
+  GACHA_BLUE_EYES_GUARD_COOLDOWN: 44,
+  GACHA_ULTIMATE_GUARD_COOLDOWN: 44,
+  BURN: 60,
+  POISON: 61,
+  NO_HEAL: 62,
+};
+
+const getStatusCategory = (type: string, isUnknown: boolean): StatusCategory => {
+  if (isUnknown) return 'unknown';
+  if (CONTROL_STATUS_TYPES.has(type)) return 'control';
+  if (DEFENSE_STATUS_TYPES.has(type)) return 'defense';
+  if (type === 'COUNTER' || type === 'WAIT_COUNTER' || type.startsWith('CTR_')) return 'counter';
+  if (DAMAGE_STATUS_TYPES.has(type)) return 'damage';
+  if (RECOVERY_STATUS_TYPES.has(type)) return 'recovery';
+  if (
+    SPECIAL_STATUS_TYPES.has(type) ||
+    type.startsWith('PLUG_') ||
+    type.startsWith('STYLE_')
+  ) {
+    return 'special';
+  }
+  if (['RAGE', 'AIM', 'DIVA_SONG', 'DIVA_HEADPHONE_GUARD', 'DIVA_FINAL_CHORUS', 'BABY_LOVE_BOTTLE', 'Q_BUNNY_IDOL_AGL'].includes(type)) return 'buff';
+  if (['BLIND', 'VALO_FLASH'].includes(type)) return 'debuff';
+  return 'buff';
+};
+
+const getStatusPriority = (type: string, category: StatusCategory) => {
+  if (STATUS_PRIORITY_BY_TYPE[type] !== undefined) return STATUS_PRIORITY_BY_TYPE[type];
+  if (type.startsWith('CTR_')) return 32;
+  if (type.startsWith('STYLE_')) return 45;
+  if (type.startsWith('PLUG_')) return 50;
+  return {
+    control: 15,
+    defense: 25,
+    counter: 35,
+    special: 55,
+    damage: 65,
+    recovery: 75,
+    debuff: 85,
+    buff: 90,
+    unknown: 1,
+  }[category];
+};
+
+const getStatusDurationLabel = (status: StatusEntry) => {
+  if (status.duration >= 999 || getStatusTickMode(status.type) === 'permanent') return undefined;
+  if (status.duration <= 0) return undefined;
+  return String(status.duration);
+};
+
+const getStatusDisplayInfo = (status: StatusEntry): StatusDisplayInfo => {
+  const effect = namerenaData.STATUS_EFFECTS?.[status.type];
+  const sourceName = getDefenseStatusDisplayName(status);
+  const isUnknown = !effect;
+  const category = getStatusCategory(status.type, isUnknown);
+  const fallbackName = status.type.replace(/_/g, ' ');
+
   return (
-    <span title={effect.desc} className="animate-pulse cursor-help text-base">
-      {effect.icon}
+    {
+      type: status.type,
+      name: sourceName ?? effect?.name ?? fallbackName,
+      icon: effect?.icon ?? '❔',
+      desc: effect?.desc ?? '未登记的状态，请检查状态显示表',
+      sourceName,
+      category,
+      priority: getStatusPriority(status.type, category),
+      durationLabel: getStatusDurationLabel(status),
+      isUnknown,
+    }
+  );
+};
+
+const statusGroupKey = (status: StatusEntry) => `${status.type}:${status.sourceId ?? ''}`;
+
+const buildStatusDisplayItems = (statuses: StatusEntry[]): StatusDisplayItem[] => {
+  const grouped = new Map<string, StatusDisplayItem>();
+  statuses.forEach((status) => {
+    const key = statusGroupKey(status);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        status: { ...status },
+        count: 1,
+        info: getStatusDisplayInfo(status),
+      });
+      return;
+    }
+    existing.count += 1;
+    if (status.duration > existing.status.duration) {
+      existing.status = { ...status };
+      existing.info = getStatusDisplayInfo(status);
+    }
+  });
+
+  return [...grouped.values()].sort((a, b) =>
+    a.info.priority - b.info.priority ||
+    a.info.name.localeCompare(b.info.name, 'zh-Hans-CN') ||
+    a.info.type.localeCompare(b.info.type),
+  );
+};
+
+const formatStatusTitle = (item: StatusDisplayItem) => {
+  const lines = [
+    `${item.info.name}${item.count > 1 ? ` x${item.count}` : ''}`,
+    item.info.desc,
+  ];
+  if (item.info.durationLabel) lines.push(`剩余：${item.info.durationLabel} 回合`);
+  if (item.info.sourceName && item.info.sourceName !== item.info.name) {
+    lines.push(`来源：${item.info.sourceName}`);
+  }
+  if (item.info.isUnknown) lines.push(`原始状态：${item.info.type}`);
+  return lines.join('\n');
+};
+
+function StatusChip({ item, compact = false }: { item: StatusDisplayItem; compact?: boolean }) {
+  const label = compact ? `${item.info.name}${item.info.durationLabel ? ` ${item.info.durationLabel}` : ''}` : item.info.name;
+  return (
+    <span
+      title={formatStatusTitle(item)}
+      className={`inline-flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold leading-none shadow-sm ${STATUS_CATEGORY_STYLES[item.info.category]}`}
+    >
+      <span className="shrink-0 text-[12px] leading-none">{item.info.icon}</span>
+      <span className="min-w-0 truncate">{label}</span>
+      {!compact && item.info.durationLabel ? (
+        <span className="shrink-0 rounded bg-slate-950/40 px-1 font-mono text-[9px] leading-4 text-white/80">
+          {item.info.durationLabel}
+        </span>
+      ) : null}
+      {item.count > 1 ? (
+        <span className="shrink-0 rounded bg-slate-950/40 px-1 font-mono text-[9px] leading-4 text-white/80">
+          x{item.count}
+        </span>
+      ) : null}
     </span>
+  );
+}
+
+function StatusStrip({ statuses }: { statuses: StatusEntry[] }) {
+  const items = buildStatusDisplayItems(statuses);
+  if (items.length === 0) return null;
+
+  const visibleItems = items.slice(0, STATUS_CHIP_LIMIT);
+  const hiddenItems = items.slice(STATUS_CHIP_LIMIT);
+  const hiddenTitle = hiddenItems.map(formatStatusTitle).join('\n\n');
+
+  return (
+    <div className="mt-2 rounded-lg border border-slate-700/60 bg-slate-950/50 px-2 py-1.5 shadow-inner">
+      <div className="flex min-w-0 flex-wrap gap-1">
+        {visibleItems.map((item) => (
+          <StatusChip key={statusGroupKey(item.status)} item={item} />
+        ))}
+        {hiddenItems.length > 0 ? (
+          <span
+            title={hiddenTitle}
+            className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-500/40 bg-slate-800 px-1.5 text-[10px] font-bold text-slate-200 shadow-sm"
+          >
+            +{hiddenItems.length}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const getResourceTitle = (label: string, value: string, detail?: string) =>
+  detail ? `${label}：${value}\n${detail}` : `${label}：${value}`;
+
+const buildResourceChips = (fighter: Fighter, fighters: Fighter[]): ResourceChip[] => {
+  const chips: ResourceChip[] = [];
+  const activeSummons = fighters.filter((candidate) =>
+    candidate.isSummon &&
+    candidate.summonerId === fighter.id &&
+    !candidate.isDead &&
+    candidate.currentHp > 0,
+  );
+
+  if (fighter.isGacha) {
+    if (typeof fighter.gachaLuck === 'number') {
+      chips.push({
+        icon: '🍀',
+        label: '欧气',
+        value: `${fighter.gachaLuck}/5`,
+        title: getResourceTitle('欧气', `${fighter.gachaLuck}/5`, '满 5 后可触发欧皇行动窗口'),
+        tone: 'luck',
+        priority: 10,
+      });
+    }
+    if (activeSummons.length > 0) {
+      chips.push({
+        icon: '🃏',
+        label: '召唤',
+        value: String(activeSummons.length),
+        title: getResourceTitle('场上召唤物', String(activeSummons.length), activeSummons.map((summon) => summon.name).join('、')),
+        tone: 'support',
+        priority: 11,
+      });
+    }
+    if ((fighter.exodiaPieces?.length ?? 0) > 0) {
+      chips.push({
+        icon: '🧩',
+        label: '封印',
+        value: `${fighter.exodiaPieces?.length ?? 0}/5`,
+        title: getResourceTitle('黑暗大法师封印组件', `${fighter.exodiaPieces?.length ?? 0}/5`),
+        tone: 'luck',
+        priority: 12,
+      });
+    }
+  }
+
+  if (fighter.isGamer && typeof fighter.apm === 'number') {
+    chips.push({
+      icon: '🎮',
+      label: 'APM',
+      value: `${fighter.apm}/10`,
+      title: getResourceTitle('APM', `${fighter.apm}/10`, '玄凝的竞技资源，影响技能强化与终局连段'),
+      tone: 'tech',
+      priority: 20,
+    });
+  }
+
+  if (fighter.isSigua) {
+    if (typeof fighter.ultPoints === 'number') {
+      chips.push({
+        icon: '✨',
+        label: '大招',
+        value: String(fighter.ultPoints),
+        title: getResourceTitle('大招点数', String(fighter.ultPoints)),
+        tone: 'support',
+        priority: 30,
+      });
+    }
+    if (typeof fighter.economy === 'number') {
+      chips.push({
+        icon: '💳',
+        label: '经济',
+        value: String(fighter.economy),
+        title: getResourceTitle('经济', String(fighter.economy), '影响瓦学妹武器与战术选择'),
+        tone: 'tech',
+        priority: 31,
+      });
+    }
+    if (typeof fighter.crosshairFocus === 'number') {
+      chips.push({
+        icon: '🎯',
+        label: '专注',
+        value: String(fighter.crosshairFocus),
+        title: getResourceTitle('准星专注', String(fighter.crosshairFocus)),
+        tone: 'combat',
+        priority: 32,
+      });
+    }
+  }
+
+  if (fighter.isWT) {
+    if (typeof fighter.wtSpawnPoints === 'number') {
+      chips.push({
+        icon: '🚜',
+        label: 'SP',
+        value: String(fighter.wtSpawnPoints),
+        title: getResourceTitle('重生点', String(fighter.wtSpawnPoints), 'M1 的载具、维修与 CAS 资源'),
+        tone: 'combat',
+        priority: 40,
+      });
+    }
+    if (typeof fighter.wtFpeCharges === 'number') {
+      chips.push({
+        icon: '🧯',
+        label: '灭火',
+        value: String(fighter.wtFpeCharges),
+        title: getResourceTitle('灭火器', String(fighter.wtFpeCharges), '用于处理灼烧类异常'),
+        tone: 'support',
+        priority: 41,
+      });
+    }
+    if (typeof fighter.wtNbcsCharges === 'number') {
+      chips.push({
+        icon: '☣️',
+        label: '三防',
+        value: String(fighter.wtNbcsCharges),
+        title: getResourceTitle('三防处理', String(fighter.wtNbcsCharges), '用于处理毒素/污染类异常'),
+        tone: 'support',
+        priority: 42,
+      });
+    }
+  }
+
+  if (fighter.isTokusatsu) {
+    if (typeof fighter.tokusatsuThroneResonance === 'number' && fighter.tokusatsuThroneResonance > 0) {
+      chips.push({
+        icon: '🪑',
+        label: '王座',
+        value: String(fighter.tokusatsuThroneResonance),
+        title: getResourceTitle('武神王座共鸣', String(fighter.tokusatsuThroneResonance)),
+        tone: 'combat',
+        priority: 50,
+      });
+    }
+    if (typeof fighter.monsterTurns === 'number' && fighter.monsterTurns > 0) {
+      chips.push({
+        icon: '🦖',
+        label: '怪兽',
+        value: String(fighter.monsterTurns),
+        title: getResourceTitle('怪兽形态剩余行动', String(fighter.monsterTurns)),
+        tone: 'combat',
+        priority: 51,
+      });
+    }
+  }
+
+  if (fighter.isSuccubus) {
+    const plugCount = fighter.status.filter((status) => status.type.startsWith('PLUG_')).length;
+    if (plugCount > 0) {
+      chips.push({
+        icon: '🧬',
+        label: '插件',
+        value: `${plugCount}/8`,
+        title: getResourceTitle('奇美拉插件', `${plugCount}/8`),
+        tone: 'tech',
+        priority: 60,
+      });
+    }
+  }
+
+  if (fighter.isTing && (fighter.hasSpinalSword || fighter.spinalSwordTurns)) {
+    chips.push({
+      icon: '🦴',
+      label: '脊髓剑',
+      value: fighter.spinalSwordTurns ? String(fighter.spinalSwordTurns) : '持有',
+      title: getResourceTitle('脊髓剑', fighter.spinalSwordTurns ? `${fighter.spinalSwordTurns} 回合` : '持有中'),
+      tone: 'combat',
+      priority: 70,
+    });
+  }
+
+  if (fighter.isSummon) {
+    const summoner = fighters.find((candidate) => candidate.id === fighter.summonerId);
+    chips.push({
+      icon: '🔗',
+      label: '召唤者',
+      value: summoner?.name ?? '未知',
+      title: getResourceTitle('召唤者', summoner?.name ?? '未知'),
+      tone: 'neutral',
+      priority: 80,
+    });
+  }
+
+  return chips.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label, 'zh-Hans-CN'));
+};
+
+function ResourceStrip({ fighter, fighters }: { fighter: Fighter; fighters: Fighter[] }) {
+  const chips = buildResourceChips(fighter, fighters);
+  if (chips.length === 0) return null;
+
+  const visibleChips = chips.slice(0, RESOURCE_CHIP_LIMIT);
+  const hiddenChips = chips.slice(RESOURCE_CHIP_LIMIT);
+
+  return (
+    <div className="mt-2 flex min-w-0 flex-wrap gap-1">
+      {visibleChips.map((chip) => (
+        <span
+          key={`${chip.label}-${chip.value}`}
+          title={chip.title}
+          className={`inline-flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold leading-none shadow-sm ${RESOURCE_TONE_STYLES[chip.tone]}`}
+        >
+          <span className="shrink-0 text-[12px] leading-none">{chip.icon}</span>
+          <span className="shrink-0 text-slate-300/90">{chip.label}</span>
+          <span className="min-w-0 truncate font-mono text-white">{chip.value}</span>
+        </span>
+      ))}
+      {hiddenChips.length > 0 ? (
+        <span
+          title={hiddenChips.map((chip) => chip.title).join('\n\n')}
+          className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-500/40 bg-slate-800 px-1.5 text-[10px] font-bold text-slate-200 shadow-sm"
+        >
+          +{hiddenChips.length}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function StatGrid({ fighter }: { fighter: Fighter }) {
+  return (
+    <div className="mt-2 grid grid-cols-4 gap-1 rounded-lg bg-slate-900 p-1.5 text-[10px] font-bold leading-tight text-slate-300 shadow-inner">
+      {STAT_CHIPS.map((stat) => (
+        <span
+          key={stat.key}
+          title={stat.label}
+          className={`flex h-7 min-w-0 items-center justify-center gap-1 rounded-md border px-1 shadow-sm ${STAT_TONE_STYLES[stat.tone]}`}
+        >
+          <span className="shrink-0 text-[12px] leading-none">{stat.icon}</span>
+          <span className="hidden shrink-0 text-slate-400 md:inline">{stat.label}</span>
+          <span className="min-w-0 truncate font-mono text-white">{stat.value(fighter)}</span>
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -600,30 +1178,26 @@ export function NameArenaGame() {
                                         ${f.isHit ? 'animate-shake border-red-500/50 bg-red-900/30' : ''}
                                         ${f.isDead ? 'scale-95 border-slate-800 bg-slate-900 opacity-40 grayscale-[0.8]' : 'shadow-md'}`}
                                     >
-                                        <div className="flex gap-3 mb-2 relative">
-                                            <div className="absolute right-0 top-0 flex max-w-[55%] flex-wrap justify-end gap-1">{f.status.map((s: StatusEntry, i: number) => (
-                                            <StatusIcon key={`${f.id}-${s.type}-${i}`} type={s.type} />
-                                        ))}</div>
+                                        <div className="mb-2 flex min-w-0 gap-3">
                                             <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${f.color} flex items-center justify-center text-2xl shrink-0 shadow-inner border border-white/10`}>{f.jobData?.icon || '❓'}</div>
                                             <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-end mb-1">
-                                                    <span className="font-bold truncate text-sm md:text-base">
+                                                <div className="mb-1 flex min-w-0 items-end justify-between gap-2">
+                                                    <span className="min-w-0 truncate text-sm font-bold md:text-base">
                                                         {f.name}
                                                         {f.teamId && <span className="text-[10px] ml-1.5 bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 hidden sm:inline-block border border-slate-600 shadow-sm">@{f.teamId}</span>}
                                                     </span>
-                                                    <span className="text-xs font-mono font-bold text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded shadow-inner">{f.currentHp}/{f.maxHp}</span>
+                                                    <span className="shrink-0 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-bold text-slate-400 shadow-inner">{f.currentHp}/{f.maxHp}</span>
                                                 </div>
-                                                <div className="text-xs text-indigo-300 font-bold mb-1.5">{f.jobData?.name || '未知'}</div>
+                                                <div className="mb-1.5 truncate text-xs font-bold text-indigo-300">{f.jobData?.name || '未知'}</div>
                                                 <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800 shadow-inner">
                                                     <div className={`h-full transition-all duration-300 ease-out ${f.hpPct<0.3?'bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.8)]':'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.8)]'}`} style={{width:`${f.hpPct*100}%`}}/>
                                                 </div>
                                             </div>
                                         </div>
+                                        <StatusStrip statuses={f.status} />
+                                        <ResourceStrip fighter={f} fighters={fighters} />
                                         {!f.isDead && (
-                                            <div className="grid grid-cols-4 gap-1 text-[10px] text-slate-400 text-center bg-slate-900 p-1.5 rounded-lg leading-tight shadow-inner font-mono font-bold">
-                                                <span title="攻击">🗡️{f.atk}</span><span title="防御">🛡️{f.def}</span><span title="魔力">🔮{f.mag}</span><span title="魔抗">💠{f.res}</span>
-                                                <span title="速度">⚡{f.spd}</span><span title="敏捷">🦶{f.agl}</span><span title="智力">🧠{f.wis}</span><span title="击杀" className="text-red-400">☠️{f.stats.kills}</span>
-                                            </div>
+                                            <StatGrid fighter={f} />
                                         )}
                                     </div>
                                 ))}

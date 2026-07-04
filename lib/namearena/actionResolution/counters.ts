@@ -1,6 +1,7 @@
 import type { Fighter } from '../types';
 import { healFighter } from '../combatState';
 import { runCharacterWaitCounterHooks } from '../characterHooks';
+import { COUNTER_STANCE_STATUS_TYPES, isStatusType } from '../statusRules';
 import type { ActionResolutionRuntime } from './types';
 
 export function handleWaitCounter(
@@ -50,7 +51,7 @@ export function handleCounterStatus(
   target: Fighter,
   user: Fighter,
 ): boolean {
-  const counterStatus = target.status.find((status) => status.type.startsWith('CTR_'));
+  const counterStatus = target.status.find((status) => isStatusType(status.type, COUNTER_STANCE_STATUS_TYPES));
   if (!counterStatus) return false;
 
   const counterType = counterStatus.type;

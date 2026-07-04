@@ -1,6 +1,8 @@
 import type { DamageApplicationOptions, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { isActiveCombatant, setCurrentHp } from '../combatState';
+import { isActiveCombatant } from '../combatState';
+import { tryExecuteDefeat } from '../executionGuards';
+import { formatRemovedStatusList, getImportantRemovedStatuses } from '../statusRemovalLog';
 
 const { SKILL_TAGS } = Data;
 
@@ -21,8 +23,13 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
       ctx.target.status = (ctx.target.status ?? []).filter((s) => s.type !== 'WAIT_COUNTER' && !s.type.startsWith('CTR_'));
       ctx.target.status.push({ type: 'WATER_PRISON', duration: 3 });
       if (ctx.target.hpPct < 0.2) {
-        setCurrentHp(ctx.target, 0);
-        ctx.markDefeated(ctx.target, { message: `💀 【溺毙处决】${ctx.target.name} 在深渊水牢中彻底停止了呼吸...`, killer: ctx.user, setHpZero: false });
+        tryExecuteDefeat(ctx, ctx.target, '溺毙处决', {
+          message: `💀 【溺毙处决】${ctx.target.name} 在深渊水牢中彻底停止了呼吸...`,
+          killer: ctx.user,
+        }, {
+          ignoreActiveDeathSave: true,
+          blockFreshTransformLock: ctx.targetWasTransformedBeforeDamage === false && !!ctx.target.transformed,
+        });
       }
     },
   },
@@ -80,12 +87,20 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
   linken_sphere: { name: '林肯法球', tag: SKILL_TAGS.BUFF, status: 'SPELL_BLOCK', statusSource: 'morphling_linken_sphere', text: '🔵 庇护之音响起！{USER} 周身凝结出林肯法球的蔚蓝光幕！免疫一切恶意，神明的威压不容侵犯！' },
   khanda: { name: '绝刃', tag: SKILL_TAGS.PHYS, mult: 3.5, ignoreDef: true, alwaysCrit: true, alwaysHit: true, text: '🔪 绝影无形，一击必杀！{USER} 唤醒绝刃，将法术的毁灭与利刃的锋芒融为一体，对 {TARGET} 斩出无法躲避的致命暴击（{VAL}伤害）！' },
   nullifier: {
-    name: '否决挂件', tag: SKILL_TAGS.MAG, mult: 2.0, status: 'SILENCE',
+    name: '否决挂件', tag: SKILL_TAGS.MAG, mult: 2.0, status: 'SILENCE', alwaysHit: true,
     text: '📿 【万法归无】！{USER} 抛出否决挂件！{TARGET} 身上的所有神力、护盾与增益被瞬间强行剥夺！只能以凡人之躯承受降维打击！',
     onExecute: (ctx) => {
+      const statusesBeforeNullifier = [...(ctx.target.status ?? [])];
       ctx.target.status = (ctx.target.status ?? []).filter(
-        (s) => !['INVUL', 'BKB', 'RAGE', 'PLUG_HEAD', 'PLUG_ARM', 'PLUG_BACK', 'PLUG_HEART', 'PLUG_EYE', 'PLUG_SKIN', 'PLUG_LEG', 'PLUG_TAIL', 'SPELL_BLOCK', 'LIQUID_BODY', 'VALO_ULT_EMPRESS', 'VALO_ULT_RUN_IT_BACK', 'DIVA_SONG', 'COUNTER', 'WAIT_COUNTER'].includes(s.type) && !s.type.startsWith('CTR_'),
+        (s) => !['INVUL', 'BKB', 'RAGE', 'PLUG_HEAD', 'PLUG_ARM', 'PLUG_BACK', 'PLUG_HEART', 'PLUG_EYE', 'PLUG_SKIN', 'PLUG_LEG', 'PLUG_TAIL', 'SPELL_BLOCK', 'LIQUID_BODY', 'VALO_ULT_EMPRESS', 'VALO_ULT_RUN_IT_BACK', 'VALO_HARBOR_WALL', 'DIVA_SONG', 'DIVA_HEADPHONE_GUARD', 'DIVA_FINAL_CHORUS', 'BABY_LOVE_BOTTLE', 'TING_DEFIANCE', 'TOKUSATSU_DEFIANCE', 'COUNTER', 'WAIT_COUNTER'].includes(s.type) && !s.type.startsWith('CTR_') && !s.type.startsWith('STYLE_'),
       );
+      const removedStatuses = getImportantRemovedStatuses(statusesBeforeNullifier, ctx.target.status);
+      if (removedStatuses.some((status) => status.type === 'TOKUSATSU_DEFIANCE')) {
+        ctx.target.tokusatsuInstantActionQueued = false;
+      }
+      if (removedStatuses.length > 0) {
+        ctx.queuePreResolutionLog?.('info', `📿 【万法归无】剥夺了 ${ctx.target.name} 的${formatRemovedStatusList(removedStatuses, ctx.STATUS_EFFECTS)}，防护与反击链条被切断！`);
+      }
       return false;
     },
   },

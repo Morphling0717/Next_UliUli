@@ -1,5 +1,5 @@
 import type { Fighter, StatusEffectsMap } from './types';
-import { CONTROL_STATUS_TYPES, isStatusType } from './statusRules';
+import { CONTROL_STATUS_TYPES, COUNTER_STANCE_STATUS_TYPES, isStatusType } from './statusRules';
 import type { CharacterHookRuntime } from './characterHooks';
 import { shouldCharacterPreventWin } from './characterHooks';
 
@@ -13,20 +13,37 @@ export interface TurnFlowRuntime {
   isPassiveCharmCounter: (fighter: Fighter, counterType: string) => boolean;
 }
 
-export function determineActor(alive: Fighter[]): Fighter | null {
+function hasWaitingCounterStatus(
+  fighter: Fighter,
+  runtime: Pick<TurnFlowRuntime, 'isPassiveCharmCounter'>,
+): boolean {
+  return fighter.status.some((status) =>
+    status.type === 'WAIT_COUNTER' ||
+    (isStatusType(status.type, COUNTER_STANCE_STATUS_TYPES) && !runtime.isPassiveCharmCounter(fighter, status.type)),
+  );
+}
+
+export function determineActor(
+  alive: Fighter[],
+  runtime?: Pick<TurnFlowRuntime, 'isPassiveCharmCounter'>,
+): Fighter | null {
   if (alive.length === 0) return null;
+  const candidates = runtime
+    ? alive.filter((fighter) => !hasWaitingCounterStatus(fighter, runtime))
+    : alive;
+  const actorPool = candidates.length > 0 ? candidates : alive;
   const actionWeight = (fighter: Fighter) => {
     let multiplier = 1;
     if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.13;
     if (fighter.status.some((status) => status.type === 'RABBIT_ZERO_HASTE')) multiplier *= 1.26;
     return Math.max(1, Math.floor(fighter.spd * multiplier));
   };
-  let ticket = Math.random() * alive.reduce((sum, fighter) => sum + actionWeight(fighter), 0);
-  for (const fighter of alive) {
+  let ticket = Math.random() * actorPool.reduce((sum, fighter) => sum + actionWeight(fighter), 0);
+  for (const fighter of actorPool) {
     ticket -= actionWeight(fighter);
     if (ticket <= 0) return fighter;
   }
-  return alive[0];
+  return actorPool[0];
 }
 
 export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): boolean {
@@ -70,7 +87,7 @@ export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter): void {
 export function getWaitingCounterStatus(runtime: TurnFlowRuntime, actor: Fighter): string | null {
   const waitingCounter = actor.status.find((status) =>
     status.type === 'WAIT_COUNTER' ||
-    (status.type.startsWith('CTR_') && !runtime.isPassiveCharmCounter(actor, status.type)),
+    (isStatusType(status.type, COUNTER_STANCE_STATUS_TYPES) && !runtime.isPassiveCharmCounter(actor, status.type)),
   );
   return waitingCounter?.type ?? null;
 }

@@ -6,6 +6,7 @@ import {
   formatSpellBlock,
   grantStatus,
 } from '../defenseStatus';
+import { tryExecuteDefeat } from '../executionGuards';
 
 const { SKILL_TAGS } = Data;
 
@@ -85,7 +86,10 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         }
         ctx.flushDeferredDamageEvents?.();
         if (enemy.currentHp > 0 && enemy.hpPct <= 0.18) {
-          ctx.markDefeated(enemy, { message: `☠️ 【封印处决】${enemy.name} 被黑暗大法师的禁忌力量彻底抹除！`, killer: ctx.user, setHpZero: false });
+          tryExecuteDefeat(ctx, enemy, '封印处决', {
+            message: `☠️ 【封印处决】${enemy.name} 被黑暗大法师的禁忌力量彻底抹除！`,
+            killer: ctx.user,
+          });
         } else if (enemy.currentHp <= 0) {
           ctx.markDefeated(enemy, { message: `💀 【Exodia Obliterate】${enemy.name} 被黑暗大法师轰成了卡片碎屑！`, killer: ctx.user });
         }

@@ -1,5 +1,5 @@
 import { healFighter, syncHpPct } from '../combatState';
-import type { Fighter, SkillContext, SkillDefinition } from '../types';
+import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
 import {
   REVIVE_CLEAN_STATUS_TYPES,
@@ -28,7 +28,11 @@ const POSITIVE_STATUS_TYPES = new Set([
   'VALO_ULT_EMPRESS',
   'VALO_ULT_RUN_IT_BACK',
   'VALO_HOLDING_ANGLE',
+  'VALO_HARBOR_WALL',
   'DIVA_SONG',
+  'DIVA_HEADPHONE_GUARD',
+  'DIVA_FINAL_CHORUS',
+  'BABY_LOVE_BOTTLE',
   'Q_BUNNY_IDOL_AGL',
   'RABBIT_CALC_HASTE',
   'RABBIT_ZERO_HASTE',
@@ -94,15 +98,33 @@ function applyNamedDamage(
   trueDamage = true,
   respectDefenses = true,
 ): number {
-  if (!isActive(target) || amount <= 0) return 0;
-  const actual = ctx.applyDamage(target, amount, 'skill', trueDamage, ctx.user, {
+  return applyNamedDamageDetailed(ctx, target, amount, actionName, trueDamage, respectDefenses).actual;
+}
+
+function applyNamedDamageDetailed(
+  ctx: SkillContext,
+  target: Fighter,
+  amount: number,
+  actionName: string,
+  trueDamage = true,
+  respectDefenses = true,
+): { actual: number; redirected: boolean; defeatedDuringDamage: boolean } {
+  if (!isActive(target) || amount <= 0) {
+    return { actual: 0, redirected: false, defeatedDuringDamage: false };
+  }
+  const damageOptions: DamageApplicationOptions = {
     actionName,
     respectDefenses,
-  });
+  };
+  const actual = ctx.applyDamage(target, amount, 'skill', trueDamage, ctx.user, damageOptions);
   if (actual > 0) {
     ctx.user.stats.dmgDealt += actual;
   }
-  return actual;
+  return {
+    actual,
+    redirected: !!damageOptions.redirectedByJoker,
+    defeatedDuringDamage: !!damageOptions.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced,
+  };
 }
 
 function healAndSync(fighter: Fighter, amount: number): number {
@@ -122,6 +144,10 @@ function removeOnePositiveStatus(target: Fighter): string | null {
   const removable = target.status.find((status) => POSITIVE_STATUS_TYPES.has(status.type) || status.type.startsWith('CTR_') || status.type.startsWith('PLUG_') || status.type.startsWith('STYLE_'));
   if (!removable) return null;
   target.status = target.status.filter((status) => status !== removable);
+  if (removable.type === 'STYLE_SEXY' || removable.type === 'STYLE_EMPEROR') {
+    const stillHasCharmStyle = target.status.some((status) => status.type === 'STYLE_SEXY' || status.type === 'STYLE_EMPEROR');
+    if (!stillHasCharmStyle) target.status = target.status.filter((status) => status.type !== 'CTR_CHARM');
+  }
   return removable.type;
 }
 
@@ -246,7 +272,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       return true;
     },
   },
-  monster_punch: { name: '怪兽重拳', tag: SKILL_TAGS.PHYS, mult: 3.3, minDamagePct: 0.75, status: 'WT_AIRBORNE', text: '🦖 {USER} 挥动巨大的星形拳套，一拳将 {TARGET} 轰飞！造成 {VAL} 伤害并击飞！' },
+  monster_punch: { name: '怪兽重拳', tag: SKILL_TAGS.PHYS, mult: 3.3, minDamagePct: 0.75, status: 'AIRBORNE', text: '🦖 {USER} 挥动巨大的星形拳套，一拳将 {TARGET} 轰飞！造成 {VAL} 伤害并击飞！' },
   energy_crush: {
     name: '能量粉碎', tag: SKILL_TAGS.PHYS,
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN',
@@ -321,8 +347,8 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         if (actual > 0 && !enemy.status.some((status) => status.type === 'WEAK')) {
           enemy.status.push({ type: 'WEAK', duration: 2 });
         }
-        if (actual > 0 && Math.random() < 0.35 && !enemy.status.some((status) => status.type === 'WT_AIRBORNE')) {
-          enemy.status.push({ type: 'WT_AIRBORNE', duration: 1 });
+        if (actual > 0 && Math.random() < 0.35 && !enemy.status.some((status) => status.type === 'AIRBORNE')) {
+          enemy.status.push({ type: 'AIRBORNE', duration: 1 });
         }
         ctx.log(actual > 0 ? 'skill' : 'info', `📣 咆哮冲击命中 ${enemy.name}，实际造成 ${actual} 点真实伤害！`);
         markIfDefeated(ctx, enemy, '怪兽咆哮');
@@ -347,7 +373,8 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       ctx.user.jobData.skills = (ctx.user.jobData.skills ?? []).filter((s) => s !== 'great_monster_victory');
       const base = Math.floor(ctx.user.atk * 2.7 + ctx.user.mag * 1.05 + ctx.user.spd * 0.35);
       ctx.log('crit', `⭐ 【GREAT MONSTER VICTORY】${ctx.user.name} 怪兽拳套爆发星光，终结技锁定 ${ctx.target.name}！`);
-      const actual = applyNamedDamage(ctx, ctx.target, base, 'GREAT MONSTER VICTORY', true, false);
+      const damageResult = applyNamedDamageDetailed(ctx, ctx.target, base, 'GREAT MONSTER VICTORY', true, false);
+      const actual = damageResult.actual;
       if (!userCanContinue(ctx)) return true;
       const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.12 + actual * 0.12));
       refreshStatus(ctx.user, 'BKB', 1, 'tokusatsu_great_monster_victory');
@@ -357,8 +384,14 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
           ? `${ctx.user.name} 借星光回流恢复 ${healed} 点生命`
           : `${ctx.user.name} 生命已满，星光回流溢出`
         : '星光没有形成有效回流';
-      ctx.log(actual > 0 ? 'heal' : 'info', `⭐ 【GREAT MONSTER VICTORY】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`);
-      markIfDefeated(ctx, ctx.target, 'GREAT MONSTER VICTORY');
+      if (damageResult.redirected) {
+        ctx.log('info', `⭐ 【GREAT MONSTER VICTORY】星光被随机恶作剧转移，原目标没有承受终结技伤害；转移伤害已单独结算，${recovery}！`);
+      } else if (damageResult.defeatedDuringDamage) {
+        ctx.log(actual > 0 ? 'heal' : 'info', `⭐ 【GREAT MONSTER VICTORY】星光造成 ${actual} 点真实伤害并触发致死连锁，后续退场已单独结算；${recovery}！`);
+      } else {
+        ctx.log(actual > 0 ? 'heal' : 'info', `⭐ 【GREAT MONSTER VICTORY】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`);
+        markIfDefeated(ctx, ctx.target, 'GREAT MONSTER VICTORY');
+      }
       return true;
     },
   },

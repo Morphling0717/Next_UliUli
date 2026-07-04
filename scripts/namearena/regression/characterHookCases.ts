@@ -1,4 +1,4 @@
-import type { Fighter, SkillDefinition, StatKey } from '../../../lib/namearena/types';
+import type { Fighter, GachaEntry, SkillDefinition, StatKey } from '../../../lib/namearena/types';
 import {
   assert,
   localProject,
@@ -31,6 +31,13 @@ function chimeraInstallSkillByStatus(status: string): SkillDefinition {
   const plug = localProject.data.CHIMERA_PLUGIN_POOL?.find((entry) => entry.status === status);
   assert(plug, `Chimera plugin ${status} should exist`);
   return { name: '插件安装', ...plug } as SkillDefinition;
+}
+
+function poolSkillByStatus(poolKey: string, status: string, name: string): SkillDefinition {
+  const pool = localProject.data[poolKey] as GachaEntry[] | undefined;
+  const entry = pool?.find((candidate) => candidate.status === status);
+  assert(entry, `${poolKey} should contain ${status}`);
+  return { name, ...entry } as SkillDefinition;
 }
 
 export function runCharacterHookCases(): string[] {
@@ -451,7 +458,7 @@ export function runCharacterHookCases(): string[] {
     assert(actual === 250, `Tokusatsu throne should reduce active splash damage to 25%, got ${actual}`);
     assert(engineTokusatsu.counterUsed, 'Tokusatsu throne should be consumed by active splash damage');
     assert(engineTokusatsu.job === 'MIRACLE_MONSTER_BUJIN', `Tokusatsu active splash counter should transform to monster form, got ${engineTokusatsu.job}`);
-    assert(engineTokusatsu.res >= 130, `Tokusatsu monster form should raise resistance, got ${engineTokusatsu.res}`);
+    assert(engineTokusatsu.res >= 128, `Tokusatsu monster form should raise resistance, got ${engineTokusatsu.res}`);
     assert(logs.some((entry) => entry.text.includes('范围波及测试') && entry.text.includes('等待反击判定')), 'Tokusatsu active splash counter should explain the incoming active damage');
     cases.push('Tokusatsu throne catches active splash damage');
   }
@@ -485,6 +492,99 @@ export function runCharacterHookCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('悲愿不倒')), 'Tokusatsu defiance should log the lethal prevention');
     assert(logs.some((entry) => entry.text.includes('悲愿反扑')), 'Tokusatsu defiance should log the instant counter');
     cases.push('Tokusatsu monster defiance queues instant counter');
+  }
+
+  {
+    const morphling = makeFighter('水人@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const { engine, logs } = makeDeathEngine([morphling, tokusatsu]);
+    const engineMorphling = engine.fighters[0];
+    const engineTokusatsu = engine.fighters[1];
+    engineMorphling.mag = 1;
+    engineTokusatsu.maxHp = 4000;
+    localProject.setCurrentHp(engineTokusatsu, 700);
+    engineTokusatsu.status.push({ type: 'TOKUSATSU_DEFIANCE', duration: 2 });
+    engineTokusatsu.tokusatsuInstantActionQueued = true;
+    engineTokusatsu.transformed = true;
+
+    const prison = localProject.skills.abyssal_prison;
+    assert(prison?.afterExecute, 'abyssal_prison afterExecute should exist for execution guard tests');
+    const ctx = engine.createSkillContext(engineMorphling, engineTokusatsu, [engineTokusatsu], 0, '深渊水牢');
+    ctx.targetWasTransformedBeforeDamage = true;
+    prison.afterExecute(ctx, 1);
+
+    assert(engineTokusatsu.currentHp === 0, 'Abyssal prison execute should kill through active Tokusatsu defiance');
+    assert(engineTokusatsu.isDeadAnnounced, 'Abyssal prison execute should announce death through active death save');
+    assert(logs.some((entry) => entry.text.includes('溺毙处决') && entry.text.includes('彻底停止了呼吸')), 'Abyssal prison should log the waterman-only execution');
+    assert(!logs.some((entry) => entry.text.includes('溺毙处决') && entry.text.includes('保命机制')), 'Abyssal prison should not treat active Tokusatsu defiance as a blocker for waterman');
+    cases.push('Abyssal prison execute pierces active Tokusatsu defiance');
+  }
+
+  {
+    const morphling = makeFighter('水人@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const { engine, logs } = makeDeathEngine([morphling, tokusatsu]);
+    const engineMorphling = engine.fighters[0];
+    const engineTokusatsu = engine.fighters[1];
+    engineMorphling.mag = 1;
+    engineTokusatsu.maxHp = 4000;
+    engineTokusatsu.transformed = true;
+    localProject.setCurrentHp(engineTokusatsu, 700);
+
+    const prison = localProject.skills.abyssal_prison;
+    assert(prison?.afterExecute, 'abyssal_prison afterExecute should exist for fresh phase-lock tests');
+    const ctx = engine.createSkillContext(engineMorphling, engineTokusatsu, [engineTokusatsu], 0, '深渊水牢');
+    ctx.targetWasTransformedBeforeDamage = false;
+    prison.afterExecute(ctx, 1);
+
+    assert(engineTokusatsu.currentHp > 0, 'Abyssal prison execute should not bypass a fresh phase-2 transformation lock');
+    assert(!engineTokusatsu.isDead && !engineTokusatsu.isDeadAnnounced, 'Abyssal prison execute should leave fresh phase-lock targets alive');
+    assert(logs.some((entry) => entry.text.includes('溺毙处决') && entry.text.includes('阶段锁血')), 'Abyssal prison should explain that phase transition lock cannot be skipped');
+    cases.push('Abyssal prison execute preserves fresh transform lock');
+  }
+
+  {
+    const morphling = makeFighter('水人@A');
+    const target = makeFighter('普通目标@B');
+    const { engine, logs } = makeDeathEngine([morphling, target]);
+    const engineMorphling = engine.fighters[0];
+    const engineTarget = engine.fighters[1];
+    engineTarget.maxHp = 4000;
+    localProject.setCurrentHp(engineTarget, 700);
+
+    const prison = localProject.skills.abyssal_prison;
+    assert(prison?.afterExecute, 'abyssal_prison afterExecute should exist for normal execute tests');
+    const ctx = engine.createSkillContext(engineMorphling, engineTarget, [engineTarget], 0, '深渊水牢');
+    ctx.targetWasTransformedBeforeDamage = false;
+    prison.afterExecute(ctx, 1);
+
+    assert(engineTarget.currentHp === 0 && engineTarget.isDeadAnnounced, 'Abyssal prison execute should still kill normal non-transform targets');
+    assert(!logs.some((entry) => entry.text.includes('溺毙处决') && entry.text.includes('阶段锁血')), 'Abyssal prison should not report phase-lock protection for normal targets');
+    cases.push('Abyssal prison execute does not overprotect normal low-health targets');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const attacker = makeFighter('多段追击者@B');
+    const { engine, logs } = makeDeathEngine([tokusatsu, attacker]);
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for active Tokusatsu defiance tests');
+    const engineTokusatsu = engine.fighters[0];
+    const engineAttacker = engine.fighters[1];
+    engineTokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    engineTokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    engineTokusatsu.transformed = true;
+    engineTokusatsu.hasUsedTokusatsuDefiance = true;
+    engineTokusatsu.maxHp = 4160;
+    localProject.setCurrentHp(engineTokusatsu, 1);
+    engineTokusatsu.status.push({ type: 'TOKUSATSU_DEFIANCE', duration: 2 });
+
+    engine.applyDamage(engineTokusatsu, 9999, 'skill', true, engineAttacker, { actionName: '多段后续伤害' });
+
+    assert(engineTokusatsu.currentHp === 1, 'active Tokusatsu defiance should keep follow-up lethal damage at 1 HP');
+    assert(!engineTokusatsu.isDead && !engineTokusatsu.isDeadAnnounced, 'active Tokusatsu defiance should prevent immediate follow-up death');
+    assert(logs.some((entry) => entry.text.includes('悲愿不倒') && entry.text.includes('压回 1 点生命')), 'active Tokusatsu defiance should explain the rewritten follow-up lethal damage');
+    cases.push('Active Tokusatsu defiance rewrites follow-up lethal damage');
   }
 
   {
@@ -1259,6 +1359,48 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const sigua = makeFighter('丝瓜uli@A');
+    const teammate = makeFighter('玄凝@A');
+    const enemy = makeFighter('光环旁观者@B');
+    const { engine, logs } = makeDeathEngine([sigua, teammate, enemy]);
+    const singer = engine.fighters[0];
+    const ally = engine.fighters[1];
+    const allyAtkBefore = ally.atk;
+    const skill = poolSkillByStatus('DIVA_BUFF_POOL', 'DIVA_FINAL_CHORUS', '歌姬演唱');
+    const teamId = engine.getTeamId(singer);
+
+    engine.executeSupportSkill(skill, singer, null, teamId);
+    engine.spreadDivaSupport(skill, singer, teamId);
+
+    assert(singer.status.some((status) => status.type === 'DIVA_FINAL_CHORUS'), 'Diva final chorus should use a diva-owned status on the singer');
+    assert(ally.status.some((status) => status.type === 'DIVA_FINAL_CHORUS'), 'Diva aura should copy the diva-owned status to teammates');
+    assert(!engine.fighters.some((fighter) => fighter.status.some((status) => status.type.startsWith('PLUG_'))), 'Diva support should not grant chimera plug statuses');
+    assert(ally.atk > allyAtkBefore, 'Diva final chorus should apply its stat buff to teammates');
+    assert(logs.some((entry) => entry.text.includes('歌姬的光环')), 'Diva aura spread should still be logged');
+    cases.push('Diva support uses diva-owned status instead of chimera plug');
+  }
+
+  {
+    const sigua = makeFighter('丝瓜uli@A');
+    const enemy = makeFighter('插件旁观者@B');
+    const { engine, logs } = makeDeathEngine([sigua, enemy]);
+    const singer = engine.fighters[0];
+    const teamId = engine.getTeamId(singer);
+    const roguePlugSkill: SkillDefinition = {
+      name: '错误插件测试',
+      tag: 'buff',
+      status: 'PLUG_HEART',
+      text: '测试错误插件状态',
+    };
+
+    engine.executeSupportSkill(roguePlugSkill, singer, null, teamId);
+
+    assert(!singer.status.some((status) => status.type === 'PLUG_HEART'), 'Non-succubus support should not receive PLUG_HEART');
+    assert(logs.some((entry) => entry.text.includes('状态归属校验') && entry.text.includes('已被拦截')), 'Rogue plug status should be explicitly blocked');
+    cases.push('Rogue chimera plug status is blocked outside succubus plugin install');
+  }
+
+  {
     const succubus = makeFighter('克蕾儿丝菲尔@A');
     const target = makeFighter('合成兽插件靶@B');
     target.maxHp = 100000;
@@ -1649,16 +1791,71 @@ export function runCharacterHookCases(): string[] {
     engine.finishStep({ current: false });
     engine.applyDamage(engine.fighters[0], 1000, 'test', true);
     assert(engine.fighters[0].currentHp === 1, 'Ting defiance should keep clamping lethal hits while active');
+    assert(engine.fighters[0].status.some((status) => status.type === 'TING_DEFIANCE'), 'early battle-clock ticks should not expire Ting defiance');
 
-    for (let turn = 2; turn <= 4; turn += 1) {
+    for (let turn = 2; turn <= 10; turn += 1) {
       engine.turnCount = turn;
       engine.finishStep({ current: false });
     }
-    assert(!engine.fighters[0].status.some((status) => status.type === 'TING_DEFIANCE'), 'Ting defiance should expire on the global status clock');
+    assert(!engine.fighters[0].status.some((status) => status.type === 'TING_DEFIANCE'), 'Ting defiance should expire on the extended battle status clock');
+    assert(logs.some((entry) => entry.text.includes('不甘倒下') && entry.text.includes('怨念耗尽')), 'Ting defiance expiry should be visible in the combat log');
     engine.applyDamage(engine.fighters[0], 1000, 'test', true);
     assert(engine.fighters[0].currentHp <= 0, 'expired Ting defiance should allow lethal damage to defeat Ting');
     assert(logs.some((entry) => entry.text.includes('不甘倒下')), 'Ting defiance should keep its combat log');
-    cases.push('Ting defiance expires on global clock');
+    cases.push('Ting defiance expires on extended battle clock');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const rabbit = makeFighter('兔卷卷@B');
+    const { engine, logs } = makeDeathEngine([ting, rabbit]);
+    engine.fighters[0].status.push({ type: 'TING_DEFIANCE', duration: 9 });
+
+    engine.executeSkillAction('v_rabbit_zero', engine.fighters[1], engine.fighters[0]);
+
+    assert(!engine.fighters[0].status.some((status) => status.type === 'TING_DEFIANCE'), 'Rabbit zero should strip Ting defiance when it clears buffs');
+    assert(logs.some((entry) => entry.text.includes('归零') && entry.text.includes('剥离') && entry.text.includes('不甘倒下')), 'Rabbit zero should explicitly log stripped Ting defiance');
+    cases.push('Rabbit zero logs stripped Ting defiance');
+  }
+
+  {
+    const morphling = makeFighter('水人@A');
+    const target = makeFighter('否决目标@B');
+    const { engine, logs } = makeDeathEngine([morphling, target]);
+    engine.fighters[1].status.push(
+      { type: 'SPELL_BLOCK', duration: 2, sourceId: 'morphling_linken_sphere' },
+      { type: 'INVUL', duration: 1, sourceId: 'rabbit_slide' },
+      { type: 'TING_DEFIANCE', duration: 4 },
+      { type: 'TOKUSATSU_DEFIANCE', duration: 2 },
+      { type: 'WAIT_COUNTER', duration: 2 },
+    );
+    engine.fighters[1].tokusatsuInstantActionQueued = true;
+
+    engine.executeSkillAction('nullifier', engine.fighters[0], engine.fighters[1]);
+
+    assert(!engine.fighters[1].status.some((status) => ['SPELL_BLOCK', 'INVUL', 'TING_DEFIANCE', 'TOKUSATSU_DEFIANCE', 'WAIT_COUNTER'].includes(status.type)), 'Nullifier should strip important defensive statuses before resolution');
+    assert(!engine.fighters[1].tokusatsuInstantActionQueued, 'Nullifier should cancel queued Tokusatsu defiance counter action');
+    const nullifierCastIndex = logs.findIndex((entry) => entry.text.includes('抛出否决挂件'));
+    const nullifierStripIndex = logs.findIndex((entry) => entry.text.includes('万法归无') && entry.text.includes('剥夺') && entry.text.includes('林肯法球') && entry.text.includes('兔兔滑铲') && entry.text.includes('不甘倒下') && entry.text.includes('悲愿不倒') && entry.text.includes('坐椅子'));
+    assert(nullifierCastIndex >= 0 && nullifierStripIndex > nullifierCastIndex, 'Nullifier should explicitly log stripped defensive and counter statuses after the cast log');
+    cases.push('Nullifier logs stripped defensive statuses');
+  }
+
+  {
+    const morphling = makeFighter('水人@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const { engine, logs } = makeDeathEngine([morphling, tokusatsu]);
+    engine.fighters[1].status.push(
+      { type: 'BKB', duration: 1, sourceId: 'tokusatsu_defiance' },
+      { type: 'TOKUSATSU_DEFIANCE', duration: 2 },
+    );
+
+    engine.executeSkillAction('cosmic_slap', engine.fighters[0], engine.fighters[1]);
+
+    assert(logs.some((entry) => entry.text.includes('强行捏碎') && entry.text.includes('悲愿抗性护层')), 'Cosmic slap should name the broken Tokusatsu defense layer');
+    assert(!logs.some((entry) => entry.text.includes('强行捏碎') && entry.text.includes('的悲愿不倒')), 'Cosmic slap should not imply it broke active Tokusatsu defiance itself');
+    assert(engine.fighters[1].status.some((status) => status.type === 'TOKUSATSU_DEFIANCE'), 'Breaking the defense layer should leave active Tokusatsu defiance intact');
+    cases.push('Cosmic slap labels Tokusatsu defense layer precisely');
   }
 
   {

@@ -49,17 +49,17 @@ export function enterTokusatsuMonsterForm(
   );
 
   const previousMaxHp = target.maxHp;
-  const monsterMaxHp = Math.max(3050, Math.min(4550, Math.floor(previousMaxHp * 1.3)));
+  const monsterMaxHp = Math.max(3025, Math.min(4400, Math.floor(previousMaxHp * 1.27)));
   target.maxHp = monsterMaxHp;
-  target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.72)));
-  target.atk = Math.max(195, Math.floor(target.atk * 1.6));
-  target.def = Math.max(110, Math.floor(target.def * 1.47));
-  target.res = Math.max(130, Math.floor(target.res * 1.58));
-  target.mag = Math.max(110, Math.floor(target.mag * 1.7));
-  target.spd = Math.max(130, Math.floor(target.spd * 1.16));
-  target.agl = Math.max(105, Math.floor(target.agl * 1.2));
+  target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.7)));
+  target.atk = Math.max(190, Math.floor(target.atk * 1.56));
+  target.def = Math.max(108, Math.floor(target.def * 1.44));
+  target.res = Math.max(128, Math.floor(target.res * 1.55));
+  target.mag = Math.max(108, Math.floor(target.mag * 1.65));
+  target.spd = Math.max(128, Math.floor(target.spd * 1.15));
+  target.agl = Math.max(104, Math.floor(target.agl * 1.18));
   target.wis = Math.max(220, Math.floor(target.wis * 1.15));
-  target.critRate = Math.min(0.42, target.critRate + 0.04);
+  target.critRate = Math.min(0.41, target.critRate + 0.035);
   if (MIRACLE_MONSTER) target.jobData = cloneJobDefinition(MIRACLE_MONSTER);
   target.job = 'MIRACLE_MONSTER_BUJIN';
   target.monsterTurns = 0;
@@ -68,7 +68,7 @@ export function enterTokusatsuMonsterForm(
   clearTokusatsuThroneResonance(target);
   refreshStatus(target, 'BKB', 2, 'tokusatsu_bujin_throne');
   refreshStatus(target, 'SPELL_BLOCK', 2, 'tokusatsu_bujin_throne');
-  refreshStatus(target, 'REGEN', 4);
+  refreshStatus(target, 'REGEN', 3);
   runtime.syncHpPct(target);
 
   runtime.log('buff', `🦖 ${target.name} 受到攻击，触发【武神王座】反击！"DUAL ON！GREAT！MONSTER！Ready Fight." ${target.name} 永久进化为【奇迹怪兽武刃】，生命提升至 ${target.currentHp}/${target.maxHp}，抗性与怪兽力量全部重构！`);

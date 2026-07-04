@@ -111,7 +111,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         a.status = a.status ?? [];
         grantStatus(a, 'INVUL', 1, 'valorant_astra_cosmic_divide');
         a.status = a.status.filter(
-          (s) => !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_AIM_PUNCH', 'NEURAL_THEFT_DEBUFF'].includes(s.type),
+          (s) => !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK'].includes(s.type),
         );
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === a.id);
         if (idx !== -1) ctx.fighters[idx] = a;

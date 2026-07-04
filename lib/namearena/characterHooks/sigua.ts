@@ -14,7 +14,9 @@ const CLEANSABLE_STATUS_TYPES = new Set([
   'CHARMED',
   'VALO_FLASH',
   'VALO_AIM_PUNCH',
+  'VALO_CYPHER_REVEALED',
   'NEURAL_THEFT_DEBUFF',
+  'BABY_WEAKNESS_MARK',
 ]);
 
 function scaleStat(value: number, multiplier: number, floor: number): number {

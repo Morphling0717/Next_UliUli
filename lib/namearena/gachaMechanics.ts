@@ -280,7 +280,7 @@ export function triggerGachaDeathSave(
 
   fighter.hasUsedGachaDeathSave = true;
   cleanseLuckEmperor(fighter);
-  fighter.currentHp = Math.max(1, Math.floor(fighter.maxHp * 0.25));
+  fighter.currentHp = Math.max(1, Math.floor(fighter.maxHp * 0.3));
   refreshStatus(fighter, 'SPELL_BLOCK', 3, 'gacha_death_charm');
   refreshStatus(fighter, 'BKB', 2, 'gacha_death_charm');
   refreshStatus(fighter, 'REGEN', 3);
