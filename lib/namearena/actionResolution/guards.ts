@@ -21,7 +21,8 @@ export function missesSkill(
     status.type === 'WT_TRACK_DAMAGED' ||
     status.type === 'NEURAL_THEFT_DEBUFF',
   ) ? 0 : target.agl;
-  const targetAgl = target.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(effectiveTargetAgl * 1.2) : effectiveTargetAgl;
+  let targetAgl = target.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(effectiveTargetAgl * 1.2) : effectiveTargetAgl;
+  if (target.status.some((status) => status.type === 'YUZU_EVADE_DOWN')) targetAgl = Math.floor(targetAgl * 0.55);
   let hitChance = 0.95 + (userAgl - targetAgl) * 0.005;
   const guaranteedHit =
     user.status.some((status) => status.type === 'AIM') ||

@@ -36,6 +36,7 @@ export function determineActor(
     let multiplier = 1;
     if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.13;
     if (fighter.status.some((status) => status.type === 'RABBIT_ZERO_HASTE')) multiplier *= 1.26;
+    if (fighter.status.some((status) => status.type === 'YUZU_SLOW')) multiplier *= 0.75;
     return Math.max(1, Math.floor(fighter.spd * multiplier));
   };
   let ticket = Math.random() * actorPool.reduce((sum, fighter) => sum + actionWeight(fighter), 0);

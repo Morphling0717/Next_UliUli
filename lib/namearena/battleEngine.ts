@@ -131,6 +131,18 @@ import {
   formatEmoteStats,
   grantEmoteAdaptStats,
 } from './emoteMechanics';
+import {
+  activeYuzuTeammates,
+  consumeYuzuShield,
+  ensureYuzuMarkedTarget,
+  ensureYuzuOpeningShield,
+  enterYuzuPhaseThree,
+  hasAnyYuzuTeammate,
+  tryAdvanceYuzuPhaseByHp,
+  YUZU_PHASE_ONE_REDUCTION,
+  YUZU_PHASE_THREE_REDUCTION,
+  YUZU_TEAM_SHARE_RATIO,
+} from './yuzuMechanics';
 
 const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   skill: '技能伤害',
@@ -138,6 +150,7 @@ const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   counter: '反击伤害',
   reflect: '反弹伤害',
   transfer: '转移伤害',
+  yuzu_share: '镜界分摊伤害',
 };
 
 function getDamageSourceLabel(source: string): string {
@@ -245,6 +258,7 @@ export class BattleEngine {
     this.STATUS_EFFECTS = Data.STATUS_EFFECTS ?? {};
     this.SKILL_TAGS = Data.SKILL_TAGS ?? {};
     this.turnCount = turnCount;
+    this.initializeYuzuOpeningShields();
   }
 
   log(type: string, text: string): void {
@@ -281,6 +295,13 @@ export class BattleEngine {
     if (this.turnCount <= 900) return steadyFatigue;
     const collapseFatigue = Math.floor((this.turnCount - 900) / 3) * 6;
     return Math.min(900, steadyFatigue + collapseFatigue);
+  }
+
+  initializeYuzuOpeningShields(): void {
+    const runtime = this.createCharacterHookRuntime();
+    this.fighters.forEach((fighter) => {
+      if (fighter.isYuzu) ensureYuzuOpeningShield(runtime, fighter);
+    });
   }
 
   getTeamId(f: Fighter): string {
@@ -512,6 +533,23 @@ export class BattleEngine {
     if (amount <= 0 || target.isDead || target.currentHp <= 0) return 0;
     if (target.status.some((s) => s.type === 'SYNERGY_SLACKING')) return 0;
 
+    if (
+      target.isYuzu &&
+      (target.yuzuPhase ?? 1) >= 3 &&
+      attacker &&
+      attacker.id !== target.id &&
+      this.getTeamId(attacker) !== this.getTeamId(target) &&
+      source !== 'status' &&
+      source !== 'yuzu_share'
+    ) {
+      const runtime = this.createCharacterHookRuntime();
+      const marked = ensureYuzuMarkedTarget(runtime, target);
+      if (marked && marked.id !== attacker.id) {
+        this.log('info', `🪞 【唯一目标】${target.name} 只承认 ${marked.name} 的苦痛，来自 ${attacker.name} 的伤害被镜界拒绝。`);
+        return 0;
+      }
+    }
+
     if (options.respectDefenses) {
       const invul = findDefenseStatus(target, 'INVUL');
       if (invul) {
@@ -562,9 +600,65 @@ export class BattleEngine {
       );
     }
 
+    if (target.isYuzu && source !== 'status') {
+      const phase = target.yuzuPhase ?? 1;
+      const reduction = phase >= 3 ? YUZU_PHASE_THREE_REDUCTION : phase === 1 ? YUZU_PHASE_ONE_REDUCTION : 0;
+      if (reduction > 0) {
+        const beforeYuzuReduction = amount;
+        amount = Math.max(1, Math.floor(amount * (1 - reduction)));
+        this.log('info', `🪞 【镜界减伤】${target.name} 处于第 ${phase} 阶段，削减 ${beforeYuzuReduction - amount} 点伤害。`);
+      }
+    }
+
+    const shieldResult = consumeYuzuShield(target, amount);
+    if (shieldResult.absorbed > 0) {
+      this.log('info', `🛡️ 【镜界护盾】${target.name} 的护盾吸收 ${shieldResult.absorbed} 点伤害，剩余 ${target.yuzuShield ?? 0}。`);
+      amount = shieldResult.remaining;
+      if (
+        shieldResult.broke &&
+        target.isYuzu &&
+        (target.yuzuPhase ?? 1) === 2 &&
+        !hasAnyYuzuTeammate(this.createCharacterHookRuntime(), target)
+      ) {
+        enterYuzuPhaseThree({
+          fighters: this.fighters,
+          getTeamId: (fighter) => this.getTeamId(fighter),
+          isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
+          log: (type, text) => this.log(type, text),
+          syncHpPct: (fighter) => this.syncHpPct(fighter),
+        }, target, '个人战护盾被击碎，溢出伤害被镜界无效化');
+        this.syncHpPct(target);
+        return 0;
+      }
+      if (amount <= 0) {
+        this.syncHpPct(target);
+        return 0;
+      }
+    }
+
+    if (target.isYuzu && source !== 'status' && source !== 'yuzu_share') {
+      const allies = activeYuzuTeammates(this.createCharacterHookRuntime(), target);
+      const shareTotal = Math.floor(amount * YUZU_TEAM_SHARE_RATIO);
+      const shareEach = allies.length > 0 ? Math.floor(shareTotal / allies.length) : 0;
+      if (shareEach > 0) {
+        const actualSharedTotal = shareEach * allies.length;
+        amount = Math.max(1, amount - actualSharedTotal);
+        this.log('info', `🪞 【镜界分摊】${target.name} 把 ${actualSharedTotal} 点伤害均摊给 ${allies.map((ally) => ally.name).join('、')}，自己承受 ${amount} 点。`);
+        allies.forEach((ally) => {
+          const shared = this.applyDamage(ally, shareEach, 'yuzu_share', true, target, {
+            deferTransform: true,
+            actionName: '镜界分摊',
+            respectDefenses: false,
+          });
+          if (shared > 0) this.flushDeferredDamageEvents(ally);
+        });
+      }
+    }
+
     const isProtected =
       target.isMorphling || target.isJoker || target.isTokusatsu || target.isGacha ||
-      target.isTing || target.isSuccubus || target.isSigua || target.isTuJuanJuan || target.isWT;
+      target.isTing || target.isSuccubus || target.isSigua || target.isTuJuanJuan || target.isWT ||
+      (target.isYuzu && (target.yuzuPhase ?? 1) === 1);
     if (isProtected && !target.transformed && amount >= target.currentHp) {
       amount = Math.max(0, target.currentHp - 1);
       if (amount === 0) {
@@ -698,6 +792,15 @@ export class BattleEngine {
       }
     }
     this.syncHpPct(target);
+    if (target.isYuzu) {
+      tryAdvanceYuzuPhaseByHp({
+        fighters: this.fighters,
+        getTeamId: (fighter) => this.getTeamId(fighter),
+        isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
+        log: (type, text) => this.queueOrLogDamageEvent(target, options, type, text),
+        syncHpPct: (fighter) => this.syncHpPct(fighter),
+      }, target);
+    }
     if (amount > 0) {
       target.isHit = true;
       if (!options.deferTransform) this.handleTransformations(target);

@@ -114,6 +114,15 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   EMOTE_FAMILIAR: { name: '脸熟', icon: '👁️', desc: '被表情提前盯上，表情死亡认主时会优先选择此目标' },
   EMOTE_OWNER_BONUS: { name: '认主补偿', icon: '📜', desc: '表情死亡认主带来的本次击杀者十分之一临时补偿；认主结算时移除' },
   EMOTE_ULT_COOLDOWN: { name: '万主归一冷却', icon: '🔁', desc: '表情刚刚发动万主归一，短时间内无法再次释放' },
+  BLEED: { name: '流血', icon: '🩸', desc: '持续流血伤害' },
+  YUZU_BARRIER: { name: '镜界护盾', icon: '🛡️', desc: '柚子施加的数值护盾，会先于生命承受伤害' },
+  YUZU_TAUNT: { name: '满级嘲讽', icon: '🪞', desc: '柚子抽到盾牌后吸引敌方火力' },
+  YUZU_MARKED: { name: '镜界标记', icon: '🎯', desc: '柚子三阶段定制目标，承受柚子更高伤害' },
+  YUZU_EVADE_DOWN: { name: '闪避破坏', icon: '🪞', desc: '闪避率下降' },
+  YUZU_DEF_DOWN: { name: '防御破坏', icon: '🪞', desc: '防御力下降' },
+  YUZU_RES_DOWN: { name: '魔抗破坏', icon: '🪞', desc: '魔抗下降' },
+  YUZU_ATK_DOWN: { name: '攻击破坏', icon: '🪞', desc: '攻击力下降' },
+  YUZU_SLOW: { name: '减速', icon: '🪞', desc: '行动速度下降' },
 };
 
 export const COLORS: string[] = [

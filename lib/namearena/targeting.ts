@@ -54,7 +54,14 @@ export function resolveTarget(
   if (currentTargets.length === 0) return null;
 
   const forcedTargetValid = forcedTarget ? isSelectableTargetFor(runtime, user, forcedTarget) : false;
-  let target = forcedTargetValid ? forcedTarget! : pickWeightedTarget(currentTargets);
+  const tauntingTargets = currentTargets.filter((candidate) =>
+    candidate.isYuzu && candidate.status.some((status) => status.type === 'YUZU_TAUNT'),
+  );
+  let target = forcedTargetValid
+    ? forcedTarget!
+    : tauntingTargets.length > 0
+      ? pickWeightedTarget(tauntingTargets)
+      : pickWeightedTarget(currentTargets);
   let isIntercepted = false;
   const protector = runtime.fighters.find((fighter) =>
     fighter.isSummon &&

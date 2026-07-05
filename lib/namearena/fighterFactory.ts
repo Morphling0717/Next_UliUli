@@ -19,6 +19,7 @@ function resolveSpecialJobKey(cleanName: string): string | null {
   if (cleanName === '丝瓜uli' || cleanName === '丝瓜') return 'VIRTUAL_DIVA';
   if (cleanName === '兔卷卷' || cleanName === '兔卷卷curly') return 'Q_BUNNY';
   if (cleanName === '表情') return 'EMOTE_MAHORAGA';
+  if (cleanName === '柚子') return 'YUZU_MIRROR_PARENT';
   return null;
 }
 
@@ -50,6 +51,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
 
   const isMorphling = resolvedJobKey === 'SLIME';
   const isEmote = resolvedJobKey === 'EMOTE_MAHORAGA';
+  const isYuzu = resolvedJobKey === 'YUZU_MIRROR_PARENT';
   const baseHp = rng.nextInt(200, 300);
   const hp = isEmote ? 1 : Math.floor(baseHp * job.hp * (isMorphling ? 0.8 : 1.0));
   const stats = STAT_KEYS.reduce((acc, key) => {
@@ -86,6 +88,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     isTuJuanJuan: resolvedJobKey === 'Q_BUNNY',
     isWT: resolvedJobKey === 'WT_GRINDER',
     isEmote,
+    isYuzu,
     transformed: false,
     resurrected: false,
     apm: 0,
@@ -152,6 +155,13 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     emoteFamiliarTargetId: undefined,
     emoteFinalDead: false,
     emoteFinalChallengeUsed: false,
+    yuzuPhase: isYuzu ? 1 : 0,
+    yuzuShield: 0,
+    yuzuOpeningShieldApplied: false,
+    yuzuMarkedTargetId: undefined,
+    yuzuMarkedHitCount: 0,
+    yuzuFuriosoReady: false,
+    yuzuLastWeapon: undefined,
     hasTriggeredSlacking: false,
     isActing: false,
     isHit: false,

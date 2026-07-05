@@ -23,6 +23,7 @@ import { tingHook } from './characterHooks/ting';
 import { tokusatsuHook } from './characterHooks/tokusatsu';
 import { valoJuniorHook } from './characterHooks/valoJunior';
 import { warThunderHook } from './characterHooks/warThunder';
+import { yuzuHook } from './characterHooks/yuzu';
 
 export { executeSlackingSynergy } from './characterHooks/slacking';
 export type {
@@ -54,6 +55,7 @@ const CHARACTER_HOOKS: CharacterHook[] = [
   bunnyHook,
   warThunderHook,
   emoteHook,
+  yuzuHook,
 ];
 
 export function runCharacterSkillSelectionHooks(ctx: CharacterSkillSelectionContext): string | null {

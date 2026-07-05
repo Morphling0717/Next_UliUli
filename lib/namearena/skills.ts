@@ -16,6 +16,7 @@ import { tingSkills } from './skills/ting';
 import { tokusatsuSkills } from './skills/tokusatsu';
 import { valoJuniorSkills } from './skills/valoJunior';
 import { warThunderSkills } from './skills/warThunder';
+import { yuzuSkills } from './skills/yuzu';
 
 const SKILLS: Record<string, SkillDefinition> = {
   ...slackingSkills,
@@ -34,6 +35,7 @@ const SKILLS: Record<string, SkillDefinition> = {
   ...gamerSkills,
   ...rabbitSkills,
   ...warThunderSkills,
+  ...yuzuSkills,
   ...baseJobSkills,
 };
 

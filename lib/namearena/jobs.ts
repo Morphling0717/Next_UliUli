@@ -174,6 +174,16 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
     hp: 0.1, atk: 0.1, def: 0.1, spd: 0.1, agl: 0.1, mag: 0.1, res: 0.1, wis: 0.1,
     skills: ['emote_meme_slap', 'emote_tenth_claim', 'emote_adaptation_wheel', 'emote_mark_owner', 'emote_wheel_cleave', 'emote_all_masters_return'],
   },
+  YUZU_MIRROR_PARENT: {
+    name: '镜世界的食指父辈', icon: '🪞',
+    hp: 2.1, atk: 1.85, def: 1.55, spd: 1.15, agl: 0.9, mag: 0.5, res: 1.45, wis: 1.25,
+    skills: [
+      'yuzu_spear_impale', 'yuzu_hammer_crush', 'yuzu_sword_devour', 'yuzu_homeward_scythe',
+      'yuzu_frozen_blood', 'yuzu_silent_applause', 'yuzu_falling_leaf_blade', 'yuzu_waiting_hell',
+      'yuzu_customized_fool', 'yuzu_divine_pursuit', 'yuzu_daughter_reckoning', 'yuzu_unbreakable_daughter',
+      'yuzu_furioso_replica',
+    ],
+  },
 
   // ── 基础职业与隐藏彩蛋 ──────────────────────────────────────────────────
   ONE_PUNCH: {

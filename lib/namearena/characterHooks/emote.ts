@@ -115,7 +115,7 @@ function reviveEmote(runtime: CharacterHookRuntime, emote: Fighter): void {
   emote.currentHp = emote.maxHp;
   emote.status = [];
   runtime.syncHpPct(emote);
-  runtime.log('buff', `🧿 【四处认主型魔虚罗】${emote.name} 借着场上的 0 击杀锚点满血复活！累计适应值仍然保留（总和 ${getEmoteAdaptTotal(emote)}）。`);
+  runtime.log('buff', `🧿 【四处认主型魔虚罗】${emote.name} 借着场上的 0 击杀锚点满血复活：“快让我看血流成河，布瑠布由良由良”。累计适应值仍然保留（总和 ${getEmoteAdaptTotal(emote)}）。`);
 }
 
 function tryFinalOwnerChallenge(runtime: CharacterHookRuntime, emote: Fighter, alivePlayers: Fighter[]): boolean {

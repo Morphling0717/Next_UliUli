@@ -2057,6 +2057,130 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const yuzu = makeFighter('柚子@A');
+    const ally = makeFighter('柚子队友@A');
+    const enemy = makeFighter('柚子敌人@B');
+    const { engine, logs } = makeDeathEngine([yuzu, ally, enemy]);
+
+    assert(engine.fighters[0].job === 'YUZU_MIRROR_PARENT', `Yuzu should map to YUZU_MIRROR_PARENT, got ${engine.fighters[0].job}`);
+    assert(engine.fighters[0].jobData.name === '镜世界的食指父辈', `Yuzu job display name mismatch: ${engine.fighters[0].jobData.name}`);
+    assert(engine.fighters[0].isYuzu, 'Yuzu flag should be set');
+    assert((engine.fighters[0].yuzuShield ?? 0) > 0, 'Yuzu should receive opening mirror shield');
+    assert((engine.fighters[1].yuzuShield ?? 0) > 0, 'Yuzu teammate should receive opening mirror shield');
+    assert(logs.some((entry) => entry.text.includes('镜界开幕')), 'Yuzu opening shield should be logged');
+    cases.push('Yuzu factory and opening shield');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const enemy = makeFighter('破盾者@B');
+    const { engine, logs } = makeDeathEngine([yuzu, enemy]);
+    const engineYuzu = engine.fighters[0];
+    const attacker = engine.fighters[1];
+
+    engineYuzu.maxHp = 1000;
+    localProject.setCurrentHp(engineYuzu, 1000);
+    engineYuzu.yuzuShield = 0;
+    engineYuzu.status = engineYuzu.status.filter((status) => status.type !== 'YUZU_BARRIER');
+
+    engine.applyDamage(engineYuzu, 400, 'skill', false, attacker, { actionName: '压血测试' });
+
+    assert(engineYuzu.yuzuPhase === 2, `Yuzu should enter phase 2 below 70%, got phase ${engineYuzu.yuzuPhase}`);
+    assert((engineYuzu.yuzuShield ?? 0) > 0, 'Yuzu phase 2 should grant personal shield in solo battle');
+    const hpAfterPhaseTwo = engineYuzu.currentHp;
+    const phaseTwoShield = engineYuzu.yuzuShield ?? 0;
+    const actual = engine.applyDamage(engineYuzu, phaseTwoShield + 500, 'skill', false, attacker, { actionName: '破盾测试' });
+
+    assert(actual === 0, `Yuzu solo shield break should invalidate overflow HP damage, got actual ${actual}`);
+    assert(engineYuzu.currentHp === hpAfterPhaseTwo, `Yuzu HP should not change on shield-break overflow, got ${engineYuzu.currentHp}/${hpAfterPhaseTwo}`);
+    assert(Number(engineYuzu.yuzuPhase) === 3, `Yuzu should enter phase 3 when solo phase-2 shield breaks, got ${engineYuzu.yuzuPhase}`);
+    assert(logs.some((entry) => entry.text.includes('个人战护盾被击碎')), 'Yuzu shield-break transition should explain overflow invalidation');
+    cases.push('Yuzu solo phase 2 shield break enters phase 3');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const enemy = makeFighter('过量伤害者@B');
+    const { engine, logs } = makeDeathEngine([yuzu, enemy]);
+    const engineYuzu = engine.fighters[0];
+    const attacker = engine.fighters[1];
+
+    engineYuzu.maxHp = 1000;
+    localProject.setCurrentHp(engineYuzu, 1000);
+    engineYuzu.yuzuShield = 0;
+    engineYuzu.status = engineYuzu.status.filter((status) => status.type !== 'YUZU_BARRIER');
+
+    const actual = engine.applyDamage(engineYuzu, 5000, 'skill', false, attacker, { actionName: '一阶段过量伤害' });
+
+    assert(actual === 999, `Yuzu phase-1 special lock should cap lethal damage to 999, got ${actual}`);
+    assert(engineYuzu.currentHp === 1, `Yuzu should survive phase-1 overkill at 1 HP, got ${engineYuzu.currentHp}`);
+    assert(engineYuzu.yuzuPhase === 2, `Yuzu should enter phase 2 after phase-1 lock, got phase ${engineYuzu.yuzuPhase}`);
+    assert(!engineYuzu.isDead && !engineYuzu.isDeadAnnounced, 'Yuzu should not be marked dead after phase-1 lock');
+    assert((engineYuzu.yuzuShield ?? 0) > 0, 'Yuzu should receive phase-2 shield after phase-1 lock');
+    assert(logs.some((entry) => entry.text.includes('锁血保护')), 'Yuzu phase-1 overkill should log special lock protection');
+    cases.push('Yuzu phase-1 overkill locks HP and enters phase 2');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const ally = makeFighter('分摊队友@A');
+    const enemy = makeFighter('分摊敌人@B');
+    const { engine } = makeDeathEngine([yuzu, ally, enemy]);
+    const engineYuzu = engine.fighters[0];
+    const engineAlly = engine.fighters[1];
+    const attacker = engine.fighters[2];
+
+    [engineYuzu, engineAlly].forEach((fighter) => {
+      fighter.maxHp = 1000;
+      localProject.setCurrentHp(fighter, 1000);
+      fighter.yuzuShield = 0;
+      fighter.status = fighter.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    });
+
+    const actual = engine.applyDamage(engineYuzu, 100, 'skill', false, attacker, { actionName: '分摊测试' });
+    assert(actual === 60, `Yuzu phase-1 reduction plus 30% team share should leave 60 HP damage, got ${actual}`);
+    assert(engineYuzu.currentHp === 940, `Yuzu should take 60 damage after sharing, got ${engineYuzu.currentHp}`);
+    assert(engineAlly.currentHp === 975, `Yuzu ally should take 25 shared damage, got ${engineAlly.currentHp}`);
+
+    engineYuzu.yuzuPhase = 2;
+    engine.markDefeated(engineAlly, { message: '💀 【测试】分摊队友倒下。', awardKill: false });
+    engine.finishStep({ current: false });
+    assert(engineYuzu.yuzuPhase === 3, `Yuzu team phase should enter phase 3 when teammates are gone, got ${engineYuzu.yuzuPhase}`);
+    cases.push('Yuzu team damage sharing and team-loss phase 3');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const target = makeFighter('定制目标@B');
+    const bystander = makeFighter('非目标敌人@C');
+    const { engine, logs } = makeDeathEngine([yuzu, target, bystander]);
+    const engineYuzu = engine.fighters[0];
+    const engineTarget = engine.fighters[1];
+    const engineBystander = engine.fighters[2];
+
+    engineYuzu.yuzuPhase = 3;
+    engineYuzu.yuzuShield = 0;
+    engineYuzu.status = engineYuzu.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    withRandomSequence([0], () => {
+      engine.finishStep({ current: false });
+    });
+
+    assert(engineYuzu.yuzuMarkedTargetId === engineTarget.id, 'Yuzu phase 3 should mark the first available target under deterministic roll');
+    const blocked = engine.applyDamage(engineYuzu, 500, 'skill', false, engineBystander, { actionName: '非目标攻击' });
+    assert(blocked === 0, `Yuzu should ignore damage from non-marked enemies in phase 3, got ${blocked}`);
+    assert(logs.some((entry) => entry.text.includes('唯一目标') && entry.text.includes('非目标敌人')), 'Yuzu non-target immunity should be logged');
+
+    engineTarget.maxHp = 10000;
+    localProject.setCurrentHp(engineTarget, 10000);
+    engineYuzu.yuzuFuriosoReady = true;
+    engine.executeSkillAction('yuzu_furioso_replica', engineYuzu, engineTarget);
+    assert(!engineYuzu.yuzuFuriosoReady, 'Furioso should consume its ready flag');
+    assert(engineYuzu.yuzuMarkedHitCount === 0, `Furioso should reset marked hit count, got ${engineYuzu.yuzuMarkedHitCount}`);
+    assert(logs.some((entry) => entry.text.includes('【Furioso-Replica】第 9/9 击抽到 镰刀')), 'Furioso final hit should force scythe');
+    cases.push('Yuzu phase 3 mark immunity and Furioso final scythe');
+  }
+
+  {
     const emote = makeFighter('表情@A');
     const gamer = makeFighter('玄凝@B');
     const joker = makeFighter('屑@C');

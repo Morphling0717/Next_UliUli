@@ -29,11 +29,18 @@ export const COMMON_NEGATIVE_STATUS_TYPES: string[] = [
   'VALO_CYPHER_REVEALED',
   'NEURAL_THEFT_DEBUFF',
   'BABY_WEAKNESS_MARK',
+  'BLEED',
+  'YUZU_EVADE_DOWN',
+  'YUZU_DEF_DOWN',
+  'YUZU_RES_DOWN',
+  'YUZU_ATK_DOWN',
+  'YUZU_SLOW',
 ];
 
 export const DOT_STATUS_TYPES: string[] = [
   'POISON',
   'BURN',
+  'BLEED',
   'WATER_PRISON',
 ];
 
@@ -72,6 +79,8 @@ export const PERMANENT_STATUS_TYPES: string[] = [
   'PUPPET_MASTER',
   'WT_ERA',
   'EMOTE_OWNER_BONUS',
+  'YUZU_BARRIER',
+  'YUZU_MARKED',
 ];
 
 export const PERMANENT_STATUS_PREFIXES: string[] = [
@@ -110,6 +119,14 @@ export const REVIVE_CLEAN_STATUS_TYPES: string[] = [
   'NO_HEAL',
   'WEAK',
   'ZEROED',
+  'BLEED',
+  'YUZU_EVADE_DOWN',
+  'YUZU_DEF_DOWN',
+  'YUZU_RES_DOWN',
+  'YUZU_ATK_DOWN',
+  'YUZU_SLOW',
+  'YUZU_TAUNT',
+  'YUZU_MARKED',
 ];
 
 export function isStatusType(type: string, statusTypes: readonly string[]): boolean {

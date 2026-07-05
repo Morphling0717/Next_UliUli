@@ -311,7 +311,7 @@ export function executeSkillAction(
     applySkillStatusEffect(runtime, skill, target);
     applyAttackerStyleEffects(runtime, user, target);
   }
-  if (actualDmg > 0) runtime.flushDeferredDamageEvents(target);
+  if (actualDmg > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(target);
 
   handleValorantWeaponDrop(runtime, target, actualDmg);
   handlePhysicalCounterReflect(runtime, skill, user, target, actualDmg);

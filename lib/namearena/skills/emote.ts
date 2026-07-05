@@ -202,13 +202,13 @@ function executeWheelCleave(ctx: SkillContext): boolean {
     ctx,
     ctx.target,
     amount,
-    '轮盘斩',
+    '退魔之剑',
     (damage, redirected) => {
       const zeroText = ctx.target.stats.kills === 0 ? '，零击杀目标被轮盘额外校准' : '';
       if (redirected) {
-        return `🧿 【轮盘斩】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，但刀路被随机恶作剧带偏，原目标实际造成 ${damage} 点伤害！`;
+        return `🧿 【退魔之剑】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，但刀路被随机恶作剧带偏，原目标实际造成 ${damage} 点伤害！`;
       }
-      return `🧿 【轮盘斩】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，实际造成 ${damage} 点伤害！`;
+      return `🧿 【退魔之剑】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，实际造成 ${damage} 点伤害！`;
     },
   );
   return true;
@@ -295,7 +295,7 @@ export const emoteSkills: Record<string, SkillDefinition> = {
     onExecute: executeMarkOwner,
   },
   emote_wheel_cleave: {
-    name: '轮盘斩',
+    name: '退魔之剑',
     tag: SKILL_TAGS.SPECIAL,
     rate: 0.38,
     onExecute: executeWheelCleave,

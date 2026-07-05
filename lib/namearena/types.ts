@@ -140,6 +140,7 @@ export interface Fighter {
   isWT?: boolean;          // War Thunder player (战雷军迷)
   isGamer?: boolean;       // High-end gamer (玄凝)
   isEmote?: boolean;       // 表情（四处认主型魔虚罗）
+  isYuzu?: boolean;        // 柚子（镜世界的食指父辈）
   isSummon?: boolean;      // Summoned unit
   isAdvancedSummon?: boolean;
   isSon?: boolean;         // Water god's son
@@ -238,6 +239,15 @@ export interface Fighter {
   emoteFamiliarTargetId?: string;
   emoteFinalDead?: boolean;
   emoteFinalChallengeUsed?: boolean;
+
+  // ── Yuzu / mirror-world weapon and shield system ──────────────────────
+  yuzuPhase?: number;
+  yuzuShield?: number;
+  yuzuOpeningShieldApplied?: boolean;
+  yuzuMarkedTargetId?: string;
+  yuzuMarkedHitCount?: number;
+  yuzuFuriosoReady?: boolean;
+  yuzuLastWeapon?: string;
 
   // ── Slacking synergy (丝瓜 + 兔卷卷 bond) ────────────────────────────
   willSlackThisGame?: boolean;

@@ -121,7 +121,12 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
       const dmgAmt = status.type === 'WATER_PRISON' ? Math.floor(actor.maxHp * 0.08) : Math.floor(actor.maxHp * 0.05);
       const statusInfo = runtime.statusEffects[status.type];
       const statusCause = status.type === 'WATER_PRISON' ? '深渊水牢窒息' : (statusInfo?.name ?? '持续伤害');
-      runtime.log('poison', `${statusInfo?.icon ?? ''} ${actor.name} ${status.type === 'WATER_PRISON' ? '在深渊水牢中窒息' : '受到持续伤害'}，损失 ${dmgAmt} 点生命`);
+      const actionText = status.type === 'WATER_PRISON'
+        ? '在深渊水牢中窒息'
+        : status.type === 'BLEED'
+          ? '血流不止'
+          : '受到持续伤害';
+      runtime.log('poison', `${statusInfo?.icon ?? ''} ${actor.name} ${actionText}，损失 ${dmgAmt} 点生命`);
       const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true);
       if (actor.currentHp <= 0) {
         runtime.markDefeated(actor, {

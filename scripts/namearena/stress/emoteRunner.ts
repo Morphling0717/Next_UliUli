@@ -170,7 +170,7 @@ export function scanEmoteSpecificLogs(result: BattleResult): LogIssue[] {
         text: `表情在第 ${emoteDeathLine} 行死亡且未复活/真死前作为行动者出手：${text}`,
       });
     }
-    if (/表情|四处认主|认主|适应转轮|万主归一|十分之一索赔|轮盘斩/.test(text) && /偷属性|偷取属性|属性被偷/.test(text)) {
+    if (/表情|四处认主|认主|适应转轮|万主归一|十分之一索赔|退魔之剑/.test(text) && /偷属性|偷取属性|属性被偷/.test(text)) {
       issues.push({ label: result.label, line, type: 'emote-log-implies-steal', text });
     }
     if (/【死亡适应】表情/.test(text)) hasDeathAdapt = true;
