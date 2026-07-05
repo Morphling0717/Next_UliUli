@@ -139,6 +139,7 @@ export interface Fighter {
   isTuJuanJuan?: boolean;  // 兔卷卷
   isWT?: boolean;          // War Thunder player (战雷军迷)
   isGamer?: boolean;       // High-end gamer (玄凝)
+  isEmote?: boolean;       // 表情（四处认主型魔虚罗）
   isSummon?: boolean;      // Summoned unit
   isAdvancedSummon?: boolean;
   isSon?: boolean;         // Water god's son
@@ -227,6 +228,17 @@ export interface Fighter {
   wtMarkedTargetId?: string;
   wtKillStreak?: number;
 
+  // ── Emote / Mahoraga adaptation-recognition system ────────────────────
+  emoteDeathCount?: number;
+  emoteReviveTurns?: number;
+  emoteReviveAppliedTurn?: number;
+  emoteAdaptStats?: Partial<Record<StatKey | 'maxHp', number>>;
+  emoteOwnerId?: string;
+  emoteOwnerBonus?: Partial<Record<StatKey | 'maxHp', number>>;
+  emoteFamiliarTargetId?: string;
+  emoteFinalDead?: boolean;
+  emoteFinalChallengeUsed?: boolean;
+
   // ── Slacking synergy (丝瓜 + 兔卷卷 bond) ────────────────────────────
   willSlackThisGame?: boolean;
   hasTriggeredSlacking?: boolean;
@@ -282,6 +294,8 @@ export interface SkillContext {
     options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
+  handleWaitCounter?: (target: Fighter, user: Fighter, actionName?: string) => boolean;
+  handleCounterStatus?: (target: Fighter, user: Fighter) => boolean;
   flushDeferredDamageEvents?: () => void;
   queuePreResolutionLog?: (type: string, text: string) => void;
   /** Whether the current primary target had already entered phase 2 before this skill's damage landed. */

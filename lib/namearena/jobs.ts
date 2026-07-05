@@ -168,6 +168,13 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
     skills: ['wt_laser_rangefinder', 'wt_apfsds', 'wt_bmpt_suppress', 'wt_t58_knockup', 'wt_su30_cas', 'wt_magic_ricochet_premium', 'wt_repair_premium'],
   },
 
+  // ── 表情系 ────────────────────────────────────────────────────────────
+  EMOTE_MAHORAGA: {
+    name: '四处认主型魔虚罗', icon: '🧿',
+    hp: 0.1, atk: 0.1, def: 0.1, spd: 0.1, agl: 0.1, mag: 0.1, res: 0.1, wis: 0.1,
+    skills: ['emote_meme_slap', 'emote_tenth_claim', 'emote_adaptation_wheel', 'emote_mark_owner', 'emote_wheel_cleave', 'emote_all_masters_return'],
+  },
+
   // ── 基础职业与隐藏彩蛋 ──────────────────────────────────────────────────
   ONE_PUNCH: {
     name: '秃头披风侠', icon: '👊',

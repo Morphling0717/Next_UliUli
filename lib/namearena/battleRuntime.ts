@@ -71,6 +71,7 @@ export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHoo
   return {
     fighters: host.fighters,
     jobs: host.JOBS,
+    turnCount: host.turnCount,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text) => host.log(type, text),

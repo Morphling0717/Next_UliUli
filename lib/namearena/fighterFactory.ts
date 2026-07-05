@@ -18,6 +18,7 @@ function resolveSpecialJobKey(cleanName: string): string | null {
   if (cleanName === '克蕾儿丝菲尔') return 'SUCCUBUS';
   if (cleanName === '丝瓜uli' || cleanName === '丝瓜') return 'VIRTUAL_DIVA';
   if (cleanName === '兔卷卷' || cleanName === '兔卷卷curly') return 'Q_BUNNY';
+  if (cleanName === '表情') return 'EMOTE_MAHORAGA';
   return null;
 }
 
@@ -48,10 +49,11 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
   if (!job) return null;
 
   const isMorphling = resolvedJobKey === 'SLIME';
+  const isEmote = resolvedJobKey === 'EMOTE_MAHORAGA';
   const baseHp = rng.nextInt(200, 300);
-  const hp = Math.floor(baseHp * job.hp * (isMorphling ? 0.8 : 1.0));
+  const hp = isEmote ? 1 : Math.floor(baseHp * job.hp * (isMorphling ? 0.8 : 1.0));
   const stats = STAT_KEYS.reduce((acc, key) => {
-    acc[key] = Math.floor(rng.nextInt(10, 30) * job[key] * (isMorphling ? 0.8 : 1.0));
+    acc[key] = isEmote ? 1 : Math.floor(rng.nextInt(10, 30) * job[key] * (isMorphling ? 0.8 : 1.0));
     return acc;
   }, {} as Record<StatKey, number>);
   const colors = namerenaData.COLORS ?? [];
@@ -83,6 +85,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     isSigua: resolvedJobKey === 'VIRTUAL_DIVA',
     isTuJuanJuan: resolvedJobKey === 'Q_BUNNY',
     isWT: resolvedJobKey === 'WT_GRINDER',
+    isEmote,
     transformed: false,
     resurrected: false,
     apm: 0,
@@ -140,6 +143,15 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     wtBackupUsed: false,
     wtMarkedTargetId: undefined,
     wtKillStreak: 0,
+    emoteDeathCount: 0,
+    emoteReviveTurns: 0,
+    emoteReviveAppliedTurn: undefined,
+    emoteAdaptStats: { maxHp: 0, atk: 0, def: 0, spd: 0, agl: 0, mag: 0, res: 0, wis: 0 },
+    emoteOwnerId: undefined,
+    emoteOwnerBonus: undefined,
+    emoteFamiliarTargetId: undefined,
+    emoteFinalDead: false,
+    emoteFinalChallengeUsed: false,
     hasTriggeredSlacking: false,
     isActing: false,
     isHit: false,

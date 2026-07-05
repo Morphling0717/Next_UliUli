@@ -1917,5 +1917,183 @@ export function runCharacterHookCases(): string[] {
     cases.push('Succubus plugin skill-selection hook');
   }
 
+  {
+    const emote = makeFighter('表情@A');
+
+    assert(emote.job === 'EMOTE_MAHORAGA', `Emote should map to EMOTE_MAHORAGA, got ${emote.job}`);
+    assert(emote.jobData.name === '四处认主型魔虚罗', `Emote job display name mismatch: ${emote.jobData.name}`);
+    assert(emote.maxHp === 1 && emote.currentHp === 1, `Emote initial HP should be 1/1, got ${emote.currentHp}/${emote.maxHp}`);
+    STAT_KEYS.forEach((key) => {
+      assert(emote[key] === 1, `Emote initial ${key} should be 1, got ${emote[key]}`);
+    });
+    cases.push('Emote factory minimum stats');
+  }
+
+  {
+    const killer = makeFighter('表情击杀者@K');
+    const owner = makeFighter('临时主人@O');
+    const anchorA = makeFighter('零杀锚点甲@A');
+    const anchorB = makeFighter('零杀锚点乙@B');
+    const emote = makeFighter('表情@E');
+    killer.atk = 100;
+    killer.def = 80;
+    killer.spd = 60;
+    killer.agl = 40;
+    killer.mag = 120;
+    killer.res = 90;
+    killer.wis = 70;
+    killer.maxHp = 1000;
+    localProject.setCurrentHp(killer, 1000);
+    owner.stats.kills = 3;
+    const killerAtkBefore = killer.atk;
+    const killerMaxHpBefore = killer.maxHp;
+    const { engine, logs } = makeDeathEngine([killer, owner, anchorA, anchorB, emote]);
+    const ownerAtkBefore = engine.fighters[1].atk;
+    const ownerMaxHpBefore = engine.fighters[1].maxHp;
+
+    withRandomSequence([0.3], () => {
+      engine.markDefeated(engine.fighters[4], { message: '💀 【测试】表情被击倒。', killer: engine.fighters[0] });
+    });
+
+    const engineOwner = engine.fighters[1];
+    const engineEmote = engine.fighters[4];
+    assert(engine.fighters[0].stats.kills === 1, `Killer should receive the kill before emote owner clearing, got ${engine.fighters[0].stats.kills}`);
+    assert(engine.fighters[0].atk === killerAtkBefore, 'Emote adaptation should not reduce killer stats');
+    assert(engine.fighters[0].maxHp === killerMaxHpBefore, 'Emote adaptation should not reduce killer HP');
+    assert(engineEmote.atk === 11, `Emote should copy 10 atk from killer, got ${engineEmote.atk}`);
+    assert(engineEmote.maxHp === 101, `Emote should copy 100 max HP from killer, got ${engineEmote.maxHp}`);
+    assert((engineEmote.emoteAdaptStats?.atk ?? 0) === 10, `Emote adapt atk should record 10, got ${engineEmote.emoteAdaptStats?.atk}`);
+    assert((engineEmote.emoteAdaptStats?.maxHp ?? 0) === 100, `Emote adapt maxHp should record 100, got ${engineEmote.emoteAdaptStats?.maxHp}`);
+    assert(engineOwner.stats.kills === 0, `Temporary owner kills should be cleared, got ${engineOwner.stats.kills}`);
+    assert(engineOwner.atk === ownerAtkBefore + 10, `Owner should receive this death's atk bonus, got ${engineOwner.atk}`);
+    assert(engineOwner.maxHp === ownerMaxHpBefore + 100, `Owner should receive this death's max HP bonus, got ${engineOwner.maxHp}`);
+    assert(logs.some((entry) => entry.text.includes('属性和生命不会降低')), 'Emote death log should clarify copied stats and HP do not reduce source');
+    assert(logs.some((entry) => entry.text.includes('本次击杀者 10% 生命与属性')), 'Owner bonus log should say the bonus comes from this death only');
+
+    for (let i = 0; i < 3; i += 1) {
+      engine.turnCount += 1;
+      engine.finishStep({ current: false });
+    }
+
+    assert(!engineEmote.isDead, 'Emote should revive while zero-kill anchors exist and more than two players are alive');
+    assert(engineOwner.atk === ownerAtkBefore, `Owner temporary bonus should be removed after emote revive, got ${engineOwner.atk}`);
+    assert(engineOwner.maxHp === ownerMaxHpBefore, `Owner temporary HP bonus should be removed after emote revive, got ${engineOwner.maxHp}`);
+    assert(engineEmote.atk === 11, `Emote permanent adaptation should remain after revive, got ${engineEmote.atk}`);
+    assert(engineEmote.currentHp === engineEmote.maxHp && engineEmote.maxHp === 101, `Emote should revive to copied max HP, got ${engineEmote.currentHp}/${engineEmote.maxHp}`);
+
+    engine.fighters[0].atk = 200;
+    engine.fighters[0].maxHp = 500;
+    localProject.setCurrentHp(engine.fighters[0], 500);
+    withRandomSequence([0.3], () => {
+      engine.markDefeated(engine.fighters[4], { message: '💀 【测试】表情第二次被击倒。', killer: engine.fighters[0] });
+    });
+    assert(engineOwner.atk === ownerAtkBefore + 20, `Owner second bonus should use only the second killer slice, got ${engineOwner.atk}`);
+    assert(engineOwner.maxHp === ownerMaxHpBefore + 50, `Owner second HP bonus should use only the second killer slice, got ${engineOwner.maxHp}`);
+    cases.push('Emote death adaptation owner bonus and revive');
+  }
+
+  {
+    const attacker = makeFighter('适应攻击者@A');
+    const emote = makeFighter('表情@E');
+    attacker.atk = 200;
+    attacker.def = 100;
+    attacker.spd = 90;
+    attacker.agl = 80;
+    attacker.mag = 70;
+    attacker.res = 60;
+    attacker.wis = 50;
+    emote.maxHp = 500;
+    localProject.setCurrentHp(emote, 500);
+    emote.status.push({ type: 'EMOTE_ADAPT', duration: 2 });
+    const { engine, logs } = makeDeathEngine([attacker, emote]);
+
+    const actual = engine.applyDamage(engine.fighters[1], 100, 'skill', false, engine.fighters[0], { actionName: '适应测试' });
+
+    assert(actual === 70, `Emote adaptation should reduce 100 damage to 70, got ${actual}`);
+    assert(!engine.fighters[1].status.some((status) => status.type === 'EMOTE_ADAPT'), 'Emote adaptation status should be consumed after triggering');
+    assert((engine.fighters[1].emoteAdaptStats?.atk ?? 0) === 6, `Emote should copy 3% atk from attacker, got ${engine.fighters[1].emoteAdaptStats?.atk}`);
+    assert(engine.fighters[0].atk === 200, 'Emote adaptation should not reduce attacker stats');
+    assert(logs.some((entry) => entry.text.includes('适应转轮') && entry.text.includes('属性不降低')), 'Adaptation trigger log should clarify source stats are not reduced');
+    cases.push('Emote adaptation wheel copies without reducing attacker');
+  }
+
+  {
+    const killer = makeFighter('终局击杀者@K');
+    const owner = makeFighter('终局主人@O');
+    const emote = makeFighter('表情@E');
+    const { engine, logs } = makeDeathEngine([killer, owner, emote]);
+
+    withRandomSequence([0], () => {
+      engine.markDefeated(engine.fighters[2], { message: '💀 【测试】表情终局倒下。', killer: engine.fighters[0] });
+    });
+    engine.handleDeathsAndRevives({ current: false });
+
+    assert(!engine.fighters[2].isDead, 'Emote should use its one final owner challenge when two players and a zero-kill anchor remain');
+    assert(engine.fighters[2].emoteFinalChallengeUsed, 'Emote final owner challenge should be marked as used');
+    assert(logs.some((entry) => entry.text.includes('最终认主挑战')), 'Emote should log the final owner challenge');
+
+    withRandomSequence([0], () => {
+      engine.markDefeated(engine.fighters[2], { message: '💀 【测试】表情终局第二次倒下。', killer: engine.fighters[0] });
+    });
+    engine.handleDeathsAndRevives({ current: false });
+
+    assert(engine.fighters[2].emoteFinalDead, 'Emote should truly die in two-player endgame after final challenge is used');
+    assert(logs.some((entry) => entry.text.includes('场上只剩 2 名玩家')), 'Emote true-death log should explain the low-player condition');
+    cases.push('Emote final owner challenge then true death in two-player endgame');
+  }
+
+  {
+    const emote = makeFighter('表情@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const anchor = makeFighter('旁观锚点@C');
+    tokusatsu.status.push({ type: 'WAIT_COUNTER', duration: 3 });
+    const { engine, logs } = makeDeathEngine([emote, tokusatsu, anchor]);
+
+    engine.executeSkillAction('emote_tenth_claim', engine.fighters[0], engine.fighters[1]);
+
+    assert(logs.some((entry) => entry.text.includes('攻势被 刺猬人 的怪兽形态打断')), 'Emote custom skill should respect Tokusatsu wait-counter interruption');
+    assert(!logs.some((entry) => entry.text.includes('【十分之一索赔】表情') && entry.text.includes('实际造成')), 'Interrupted emote skill should not log landed damage after being stopped');
+    cases.push('Emote custom skill stops on wait-counter interruption');
+  }
+
+  {
+    const emote = makeFighter('表情@A');
+    const gamer = makeFighter('玄凝@B');
+    const joker = makeFighter('屑@C');
+    const victim = makeFighter('转移承伤者@D');
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for emote all-masters redirect test');
+    const { engine, logs } = makeDeathEngine([emote, gamer, joker, victim]);
+    const engineEmote = engine.fighters[0];
+    const engineGamer = engine.fighters[1];
+    const engineJoker = engine.fighters[2];
+    const engineVictim = engine.fighters[3];
+
+    engineEmote.mag = 100;
+    engineEmote.wis = 100;
+    engineEmote.maxHp = 1000;
+    localProject.setCurrentHp(engineEmote, 1000);
+    [engineGamer, engineJoker, engineVictim].forEach((fighter) => {
+      fighter.maxHp = 10000;
+      localProject.setCurrentHp(fighter, 10000);
+    });
+    engineGamer.stats.kills = 2;
+    engineJoker.stats.kills = 2;
+    engineJoker.job = 'GOD_OF_TROLLS';
+    engineJoker.jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    engineJoker.transformed = true;
+
+    withRandomSequence([0, 0.99, 0.99], () => {
+      engine.executeSkillAction('emote_all_masters_return', engineEmote, engineGamer);
+    });
+
+    assert(logs.some((entry) => entry.text.includes('屑 遭到表情的【万主归一】')), 'Emote all-masters test should trigger Joker redirect');
+    assert(logs.some((entry) => entry.text.includes('账页被随机恶作剧带偏')), 'Emote all-masters should explain redirected ledger page');
+    assert(engineJoker.stats.kills === 2, `Redirected Joker should not lose kills, got ${engineJoker.stats.kills}`);
+    assert(engineGamer.stats.kills === 1, `Directly hit gamer should lose one kill, got ${engineGamer.stats.kills}`);
+    assert(!logs.some((entry) => entry.text.includes('【击杀数回拨】屑')), 'Emote all-masters should not rewind a redirected Joker target');
+    cases.push('Emote all-masters ignores redirected Joker for kill rewind');
+  }
+
   return cases;
 }

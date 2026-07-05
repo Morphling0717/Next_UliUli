@@ -37,6 +37,8 @@ import {
 import {
   CharacterHookRuntime,
   runCharacterDefeatHooks,
+  runCharacterDefeatSettledHooks,
+  runCharacterGlobalTickHooks,
   runCharacterReentryHooks,
   runCharacterReviveHooks,
   runCharacterSkillSelectionHooks,
@@ -125,6 +127,10 @@ import {
   canUseTokusatsuThrone,
   TOKUSATSU_THRONE_RESONANCE_MAX,
 } from './tokusatsuMechanics';
+import {
+  formatEmoteStats,
+  grantEmoteAdaptStats,
+} from './emoteMechanics';
 
 const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   skill: '技能伤害',
@@ -536,6 +542,26 @@ export class BattleEngine {
       amount = Math.max(1, Math.floor(amount * eraMultiplier));
     }
 
+    if (
+      target.isEmote &&
+      attacker &&
+      attacker.id !== target.id &&
+      !attacker.isSummon &&
+      source !== 'status' &&
+      target.status.some((status) => status.type === 'EMOTE_ADAPT')
+    ) {
+      const beforeAdapt = amount;
+      amount = Math.max(1, Math.floor(amount * 0.7));
+      target.status = target.status.filter((status) => status.type !== 'EMOTE_ADAPT');
+      const gain = grantEmoteAdaptStats(target, attacker, 0.03);
+      this.queueOrLogDamageEvent(
+        target,
+        options,
+        'buff',
+        `🧿 【适应转轮】${target.name} 记录 ${attacker.name} 的攻击模式，削减 ${beforeAdapt - amount} 点伤害，并复制 3% 属性（${formatEmoteStats(gain)}）；${attacker.name} 属性不降低。`,
+      );
+    }
+
     const isProtected =
       target.isMorphling || target.isJoker || target.isTokusatsu || target.isGacha ||
       target.isTing || target.isSuccubus || target.isSigua || target.isTuJuanJuan || target.isWT;
@@ -839,6 +865,11 @@ export class BattleEngine {
       this.grantTingCrocKillMomentum(options.killer, target);
       this.grantGachaSummonRevenge(target, options.killer);
     }
+    runCharacterDefeatSettledHooks({
+      fighter: target,
+      runtime: this.createCharacterHookRuntime(),
+      killer: options.killer,
+    });
     this.tryMorphlingSonRescue(target);
 
     if (target.status.some((status) => status.type === 'VALO_ULT_RUN_IT_BACK')) {
@@ -992,6 +1023,7 @@ export class BattleEngine {
     this.resolveValorantInstantActions(spinalSwordRef);
     this.resolveGamerInstantActions(spinalSwordRef);
     this.advanceGlobalTimedStatuses();
+    runCharacterGlobalTickHooks({ runtime: this.createCharacterHookRuntime() });
     runCharacterReentryHooks({ runtime: this.createCharacterHookRuntime() });
   }
 

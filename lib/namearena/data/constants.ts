@@ -110,6 +110,10 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   WT_AMMO_EXPOSED:   { name: '弹药架暴露', icon: '💥', desc: '被命中模块弱点，低血时容易殉爆' },
   SYNERGY_SLACKING: { name: '场外OB', icon: '⛺', desc: '手牵手摸鱼中，绝对无敌且无法行动' },
   WEAK: { name: '虚弱', icon: '📉', desc: '攻击力大幅下降' },
+  EMOTE_ADAPT: { name: '适应转轮', icon: '🧿', desc: '下一次受到玩家伤害时减免并复制攻击者属性' },
+  EMOTE_FAMILIAR: { name: '脸熟', icon: '👁️', desc: '被表情提前盯上，表情死亡认主时会优先选择此目标' },
+  EMOTE_OWNER_BONUS: { name: '认主补偿', icon: '📜', desc: '表情死亡认主带来的本次击杀者十分之一临时补偿；认主结算时移除' },
+  EMOTE_ULT_COOLDOWN: { name: '万主归一冷却', icon: '🔁', desc: '表情刚刚发动万主归一，短时间内无法再次释放' },
 };
 
 export const COLORS: string[] = [

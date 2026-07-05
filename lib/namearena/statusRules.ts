@@ -71,6 +71,7 @@ export const PERMANENT_STATUS_TYPES: string[] = [
   'LIQUID_BODY',
   'PUPPET_MASTER',
   'WT_ERA',
+  'EMOTE_OWNER_BONUS',
 ];
 
 export const PERMANENT_STATUS_PREFIXES: string[] = [

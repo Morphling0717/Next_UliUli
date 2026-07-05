@@ -16,6 +16,8 @@
     "gacha:migrate": "npm run db:migrate && node scripts/migrate-gacha-data.js",
     "test:namearena": "node scripts/namearena-regression-test.js",
     "test:namearena:stress": "node scripts/namearena-mega-stress.js",
+    "test:namearena:emote": "node scripts/namearena-emote-stress.js",
+    "test:namearena:emote-interactions": "node scripts/namearena-emote-interaction-stress.js",
     "test:namearena:compare": "node scripts/namearena-compare-logs.js",
     "db:backup": "node scripts/backup-db.js",
     "clean": "rimraf .next out build node_modules"

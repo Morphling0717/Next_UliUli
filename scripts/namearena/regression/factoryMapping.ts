@@ -15,6 +15,7 @@ export function assertFactoryMapping(): string[] {
     ['刺猬人', 'TOKU_FAN'],
     ['屑', 'JOKE_KING'],
     ['M1A2_abrams_sep', 'WT_GRINDER'],
+    ['表情', 'EMOTE_MAHORAGA'],
   ]);
   expected.forEach((job, name) => {
     assert(makeFighter(name).job === job, `${name} should map to ${job}`);

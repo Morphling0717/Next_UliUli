@@ -47,6 +47,8 @@ export function cloneFighter(fighter: Fighter): Fighter {
     status: cloneStatuses(fighter.status),
     stats: { ...fighter.stats },
     exodiaPieces: fighter.exodiaPieces ? [...fighter.exodiaPieces] : fighter.exodiaPieces,
+    emoteAdaptStats: fighter.emoteAdaptStats ? { ...fighter.emoteAdaptStats } : fighter.emoteAdaptStats,
+    emoteOwnerBonus: fighter.emoteOwnerBonus ? { ...fighter.emoteOwnerBonus } : fighter.emoteOwnerBonus,
   };
 }
 

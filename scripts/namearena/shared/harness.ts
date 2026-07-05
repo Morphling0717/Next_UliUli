@@ -150,9 +150,9 @@ export function loadProject(root = projectRoot, options: { purge?: boolean } = {
 }
 
 export const localProject = loadProject(projectRoot);
-export const SPECIALS = ['水人', '玄凝', '小汀', '牢鳄', '克蕾儿丝菲尔', '丝瓜uli', '兔卷卷', '刺猬人', '屑', 'M1A2_abrams_sep'];
+export const SPECIALS = ['水人', '玄凝', '小汀', '牢鳄', '克蕾儿丝菲尔', '丝瓜uli', '兔卷卷', '刺猬人', '屑', 'M1A2_abrams_sep', '表情'];
 export const NO_WATER = SPECIALS.filter((name) => name !== '水人');
-export const DEFAULT_REGRESSION_MAX_TURNS = 700;
+export const DEFAULT_REGRESSION_MAX_TURNS = 1200;
 export const DEFAULT_STRESS_MAX_TURNS = Number.parseInt(process.env.NAMEARENA_MAX_TURNS ?? '1200', 10);
 export const DEFAULT_CHAOS_SEEDS = Number.parseInt(process.env.NAMEARENA_CHAOS_SEEDS ?? '300', 10);
 

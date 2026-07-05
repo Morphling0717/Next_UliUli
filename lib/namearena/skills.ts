@@ -3,6 +3,7 @@ import { babySkills } from './skills/baby';
 import { baseJobSkills } from './skills/baseJobs';
 import { chimeraSkills } from './skills/chimera';
 import { duelMonsterSkills } from './skills/duelMonster';
+import { emoteSkills } from './skills/emote';
 import { gachaSkills } from './skills/gacha';
 import { gamerSkills } from './skills/gamer';
 import { jokerSkills } from './skills/joker';
@@ -25,6 +26,7 @@ const SKILLS: Record<string, SkillDefinition> = {
   ...succubusSkills,
   ...chimeraSkills,
   ...duelMonsterSkills,
+  ...emoteSkills,
   ...gachaSkills,
   ...tokusatsuSkills,
   ...morphlingSkills,

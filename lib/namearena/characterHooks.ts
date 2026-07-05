@@ -1,5 +1,7 @@
 import type {
   CharacterDefeatContext,
+  CharacterDefeatSettledContext,
+  CharacterGlobalTickContext,
   CharacterHook,
   CharacterReentryContext,
   CharacterReviveContext,
@@ -9,6 +11,7 @@ import type {
   CharacterWinPreventionContext,
 } from './characterHooks/types';
 import { bunnyHook } from './characterHooks/bunny';
+import { emoteHook } from './characterHooks/emote';
 import { gachaHook } from './characterHooks/gacha';
 import { gamerHook } from './characterHooks/gamer';
 import { jokerHook } from './characterHooks/joker';
@@ -24,6 +27,8 @@ import { warThunderHook } from './characterHooks/warThunder';
 export { executeSlackingSynergy } from './characterHooks/slacking';
 export type {
   CharacterDefeatContext,
+  CharacterDefeatSettledContext,
+  CharacterGlobalTickContext,
   CharacterHook,
   CharacterHookRuntime,
   CharacterReentryContext,
@@ -48,6 +53,7 @@ const CHARACTER_HOOKS: CharacterHook[] = [
   siguaHook,
   bunnyHook,
   warThunderHook,
+  emoteHook,
 ];
 
 export function runCharacterSkillSelectionHooks(ctx: CharacterSkillSelectionContext): string | null {
@@ -66,6 +72,10 @@ export function runCharacterDefeatHooks(ctx: CharacterDefeatContext): void {
   CHARACTER_HOOKS.forEach((hook) => hook.onDefeated?.(ctx));
 }
 
+export function runCharacterDefeatSettledHooks(ctx: CharacterDefeatSettledContext): void {
+  CHARACTER_HOOKS.forEach((hook) => hook.onDefeatSettled?.(ctx));
+}
+
 export function shouldCharacterPreventWin(ctx: CharacterWinPreventionContext): boolean {
   return CHARACTER_HOOKS.some((hook) => hook.shouldPreventWin?.(ctx));
 }
@@ -80,4 +90,8 @@ export function runCharacterWaitCounterHooks(ctx: CharacterWaitCounterContext): 
 
 export function runCharacterReentryHooks(ctx: CharacterReentryContext): void {
   CHARACTER_HOOKS.forEach((hook) => hook.resolveReentry?.(ctx));
+}
+
+export function runCharacterGlobalTickHooks(ctx: CharacterGlobalTickContext): void {
+  CHARACTER_HOOKS.forEach((hook) => hook.onGlobalTick?.(ctx));
 }

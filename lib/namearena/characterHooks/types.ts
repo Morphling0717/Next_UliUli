@@ -3,6 +3,7 @@ import type { DamageApplicationOptions, Fighter, JobDefinition, SpinalSwordRef }
 export interface CharacterHookRuntime {
   fighters: Fighter[];
   jobs: Partial<Record<string, JobDefinition>>;
+  turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;
@@ -38,6 +39,12 @@ export interface CharacterDefeatContext {
   spinalSwordRef: SpinalSwordRef;
 }
 
+export interface CharacterDefeatSettledContext {
+  fighter: Fighter;
+  runtime: CharacterHookRuntime;
+  killer?: Fighter;
+}
+
 export interface CharacterWinPreventionContext {
   fighter: Fighter;
   runtime: CharacterHookRuntime;
@@ -70,13 +77,19 @@ export interface CharacterReentryContext {
   runtime: CharacterHookRuntime;
 }
 
+export interface CharacterGlobalTickContext {
+  runtime: CharacterHookRuntime;
+}
+
 export interface CharacterHook {
   id: string;
   selectSkill?: (ctx: CharacterSkillSelectionContext) => string | null;
   onTransformCheck?: (ctx: CharacterTransformContext) => boolean;
   onDefeated?: (ctx: CharacterDefeatContext) => void;
+  onDefeatSettled?: (ctx: CharacterDefeatSettledContext) => void;
   shouldPreventWin?: (ctx: CharacterWinPreventionContext) => boolean;
   onReviveCheck?: (ctx: CharacterReviveContext) => boolean;
   onWaitCounter?: (ctx: CharacterWaitCounterContext) => boolean;
   resolveReentry?: (ctx: CharacterReentryContext) => void;
+  onGlobalTick?: (ctx: CharacterGlobalTickContext) => void;
 }

@@ -2,6 +2,10 @@ import type {
   Fighter,
   SkillContext,
 } from '../types';
+import {
+  handleCounterStatus,
+  handleWaitCounter,
+} from './counters';
 import type { ActionResolutionRuntime } from './types';
 
 export function createSkillContext(
@@ -40,6 +44,10 @@ export function createSkillContext(
       return actualDmg;
     },
     markDefeated: (defeatTarget, options) => runtime.markDefeated(defeatTarget, options),
+    handleWaitCounter: (counterTarget, counterUser, counterActionName) =>
+      handleWaitCounter(runtime, counterTarget, counterUser, triggerDepth, counterActionName ?? actionName),
+    handleCounterStatus: (counterTarget, counterUser) =>
+      handleCounterStatus(runtime, counterTarget, counterUser),
     flushDeferredDamageEvents,
     queuePreResolutionLog,
     triggerDepth,
