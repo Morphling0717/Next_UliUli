@@ -210,7 +210,7 @@ type StatusDisplayItem = {
   info: StatusDisplayInfo;
 };
 
-type ResourceTone = 'luck' | 'tech' | 'combat' | 'support' | 'neutral';
+type ResourceTone = 'luck' | 'tech' | 'combat' | 'support' | 'shield' | 'neutral';
 
 type ResourceChip = {
   icon: string;
@@ -251,6 +251,7 @@ const RESOURCE_TONE_STYLES: Record<ResourceTone, string> = {
   tech: 'border-cyan-300/40 bg-cyan-400/10 text-cyan-100',
   combat: 'border-red-300/40 bg-red-400/10 text-red-100',
   support: 'border-emerald-300/40 bg-emerald-400/10 text-emerald-100',
+  shield: 'border-sky-300/40 bg-sky-400/10 text-sky-100',
   neutral: 'border-slate-300/30 bg-slate-700/40 text-slate-200',
 };
 
@@ -291,6 +292,7 @@ const DEFENSE_STATUS_TYPES = new Set([
   'INVUL',
   'BKB',
   'SPELL_BLOCK',
+  'YUZU_BARRIER',
   'TING_DEFIANCE',
   'TOKUSATSU_DEFIANCE',
   'RA_PHOENIX',
@@ -313,6 +315,12 @@ const DAMAGE_STATUS_TYPES = new Set([
   'WT_BREECH_DAMAGED',
   'WT_TRACK_DAMAGED',
   'WT_AMMO_EXPOSED',
+  'YUZU_MARKED',
+  'YUZU_EVADE_DOWN',
+  'YUZU_DEF_DOWN',
+  'YUZU_RES_DOWN',
+  'YUZU_ATK_DOWN',
+  'YUZU_SLOW',
 ]);
 
 const RECOVERY_STATUS_TYPES = new Set([
@@ -340,6 +348,7 @@ const SPECIAL_STATUS_TYPES = new Set([
   'GACHA_BLUE_EYES_GUARD_COOLDOWN',
   'GACHA_ULTIMATE_GUARD_COOLDOWN',
   'WT_ERA',
+  'YUZU_TAUNT',
 ]);
 
 const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
@@ -361,6 +370,7 @@ const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   BKB: 22,
   VALO_ULT_RUN_IT_BACK: 23,
   RA_PHOENIX: 24,
+  YUZU_BARRIER: 25,
   WAIT_COUNTER: 30,
   COUNTER: 31,
   SPINAL_SWORD: 40,
@@ -370,6 +380,13 @@ const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   GACHA_TRAP_GUARD_COOLDOWN: 44,
   GACHA_BLUE_EYES_GUARD_COOLDOWN: 44,
   GACHA_ULTIMATE_GUARD_COOLDOWN: 44,
+  YUZU_TAUNT: 45,
+  YUZU_MARKED: 63,
+  YUZU_EVADE_DOWN: 64,
+  YUZU_DEF_DOWN: 64,
+  YUZU_RES_DOWN: 64,
+  YUZU_ATK_DOWN: 64,
+  YUZU_SLOW: 64,
   BURN: 60,
   POISON: 61,
   NO_HEAL: 62,
@@ -543,6 +560,50 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[]): ResourceChip
     !candidate.isDead &&
     candidate.currentHp > 0,
   );
+
+  if (fighter.isYuzu) {
+    const phase = Math.max(1, fighter.yuzuPhase ?? 1);
+    const shield = Math.max(0, Math.floor(fighter.yuzuShield ?? 0));
+    chips.push({
+      icon: '🪞',
+      label: '镜界',
+      value: `${phase}阶段`,
+      title: getResourceTitle('镜界阶段', `${phase}阶段`, phase >= 3 ? '唯一目标已启动，非标记目标伤害会被大量偏折' : undefined),
+      tone: 'tech',
+      priority: 24,
+    });
+    if (shield > 0) {
+      chips.push({
+        icon: '🛡️',
+        label: '护盾',
+        value: String(shield),
+        title: getResourceTitle('镜界护盾', String(shield), '先于生命承受伤害；血条上的蓝色部分表示护盾覆盖量'),
+        tone: 'shield',
+        priority: 25,
+      });
+    }
+    if (phase >= 3) {
+      const markedTarget = fighter.yuzuMarkedTargetId
+        ? fighters.find((candidate) => candidate.id === fighter.yuzuMarkedTargetId)
+        : undefined;
+      chips.push({
+        icon: '🎯',
+        label: '唯一',
+        value: markedTarget?.name ?? '未定',
+        title: getResourceTitle('唯一目标', markedTarget?.name ?? '未定', '柚子的三阶段定制目标'),
+        tone: 'combat',
+        priority: 26,
+      });
+      chips.push({
+        icon: '🎼',
+        label: '终幕',
+        value: fighter.yuzuFuriosoReady ? 'READY' : `${fighter.yuzuMarkedHitCount ?? 0}/9`,
+        title: getResourceTitle('Furioso-Replica', fighter.yuzuFuriosoReady ? '已准备' : `${fighter.yuzuMarkedHitCount ?? 0}/9`, '三阶段技能打到唯一目标后每个大回合最多计数一次'),
+        tone: fighter.yuzuFuriosoReady ? 'combat' : 'tech',
+        priority: 27,
+      });
+    }
+  }
 
   if (fighter.isGacha) {
     if (typeof fighter.gachaLuck === 'number') {
@@ -745,6 +806,43 @@ function ResourceStrip({ fighter, fighters }: { fighter: Fighter; fighters: Figh
           +{hiddenChips.length}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+function HealthBar({ fighter }: { fighter: Fighter }) {
+  const hpPct = Math.max(0, Math.min(100, fighter.hpPct * 100));
+  const shield = Math.max(0, Math.floor(fighter.yuzuShield ?? 0));
+  const shieldPct = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (shield / fighter.maxHp) * 100)) : 0;
+  const effectivePct = fighter.maxHp > 0
+    ? Math.max(0, Math.min(100, ((fighter.currentHp + shield) / fighter.maxHp) * 100))
+    : hpPct;
+  const hasShield = shield > 0;
+  const title = hasShield
+    ? `生命：${fighter.currentHp}/${fighter.maxHp}\n镜界护盾：${shield}\n蓝色区域表示护盾覆盖量，护盾会先于生命承受伤害。`
+    : `生命：${fighter.currentHp}/${fighter.maxHp}`;
+
+  return (
+    <div
+      title={title}
+      className={`relative h-2 w-full overflow-hidden rounded-full border shadow-inner ${hasShield ? 'border-sky-700/60 bg-slate-950' : 'border-slate-800 bg-slate-900'}`}
+    >
+      {hasShield ? (
+        <>
+          <div
+            className="absolute inset-y-0 left-0 rounded-full bg-sky-500/55 shadow-[0_0_7px_rgba(56,189,248,0.65)] transition-all duration-300 ease-out"
+            style={{ width: `${effectivePct}%` }}
+          />
+          <div
+            className="absolute bottom-0 left-0 z-20 h-[2px] rounded-full bg-cyan-300 shadow-[0_0_5px_rgba(103,232,249,0.9)] transition-all duration-300 ease-out"
+            style={{ width: `${shieldPct}%` }}
+          />
+        </>
+      ) : null}
+      <div
+        className={`relative h-full transition-all duration-300 ease-out ${fighter.hpPct < 0.3 ? 'bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.8)]' : 'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.8)]'}`}
+        style={{ width: `${hpPct}%` }}
+      />
     </div>
   );
 }
@@ -1186,12 +1284,15 @@ export function NameArenaGame() {
                                                         {f.name}
                                                         {f.teamId && <span className="text-[10px] ml-1.5 bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 hidden sm:inline-block border border-slate-600 shadow-sm">@{f.teamId}</span>}
                                                     </span>
-                                                    <span className="shrink-0 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-bold text-slate-400 shadow-inner">{f.currentHp}/{f.maxHp}</span>
+                                                    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-bold text-slate-400 shadow-inner">
+                                                        <span>{f.currentHp}/{f.maxHp}</span>
+                                                        {(f.yuzuShield ?? 0) > 0 ? (
+                                                            <span className="rounded bg-sky-500/15 px-1 text-sky-200">+{Math.floor(f.yuzuShield ?? 0)}</span>
+                                                        ) : null}
+                                                    </span>
                                                 </div>
                                                 <div className="mb-1.5 truncate text-xs font-bold text-indigo-300">{f.jobData?.name || '未知'}</div>
-                                                <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800 shadow-inner">
-                                                    <div className={`h-full transition-all duration-300 ease-out ${f.hpPct<0.3?'bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.8)]':'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.8)]'}`} style={{width:`${f.hpPct*100}%`}}/>
-                                                </div>
+                                                <HealthBar fighter={f} />
                                             </div>
                                         </div>
                                         <StatusStrip statuses={f.status} />
