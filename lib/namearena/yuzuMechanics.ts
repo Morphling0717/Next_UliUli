@@ -25,6 +25,7 @@ export type YuzuWeapon = {
 
 export interface YuzuRuntime {
   fighters: Fighter[];
+  turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;
@@ -53,6 +54,34 @@ export const YUZU_PHASE_TWO_TEAM_SHIELD_RATIO = 0.35;
 export const YUZU_MARK_DAMAGE_BONUS = 0.2;
 export const YUZU_UNMARKED_DAMAGE_PENALTY = 0.2;
 export const YUZU_FURIOSO_COUNT = 9;
+
+function scaleStat(value: number, multiplier: number, floor: number): number {
+  return Math.max(floor, Math.floor(value * multiplier));
+}
+
+function rebuildYuzuPhaseTwoStats(yuzu: Fighter): void {
+  yuzu.maxHp = Math.max(3000, Math.min(3500, Math.floor(yuzu.maxHp * 5.8)));
+  yuzu.currentHp = yuzu.maxHp;
+  yuzu.atk = scaleStat(yuzu.atk, 4.0, 175);
+  yuzu.def = scaleStat(yuzu.def, 5.2, 125);
+  yuzu.res = scaleStat(yuzu.res, 5.2, 125);
+  yuzu.spd = scaleStat(yuzu.spd, 7.0, 115);
+  yuzu.agl = scaleStat(yuzu.agl, 5.8, 105);
+  yuzu.mag = scaleStat(yuzu.mag, 8.0, 60);
+  yuzu.wis = scaleStat(yuzu.wis, 7.5, 150);
+}
+
+function rebuildYuzuPhaseThreeStats(yuzu: Fighter): void {
+  yuzu.maxHp = Math.max(3600, Math.min(4300, Math.floor(yuzu.maxHp * 1.23)));
+  yuzu.currentHp = Math.max(yuzu.currentHp, Math.floor(yuzu.maxHp * 0.72));
+  yuzu.atk = scaleStat(yuzu.atk, 1.45, 255);
+  yuzu.def = scaleStat(yuzu.def, 1.35, 170);
+  yuzu.res = scaleStat(yuzu.res, 1.35, 170);
+  yuzu.spd = scaleStat(yuzu.spd, 1.25, 145);
+  yuzu.agl = scaleStat(yuzu.agl, 1.25, 130);
+  yuzu.mag = scaleStat(yuzu.mag, 1.4, 95);
+  yuzu.wis = scaleStat(yuzu.wis, 1.35, 220);
+}
 
 function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
   const existing = fighter.status.find((status) =>
@@ -121,7 +150,7 @@ function weightedPickWeapon(pool: YuzuWeapon[]): YuzuWeapon {
 export function drawYuzuWeapon(hasActiveTeammate: boolean, forcedWeapon?: YuzuWeaponId): YuzuWeapon {
   if (forcedWeapon) return YUZU_WEAPONS[forcedWeapon];
   if (hasActiveTeammate && Math.random() < 0.5) return YUZU_WEAPONS.shield;
-  const pool = Object.values(YUZU_WEAPONS).filter((weapon) => !hasActiveTeammate || weapon.id !== 'shield');
+  const pool = Object.values(YUZU_WEAPONS).filter((weapon) => weapon.id !== 'shield');
   return weightedPickWeapon(pool);
 }
 
@@ -160,6 +189,9 @@ export function ensureYuzuState(yuzu: Fighter): void {
   yuzu.yuzuPhase = Math.max(1, yuzu.yuzuPhase ?? 1);
   yuzu.yuzuShield = Math.max(0, Math.floor(yuzu.yuzuShield ?? 0));
   yuzu.yuzuMarkedHitCount = Math.max(0, yuzu.yuzuMarkedHitCount ?? 0);
+  if (yuzu.yuzuFuriosoCountedTurn !== undefined) {
+    yuzu.yuzuFuriosoCountedTurn = Math.floor(yuzu.yuzuFuriosoCountedTurn);
+  }
   yuzu.yuzuFuriosoReady = !!yuzu.yuzuFuriosoReady;
 }
 
@@ -181,12 +213,14 @@ export function enterYuzuPhaseTwo(runtime: YuzuRuntime, yuzu: Fighter, reason: s
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) >= 2 || !runtime.isActiveCombatant(yuzu)) return false;
 
   yuzu.yuzuPhase = 2;
+  rebuildYuzuPhaseTwoStats(yuzu);
+  runtime.syncHpPct?.(yuzu);
   const teamMode = hasAnyYuzuTeammate(runtime, yuzu);
   const targets = teamMode ? activeYuzuFriendlyUnits(runtime, yuzu, true) : [yuzu];
   const shieldRatio = teamMode ? YUZU_PHASE_TWO_TEAM_SHIELD_RATIO : YUZU_PHASE_TWO_SOLO_SHIELD_RATIO;
   const shield = Math.max(1, Math.floor(yuzu.maxHp * shieldRatio));
   targets.forEach((target) => grantYuzuShield(target, shield, yuzu.id));
-  runtime.log('transform', `🪞 【一码归一码】${yuzu.name} ${reason}，进入二阶段：${teamMode ? '为全体友方' : '为自己'}施加 ${shield} 点镜界护盾。`);
+  runtime.log('transform', `🪞 【一码归一码】${yuzu.name} ${reason}，进入二阶段：镜界肉体完成重构，生命恢复至 ${yuzu.currentHp}/${yuzu.maxHp}，${teamMode ? '为全体友方' : '为自己'}施加 ${shield} 点镜界护盾。`);
   return true;
 }
 
@@ -204,10 +238,13 @@ export function enterYuzuPhaseThree(runtime: YuzuRuntime, yuzu: Fighter, reason:
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) >= 3 || !runtime.isActiveCombatant(yuzu)) return false;
 
   yuzu.yuzuPhase = 3;
+  rebuildYuzuPhaseThreeStats(yuzu);
   yuzu.yuzuMarkedHitCount = 0;
+  yuzu.yuzuFuriosoCountedTurn = undefined;
   yuzu.yuzuFuriosoReady = false;
   removeStatus(yuzu, (status) => status.type === 'YUZU_TAUNT');
-  runtime.log('transform', `🪞 【苦痛啊，你是我的唯一】${yuzu.name} ${reason}，进入三阶段：镜界开始定制唯一目标。`);
+  runtime.syncHpPct?.(yuzu);
+  runtime.log('transform', `🪞 【苦痛啊，你是我的唯一】${yuzu.name} ${reason}，进入三阶段：属性再次重构，生命稳定在 ${yuzu.currentHp}/${yuzu.maxHp}，镜界开始定制唯一目标。`);
   ensureYuzuMarkedTarget(runtime, yuzu);
   return true;
 }
@@ -255,12 +292,14 @@ export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fig
   return target;
 }
 
-export function registerYuzuMarkedHit(runtime: YuzuRuntime, yuzu: Fighter, target: Fighter): void {
+export function registerYuzuMarkedSkill(runtime: YuzuRuntime, yuzu: Fighter, target: Fighter): void {
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) < 3 || yuzu.yuzuMarkedTargetId !== target.id) return;
+  if (yuzu.yuzuFuriosoCountedTurn === runtime.turnCount) return;
+  yuzu.yuzuFuriosoCountedTurn = runtime.turnCount;
   yuzu.yuzuMarkedHitCount = Math.min(YUZU_FURIOSO_COUNT, (yuzu.yuzuMarkedHitCount ?? 0) + 1);
   if ((yuzu.yuzuMarkedHitCount ?? 0) >= YUZU_FURIOSO_COUNT && !yuzu.yuzuFuriosoReady) {
     yuzu.yuzuFuriosoReady = true;
-    runtime.log('buff', `🪞 【Furioso-Replica】${yuzu.name} 已命中定制目标 ${YUZU_FURIOSO_COUNT} 次，终幕复写准备完成。`);
+    runtime.log('buff', `🪞 【Furioso-Replica】${yuzu.name} 已用三阶段技能命中定制目标 ${YUZU_FURIOSO_COUNT} 次，终幕复写准备完成。`);
   }
 }
 

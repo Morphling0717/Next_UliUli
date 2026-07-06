@@ -160,6 +160,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     yuzuOpeningShieldApplied: false,
     yuzuMarkedTargetId: undefined,
     yuzuMarkedHitCount: 0,
+    yuzuFuriosoCountedTurn: undefined,
     yuzuFuriosoReady: false,
     yuzuLastWeapon: undefined,
     hasTriggeredSlacking: false,

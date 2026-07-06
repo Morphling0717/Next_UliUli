@@ -5,7 +5,7 @@ import {
   applyYuzuWeaponEffects,
   drawYuzuWeapon,
   ensureYuzuMarkedTarget,
-  registerYuzuMarkedHit,
+  registerYuzuMarkedSkill,
   YUZU_MARK_DAMAGE_BONUS,
   YUZU_UNMARKED_DAMAGE_PENALTY,
   YUZU_WEAPONS,
@@ -15,6 +15,14 @@ import {
 } from '../yuzuMechanics';
 
 const { SKILL_TAGS } = Data;
+
+const YUZU_PHASE_TWO_DAMAGE_SCALE = 0.9;
+const YUZU_PHASE_THREE_DAMAGE_SCALE = 0.74;
+const YUZU_FURIOSO_DAMAGE_SCALE = 0.7;
+const YUZU_MARKED_MAX_HP_FLOOR_RATIO = 0.022;
+const YUZU_MARKED_ATK_FLOOR_RATIO = 0.18;
+const YUZU_FURIOSO_ATK_FLOOR_RATIO = 1.05;
+const YUZU_FURIOSO_WIS_FLOOR_RATIO = 0.3;
 
 type YuzuAttackPlan = {
   actionName: string;
@@ -35,6 +43,7 @@ function isActive(fighter: Fighter): boolean {
 function yuzuRuntime(ctx: SkillContext): YuzuRuntime {
   return {
     fighters: ctx.fighters,
+    turnCount: ctx.turnCount,
     getTeamId: ctx.getTeamId,
     isActiveCombatant: isActive,
     log: ctx.log,
@@ -123,12 +132,19 @@ function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAt
     if (isMarkedPhaseThreeTarget) multiplier *= (1 + YUZU_MARK_DAMAGE_BONUS);
     else multiplier *= (1 - YUZU_UNMARKED_DAMAGE_PENALTY);
   }
+  if ((ctx.user.yuzuPhase ?? 1) === 2) multiplier *= YUZU_PHASE_TWO_DAMAGE_SCALE;
+  if ((ctx.user.yuzuPhase ?? 1) >= 3) multiplier *= plan.furioso ? YUZU_FURIOSO_DAMAGE_SCALE : YUZU_PHASE_THREE_DAMAGE_SCALE;
 
   let amount = Math.max(1, Math.floor(defended * multiplier));
   if (isMarkedPhaseThreeTarget) {
-    const maxHpFloor = target.maxHp * (plan.furioso ? 0.135 : 0.022);
-    const statFloor = ctx.user.atk * (plan.furioso ? 0.35 : 0.18);
-    amount = Math.max(amount, Math.floor(maxHpFloor + statFloor));
+    if (plan.furioso) {
+      const selfStatFloor = ctx.user.atk * YUZU_FURIOSO_ATK_FLOOR_RATIO + ctx.user.wis * YUZU_FURIOSO_WIS_FLOOR_RATIO;
+      amount = Math.max(amount, Math.floor(selfStatFloor));
+    } else {
+      const maxHpFloor = target.maxHp * YUZU_MARKED_MAX_HP_FLOOR_RATIO;
+      const statFloor = ctx.user.atk * YUZU_MARKED_ATK_FLOOR_RATIO;
+      amount = Math.max(amount, Math.floor(maxHpFloor + statFloor));
+    }
   }
 
   return {
@@ -137,8 +153,19 @@ function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAt
   };
 }
 
-function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan, index: number, forcedWeapon?: YuzuWeaponId): boolean {
-  if (!resolveYuzuAttackGuards(ctx, target, plan.actionName)) return false;
+type YuzuHitResult = {
+  canContinue: boolean;
+  hitMarkedTarget: boolean;
+};
+
+function isCurrentMarkedTarget(ctx: SkillContext, target: Fighter): boolean {
+  return (ctx.user.yuzuPhase ?? 1) >= 3 && ctx.user.yuzuMarkedTargetId === target.id;
+}
+
+function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan, index: number, forcedWeapon?: YuzuWeaponId): YuzuHitResult {
+  if (!resolveYuzuAttackGuards(ctx, target, plan.actionName)) {
+    return { canContinue: false, hitMarkedTarget: false };
+  }
 
   const { amount, weaponName } = calculateYuzuHitDamage(ctx, target, plan, forcedWeapon);
   const weapon = forcedWeapon ? YUZU_WEAPONS[forcedWeapon] : Object.values(YUZU_WEAPONS).find((candidate) => weaponName.startsWith(candidate.name)) ?? YUZU_WEAPONS.sword;
@@ -161,7 +188,6 @@ function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan
   if (actual > 0 && !redirected) {
     applyYuzuWeaponEffects(yuzuRuntime(ctx), ctx.user, target, weapon, actual);
     if (plan.applyRandomDebuff) applyRandomYuzuDebuff(ctx, target);
-    registerYuzuMarkedHit(yuzuRuntime(ctx), ctx.user, target);
   }
 
   if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
@@ -170,21 +196,38 @@ function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan
       killer: ctx.user,
     });
   }
-  return isActive(ctx.user);
+  return {
+    canContinue: isActive(ctx.user),
+    hitMarkedTarget: actual > 0 && !redirected && isCurrentMarkedTarget(ctx, target),
+  };
 }
 
 function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean {
   ctx.log('skill', `🪞 【${plan.actionName}】${ctx.user.name}：${plan.quote}`);
+  let markedTargetHitThisSkill: Fighter | undefined;
+
+  const registerMarkedSkillIfNeeded = () => {
+    if (plan.furioso || !markedTargetHitThisSkill) return;
+    registerYuzuMarkedSkill(yuzuRuntime(ctx), ctx.user, markedTargetHitThisSkill);
+  };
 
   for (let i = 0; i < plan.hits; i += 1) {
     const target = chooseYuzuTarget(ctx, plan);
     if (!target) {
       ctx.log('info', `🪞 【${plan.actionName}】镜界里已经找不到可以处刑的目标。`);
+      registerMarkedSkillIfNeeded();
       return true;
     }
     const forcedWeapon = plan.furioso && i === plan.hits - 1 ? 'scythe' : undefined;
-    if (!executeYuzuHit(ctx, target, plan, i, forcedWeapon)) return true;
+    const hitResult = executeYuzuHit(ctx, target, plan, i, forcedWeapon);
+    if (hitResult.hitMarkedTarget) markedTargetHitThisSkill = target;
+    if (!hitResult.canContinue) {
+      registerMarkedSkillIfNeeded();
+      return true;
+    }
   }
+
+  registerMarkedSkillIfNeeded();
 
   if (plan.furioso) {
     ctx.user.yuzuMarkedHitCount = 0;
@@ -292,7 +335,7 @@ export const yuzuSkills: Record<string, SkillDefinition> = {
     actionName: 'Furioso-Replica',
     quote: '“Furioso-Replica”',
     hits: 9,
-    damageBonus: 0.2,
+    damageBonus: 0.15,
     preferredWeapon: 'scythe',
     preferredBonus: 0.1,
     furioso: true,

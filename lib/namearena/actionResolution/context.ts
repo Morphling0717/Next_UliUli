@@ -24,6 +24,7 @@ export function createSkillContext(
     target,
     currentTargets,
     fighters: runtime.fighters,
+    turnCount: runtime.turnCount,
     setLogs: () => {},
     log: (type, text) => runtime.log(type, text),
     getTeamId: (fighter) => runtime.getTeamId(fighter),

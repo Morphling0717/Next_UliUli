@@ -246,6 +246,7 @@ export interface Fighter {
   yuzuOpeningShieldApplied?: boolean;
   yuzuMarkedTargetId?: string;
   yuzuMarkedHitCount?: number;
+  yuzuFuriosoCountedTurn?: number;
   yuzuFuriosoReady?: boolean;
   yuzuLastWeapon?: string;
 
@@ -293,6 +294,7 @@ export interface SkillContext {
   target: Fighter;
   currentTargets: Fighter[];
   fighters: Fighter[];
+  turnCount: number;
   log: (type: string, text: string) => void;
   getTeamId: (f: Fighter) => string;
   applyDamage: (

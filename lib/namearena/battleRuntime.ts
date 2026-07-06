@@ -154,6 +154,7 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     skillTags: host.SKILL_TAGS,
     data: host.Data,
     statusEffects: host.STATUS_EFFECTS,
+    turnCount: host.turnCount,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text) => host.log(type, text),

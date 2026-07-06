@@ -15,6 +15,7 @@ export interface ActionResolutionRuntime {
   skillTags: Record<string, string>;
   data: BattleEngineData;
   statusEffects: StatusEffectsMap;
+  turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;

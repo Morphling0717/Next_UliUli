@@ -1,4 +1,5 @@
 import type { Fighter, GachaEntry, SkillDefinition, StatKey } from '../../../lib/namearena/types';
+import { drawYuzuWeapon } from '../../../lib/namearena/yuzuMechanics';
 import {
   assert,
   localProject,
@@ -2057,6 +2058,16 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const soloWeapon = withRandomSequence([0.45], () => drawYuzuWeapon(false).id);
+    assert(soloWeapon !== 'shield', `Yuzu should not draw shield without teammates, got ${soloWeapon}`);
+    const teamForcedShield = withRandomSequence([0.1], () => drawYuzuWeapon(true).id);
+    assert(teamForcedShield === 'shield', `Yuzu should force shield under teammate shield roll, got ${teamForcedShield}`);
+    const teamFallbackWeapon = withRandomSequence([0.9, 0.45], () => drawYuzuWeapon(true).id);
+    assert(teamFallbackWeapon !== 'shield', `Yuzu fallback weapon pool should exclude shield after failed teammate shield roll, got ${teamFallbackWeapon}`);
+    cases.push('Yuzu shield weapon requires active teammate roll');
+  }
+
+  {
     const yuzu = makeFighter('柚子@A');
     const ally = makeFighter('柚子队友@A');
     const enemy = makeFighter('柚子敌人@B');
@@ -2086,13 +2097,17 @@ export function runCharacterHookCases(): string[] {
     engine.applyDamage(engineYuzu, 400, 'skill', false, attacker, { actionName: '压血测试' });
 
     assert(engineYuzu.yuzuPhase === 2, `Yuzu should enter phase 2 below 70%, got phase ${engineYuzu.yuzuPhase}`);
+    assert(engineYuzu.maxHp > 1000, `Yuzu phase 2 should rebuild max HP above the test baseline, got ${engineYuzu.maxHp}`);
+    assert(engineYuzu.currentHp >= Math.floor(engineYuzu.maxHp * 0.62), `Yuzu phase 2 should recover to a safe HP line after stat rebuild, got ${engineYuzu.currentHp}/${engineYuzu.maxHp}`);
     assert((engineYuzu.yuzuShield ?? 0) > 0, 'Yuzu phase 2 should grant personal shield in solo battle');
     const hpAfterPhaseTwo = engineYuzu.currentHp;
+    const maxHpAfterPhaseTwo = engineYuzu.maxHp;
     const phaseTwoShield = engineYuzu.yuzuShield ?? 0;
     const actual = engine.applyDamage(engineYuzu, phaseTwoShield + 500, 'skill', false, attacker, { actionName: '破盾测试' });
 
     assert(actual === 0, `Yuzu solo shield break should invalidate overflow HP damage, got actual ${actual}`);
-    assert(engineYuzu.currentHp === hpAfterPhaseTwo, `Yuzu HP should not change on shield-break overflow, got ${engineYuzu.currentHp}/${hpAfterPhaseTwo}`);
+    assert(engineYuzu.currentHp >= hpAfterPhaseTwo, `Yuzu phase 3 rebuild should not lose HP on shield-break overflow, got ${engineYuzu.currentHp}/${hpAfterPhaseTwo}`);
+    assert(engineYuzu.maxHp > maxHpAfterPhaseTwo, `Yuzu phase 3 should rebuild max HP above phase 2, got ${engineYuzu.maxHp}/${maxHpAfterPhaseTwo}`);
     assert(Number(engineYuzu.yuzuPhase) === 3, `Yuzu should enter phase 3 when solo phase-2 shield breaks, got ${engineYuzu.yuzuPhase}`);
     assert(logs.some((entry) => entry.text.includes('个人战护盾被击碎')), 'Yuzu shield-break transition should explain overflow invalidation');
     cases.push('Yuzu solo phase 2 shield break enters phase 3');
@@ -2113,8 +2128,8 @@ export function runCharacterHookCases(): string[] {
     const actual = engine.applyDamage(engineYuzu, 5000, 'skill', false, attacker, { actionName: '一阶段过量伤害' });
 
     assert(actual === 999, `Yuzu phase-1 special lock should cap lethal damage to 999, got ${actual}`);
-    assert(engineYuzu.currentHp === 1, `Yuzu should survive phase-1 overkill at 1 HP, got ${engineYuzu.currentHp}`);
     assert(engineYuzu.yuzuPhase === 2, `Yuzu should enter phase 2 after phase-1 lock, got phase ${engineYuzu.yuzuPhase}`);
+    assert(engineYuzu.currentHp >= Math.floor(engineYuzu.maxHp * 0.62), `Yuzu phase 2 should rebuild away from the 1 HP lock, got ${engineYuzu.currentHp}/${engineYuzu.maxHp}`);
     assert(!engineYuzu.isDead && !engineYuzu.isDeadAnnounced, 'Yuzu should not be marked dead after phase-1 lock');
     assert((engineYuzu.yuzuShield ?? 0) > 0, 'Yuzu should receive phase-2 shield after phase-1 lock');
     assert(logs.some((entry) => entry.text.includes('锁血保护')), 'Yuzu phase-1 overkill should log special lock protection');
@@ -2166,17 +2181,49 @@ export function runCharacterHookCases(): string[] {
     });
 
     assert(engineYuzu.yuzuMarkedTargetId === engineTarget.id, 'Yuzu phase 3 should mark the first available target under deterministic roll');
-    const blocked = engine.applyDamage(engineYuzu, 500, 'skill', false, engineBystander, { actionName: '非目标攻击' });
-    assert(blocked === 0, `Yuzu should ignore damage from non-marked enemies in phase 3, got ${blocked}`);
-    assert(logs.some((entry) => entry.text.includes('唯一目标') && entry.text.includes('非目标敌人')), 'Yuzu non-target immunity should be logged');
+    const mitigated = engine.applyDamage(engineYuzu, 500, 'skill', false, engineBystander, { actionName: '非目标攻击' });
+    assert(mitigated === 85, `Yuzu should take 20% non-marked damage before phase-3 reduction, got ${mitigated}`);
+    assert(logs.some((entry) => entry.text.includes('唯一目标') && entry.text.includes('非目标敌人') && entry.text.includes('剩余 100 点继续结算')), 'Yuzu non-target mitigation should be logged');
+
+    engineTarget.maxHp = 100000;
+    localProject.setCurrentHp(engineTarget, 100000);
+    engineTarget.def = 0;
+    engineYuzu.atk = 278;
+    engineYuzu.wis = 220;
+    engineYuzu.yuzuMarkedHitCount = 0;
+    engineYuzu.yuzuFuriosoReady = false;
+    engineYuzu.yuzuFuriosoCountedTurn = undefined;
+    engine.turnCount = 77;
+
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_customized_fool', engineYuzu, engineTarget);
+    });
+    assert(engineYuzu.yuzuMarkedHitCount === 1, `Yuzu multi-hit phase-3 skill should count once, got ${engineYuzu.yuzuMarkedHitCount}`);
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_daughter_reckoning', engineYuzu, engineTarget);
+    });
+    assert(engineYuzu.yuzuMarkedHitCount === 1, `Yuzu should not count twice in the same global turn, got ${engineYuzu.yuzuMarkedHitCount}`);
+    engine.turnCount = 78;
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_daughter_reckoning', engineYuzu, engineTarget);
+    });
+    assert(Number(engineYuzu.yuzuMarkedHitCount) === 2, `Yuzu should count again after the global turn advances, got ${engineYuzu.yuzuMarkedHitCount}`);
 
     engineTarget.maxHp = 10000;
     localProject.setCurrentHp(engineTarget, 10000);
+    engineTarget.def = 9999;
+    engineYuzu.atk = 278;
+    engineYuzu.wis = 220;
     engineYuzu.yuzuFuriosoReady = true;
-    engine.executeSkillAction('yuzu_furioso_replica', engineYuzu, engineTarget);
+    const hpBeforeFurioso = engineTarget.currentHp;
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_furioso_replica', engineYuzu, engineTarget);
+    });
+    const furiosoDamage = hpBeforeFurioso - engineTarget.currentHp;
     assert(!engineYuzu.yuzuFuriosoReady, 'Furioso should consume its ready flag');
-    assert(engineYuzu.yuzuMarkedHitCount === 0, `Furioso should reset marked hit count, got ${engineYuzu.yuzuMarkedHitCount}`);
+    assert(Number(engineYuzu.yuzuMarkedHitCount) === 0, `Furioso should reset marked hit count, got ${engineYuzu.yuzuMarkedHitCount}`);
     assert(logs.some((entry) => entry.text.includes('【Furioso-Replica】第 9/9 击抽到 镰刀')), 'Furioso final hit should force scythe');
+    assert(furiosoDamage >= 1800, `Furioso should retain self-stat floor damage against high defense, got ${furiosoDamage}`);
     cases.push('Yuzu phase 3 mark immunity and Furioso final scythe');
   }
 

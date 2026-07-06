@@ -33,6 +33,7 @@ const PHASE_THREE_SKILLS = [
 function asYuzuRuntime(runtime: CharacterHookRuntime): YuzuRuntime {
   return {
     fighters: runtime.fighters,
+    turnCount: runtime.turnCount,
     getTeamId: runtime.getTeamId,
     isActiveCombatant: runtime.isActiveCombatant,
     log: runtime.log,

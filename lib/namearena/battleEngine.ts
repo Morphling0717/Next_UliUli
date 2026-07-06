@@ -545,8 +545,9 @@ export class BattleEngine {
       const runtime = this.createCharacterHookRuntime();
       const marked = ensureYuzuMarkedTarget(runtime, target);
       if (marked && marked.id !== attacker.id) {
-        this.log('info', `🪞 【唯一目标】${target.name} 只承认 ${marked.name} 的苦痛，来自 ${attacker.name} 的伤害被镜界拒绝。`);
-        return 0;
+        const beforeUniqueTarget = amount;
+        amount = Math.max(1, Math.floor(amount * 0.2));
+        this.log('info', `🪞 【唯一目标】${target.name} 只承认 ${marked.name} 的苦痛，来自 ${attacker.name} 的伤害被镜界偏折 ${beforeUniqueTarget - amount} 点，剩余 ${amount} 点继续结算。`);
       }
     }
 
@@ -622,6 +623,7 @@ export class BattleEngine {
       ) {
         enterYuzuPhaseThree({
           fighters: this.fighters,
+          turnCount: this.turnCount,
           getTeamId: (fighter) => this.getTeamId(fighter),
           isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
           log: (type, text) => this.log(type, text),
@@ -795,6 +797,7 @@ export class BattleEngine {
     if (target.isYuzu) {
       tryAdvanceYuzuPhaseByHp({
         fighters: this.fighters,
+        turnCount: this.turnCount,
         getTeamId: (fighter) => this.getTeamId(fighter),
         isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
         log: (type, text) => this.queueOrLogDamageEvent(target, options, type, text),
