@@ -247,6 +247,7 @@ const STATUS_CATEGORY_STYLES: Record<StatusCategory, string> = {
 };
 
 const STATUS_DISPLAY_FALLBACKS: Record<string, StatusEffectInfo> = {
+  BLEED: { name: '流血', icon: '🩸', desc: '持续流血伤害' },
   YUZU_BARRIER: { name: '镜界护盾', icon: '🛡️', desc: '柚子施加的数值护盾，会先于生命承受伤害' },
   YUZU_TAUNT: { name: '满级嘲讽', icon: '🪞', desc: '柚子抽到盾牌后吸引敌方火力' },
   YUZU_MARKED: { name: '镜界标记', icon: '🎯', desc: '柚子三阶段定制目标，承受柚子更高伤害' },
@@ -314,6 +315,7 @@ const DEFENSE_STATUS_TYPES = new Set([
 const DAMAGE_STATUS_TYPES = new Set([
   'BURN',
   'POISON',
+  'BLEED',
   'WATER_PRISON',
   'NO_HEAL',
   'WEAK',
@@ -400,6 +402,7 @@ const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   YUZU_SLOW: 64,
   BURN: 60,
   POISON: 61,
+  BLEED: 61,
   NO_HEAL: 62,
 };
 
