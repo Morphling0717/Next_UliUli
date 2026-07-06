@@ -215,7 +215,7 @@ export function enterYuzuPhaseTwo(runtime: YuzuRuntime, yuzu: Fighter, reason: s
   yuzu.yuzuPhase = 2;
   rebuildYuzuPhaseTwoStats(yuzu);
   runtime.syncHpPct?.(yuzu);
-  const teamMode = hasAnyYuzuTeammate(runtime, yuzu);
+  const teamMode = activeYuzuTeammates(runtime, yuzu).length > 0;
   const targets = teamMode ? activeYuzuFriendlyUnits(runtime, yuzu, true) : [yuzu];
   const shieldRatio = teamMode ? YUZU_PHASE_TWO_TEAM_SHIELD_RATIO : YUZU_PHASE_TWO_SOLO_SHIELD_RATIO;
   const shield = Math.max(1, Math.floor(yuzu.maxHp * shieldRatio));
@@ -261,9 +261,14 @@ export function tryAdvanceYuzuPhaseByHp(runtime: YuzuRuntime, yuzu: Fighter): bo
 export function tryAdvanceYuzuPhaseByTeamLoss(runtime: YuzuRuntime, yuzu: Fighter): boolean {
   if (!yuzu.isYuzu || !runtime.isActiveCombatant(yuzu)) return false;
   ensureYuzuState(yuzu);
-  if ((yuzu.yuzuPhase ?? 1) !== 2) return false;
+  const phase = yuzu.yuzuPhase ?? 1;
+  if (phase >= 3) return false;
   if (!hasAnyYuzuTeammate(runtime, yuzu)) return false;
   if (activeYuzuTeammates(runtime, yuzu).length > 0) return false;
+  if (phase < 2) {
+    const enteredPhaseTwo = enterYuzuPhaseTwo(runtime, yuzu, '队友全部阵亡，镜界被迫提前重构');
+    if (!enteredPhaseTwo && (yuzu.yuzuPhase ?? 1) < 2) return false;
+  }
   return enterYuzuPhaseThree(runtime, yuzu, '队友全部阵亡');
 }
 

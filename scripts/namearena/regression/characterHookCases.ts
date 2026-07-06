@@ -2166,6 +2166,29 @@ export function runCharacterHookCases(): string[] {
 
   {
     const yuzu = makeFighter('柚子@A');
+    const emote = makeFighter('表情@A');
+    const enemyA = makeFighter('表情击杀者@B');
+    const enemyB = makeFighter('表情旁观者@B');
+    const { engine, logs } = makeDeathEngine([yuzu, emote, enemyA, enemyB]);
+    const engineYuzu = engine.fighters[0];
+    const engineEmote = engine.fighters[1];
+
+    assert(engineYuzu.yuzuPhase === 1, `Yuzu should start phase 1 for emote team-loss regression, got ${engineYuzu.yuzuPhase}`);
+    withRandomSequence([0], () => {
+      engine.markDefeated(engineEmote, { message: '💀 【测试】表情进入认主阶段。', killer: engine.fighters[2] });
+    });
+    engine.finishStep({ current: false });
+
+    assert(engineEmote.isDead && (engineEmote.emoteReviveTurns ?? 0) > 0, 'Emote should be dead and waiting in owner phase');
+    const yuzuPhaseAfterEmoteOwnerPhase: number = engineYuzu.yuzuPhase ?? 1;
+    assert(yuzuPhaseAfterEmoteOwnerPhase === 3, `Yuzu should enter phase 3 when emote teammate is in owner phase, got ${yuzuPhaseAfterEmoteOwnerPhase}`);
+    assert(logs.some((entry) => entry.text.includes('四处认主')), 'Emote owner phase should be logged before Yuzu team-loss transition');
+    assert(logs.some((entry) => entry.text.includes('队友全部阵亡') && entry.text.includes('苦痛啊，你是我的唯一')), 'Yuzu team-loss phase 3 transition should be logged after emote owner phase');
+    cases.push('Yuzu enters phase 3 when emote teammate enters owner phase');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
     const target = makeFighter('定制目标@B');
     const bystander = makeFighter('非目标敌人@C');
     const { engine, logs } = makeDeathEngine([yuzu, target, bystander]);
