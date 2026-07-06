@@ -47,7 +47,7 @@ export const YUZU_WEAPONS: Record<YuzuWeaponId, YuzuWeapon> = {
 
 export const YUZU_PHASE_ONE_REDUCTION = 0.15;
 export const YUZU_PHASE_THREE_REDUCTION = 0.15;
-export const YUZU_TEAM_SHARE_RATIO = 0.9;
+export const YUZU_TEAM_SHARE_RATIO = 1;
 export const YUZU_OPENING_SHIELD_RATIO = 0.2;
 export const YUZU_PHASE_TWO_SOLO_SHIELD_RATIO = 0.65;
 export const YUZU_PHASE_TWO_TEAM_SHIELD_RATIO = 0.35;
@@ -108,6 +108,8 @@ export function activeYuzuTeammates(runtime: YuzuRuntime, yuzu: Fighter): Fighte
   return runtime.fighters.filter((fighter) =>
     fighter.id !== yuzu.id &&
     !fighter.isSummon &&
+    !fighter.isNpc &&
+    !fighter.cannotWin &&
     runtime.isActiveCombatant(fighter) &&
     sameTeam(runtime, yuzu, fighter),
   );
@@ -124,6 +126,8 @@ export function hasAnyYuzuTeammate(runtime: YuzuRuntime, yuzu: Fighter): boolean
 export function activeYuzuFriendlyUnits(runtime: YuzuRuntime, yuzu: Fighter, includeSelf = true): Fighter[] {
   return runtime.fighters.filter((fighter) =>
     (includeSelf || fighter.id !== yuzu.id) &&
+    !fighter.isNpc &&
+    !fighter.cannotWin &&
     runtime.isActiveCombatant(fighter) &&
     sameTeam(runtime, yuzu, fighter),
   );
@@ -135,6 +139,19 @@ export function activeYuzuEnemies(runtime: YuzuRuntime, yuzu: Fighter): Fighter[
     runtime.isActiveCombatant(fighter) &&
     !sameTeam(runtime, yuzu, fighter),
   );
+}
+
+function isYuzuMarkEligibleTarget(target: Fighter): boolean {
+  if (target.isPuruisaishi || target.isOriginiumCore) return false;
+  if (target.isNpc && !target.isOriginiumCrystal) return false;
+  if (target.cannotWin && !target.isOriginiumCrystal) return false;
+  return true;
+}
+
+function activeYuzuMarkTargets(runtime: YuzuRuntime, yuzu: Fighter): Fighter[] {
+  const enemies = activeYuzuEnemies(runtime, yuzu).filter(isYuzuMarkEligibleTarget);
+  const crystals = enemies.filter((enemy) => enemy.isOriginiumCrystal);
+  return crystals.length > 0 ? crystals : enemies;
 }
 
 function weightedPickWeapon(pool: YuzuWeapon[]): YuzuWeapon {
@@ -279,6 +296,7 @@ export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fig
     ? runtime.fighters.find((fighter) =>
       fighter.id === yuzu.yuzuMarkedTargetId &&
       runtime.isActiveCombatant(fighter) &&
+      isYuzuMarkEligibleTarget(fighter) &&
       !sameTeam(runtime, yuzu, fighter),
     )
     : undefined;
@@ -288,7 +306,7 @@ export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fig
   }
 
   clearYuzuMark(runtime, yuzu);
-  const enemies = activeYuzuEnemies(runtime, yuzu);
+  const enemies = activeYuzuMarkTargets(runtime, yuzu);
   const target = enemies[Math.floor(Math.random() * enemies.length)];
   if (!target) return undefined;
   yuzu.yuzuMarkedTargetId = target.id;

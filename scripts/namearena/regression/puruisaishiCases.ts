@@ -175,6 +175,51 @@ export function runPuruisaishiCases(): string[] {
   }
 
   {
+    const { engine } = makeDeathEngine([
+      makeFighter('转阶段A@A'),
+      makeFighter('转阶段B@B'),
+      makeFighter('转阶段C@C'),
+    ]);
+    engine.turnCount = 12;
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
+    assert(puruisaishi, 'Puruisaishi should exist for phase threshold test');
+
+    engine.turnCount = 61;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    assert((puruisaishi.puruisaishiPhase ?? 1) === 1, `Puruisaishi should stay phase 1 at 49 turns after spawn, got ${puruisaishi.puruisaishiPhase ?? 1}`);
+
+    engine.turnCount = 62;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    assert((puruisaishi.puruisaishiPhase ?? 1) === 2, `Puruisaishi should enter phase 2 exactly 50 turns after spawn, got ${puruisaishi.puruisaishiPhase ?? 1}`);
+    assert(puruisaishi.puruisaishiPhaseTwoStartedTurn === 62, `Puruisaishi phase 2 start turn should be spawn+50, got ${puruisaishi.puruisaishiPhaseTwoStartedTurn}`);
+    cases.push('Puruisaishi enters phase 2 exactly 50 turns after spawn');
+  }
+
+  {
+    const { engine } = makeDeathEngine([
+      makeFighter('迟到检查A@A'),
+      makeFighter('迟到检查B@B'),
+      makeFighter('迟到检查C@C'),
+    ]);
+    engine.turnCount = 10;
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
+    assert(puruisaishi, 'Puruisaishi should exist for late phase threshold test');
+
+    engine.turnCount = 80;
+    withRandomSequence([0, 0], () => {
+      processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    });
+
+    assert((puruisaishi.puruisaishiPhase ?? 1) === 2, `Puruisaishi should enter phase 2 even when the exact threshold tick was missed, got ${puruisaishi.puruisaishiPhase ?? 1}`);
+    assert(puruisaishi.puruisaishiPhaseTwoStartedTurn === 60, `Puruisaishi late phase start should still be spawn+50, got ${puruisaishi.puruisaishiPhaseTwoStartedTurn}`);
+    const totalStacks = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    assert(totalStacks === 4, `Puruisaishi late phase processing should preserve the 20-turn pulse schedule, got ${totalStacks} total stacks`);
+    cases.push('Puruisaishi late phase check does not delay phase-2 timing');
+  }
+
+  {
     const { engine, logs } = makeDeathEngine([
       makeFighter('二阶段A@A'),
       makeFighter('二阶段B@B'),

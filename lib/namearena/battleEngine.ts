@@ -168,6 +168,28 @@ function getDamageSourceLabel(source: string): string {
   return DAMAGE_SOURCE_LABELS[source] ?? `${source}伤害`;
 }
 
+function pickRandomFighters(fighters: Fighter[], maxCount: number): Fighter[] {
+  const pool = [...fighters];
+  const picked: Fighter[] = [];
+  while (picked.length < maxCount && pool.length > 0) {
+    const index = Math.floor(Math.random() * pool.length);
+    const [fighter] = pool.splice(index, 1);
+    if (fighter) picked.push(fighter);
+  }
+  return picked;
+}
+
+function splitDamageAcrossTargets(totalDamage: number, targetCount: number): number[] {
+  if (totalDamage <= 0 || targetCount <= 0) return [];
+  const base = Math.floor(totalDamage / targetCount);
+  let remainder = totalDamage % targetCount;
+  return Array.from({ length: targetCount }, () => {
+    const extra = remainder > 0 ? 1 : 0;
+    if (remainder > 0) remainder -= 1;
+    return base + extra;
+  });
+}
+
 function formatFallbackDeathMessage(fighter: Fighter): string {
   const lastDamage = fighter.lastDamage;
   if (!lastDamage || lastDamage.amount <= 0) {
@@ -674,21 +696,27 @@ export class BattleEngine {
     }
 
     if (target.isYuzu && source !== 'status' && source !== 'yuzu_share') {
-      const allies = activeYuzuTeammates(this.createCharacterHookRuntime(), target);
+      const allies = pickRandomFighters(activeYuzuTeammates(this.createCharacterHookRuntime(), target), 3);
       const shareTotal = Math.floor(amount * YUZU_TEAM_SHARE_RATIO);
-      const shareEach = allies.length > 0 ? Math.floor(shareTotal / allies.length) : 0;
-      if (shareEach > 0) {
-        const actualSharedTotal = shareEach * allies.length;
-        amount = Math.max(1, amount - actualSharedTotal);
-        this.log('info', `🪞 【镜界分摊】${target.name} 把 ${actualSharedTotal} 点伤害均摊给 ${allies.map((ally) => ally.name).join('、')}，自己承受 ${amount} 点。`);
-        allies.forEach((ally) => {
-          const shared = this.applyDamage(ally, shareEach, 'yuzu_share', true, target, {
+      const shares = splitDamageAcrossTargets(shareTotal, allies.length);
+      const actualSharedTotal = shares.reduce((sum, share) => sum + share, 0);
+      if (actualSharedTotal > 0) {
+        amount = Math.max(0, amount - actualSharedTotal);
+        this.log('info', `🪞 【镜界分摊】${target.name} 把 ${actualSharedTotal} 点伤害随机均摊给 ${allies.map((ally) => ally.name).join('、')}，自己承受 ${amount} 点。`);
+        allies.forEach((ally, index) => {
+          const share = shares[index] ?? 0;
+          if (share <= 0) return;
+          const shared = this.applyDamage(ally, share, 'yuzu_share', true, target, {
             deferTransform: true,
             actionName: '镜界分摊',
             respectDefenses: false,
           });
           if (shared > 0) this.flushDeferredDamageEvents(ally);
         });
+        if (amount <= 0) {
+          this.syncHpPct(target);
+          return 0;
+        }
       }
     }
 

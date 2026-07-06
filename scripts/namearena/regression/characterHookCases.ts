@@ -1,5 +1,12 @@
 import type { Fighter, GachaEntry, SkillDefinition, StatKey } from '../../../lib/namearena/types';
-import { drawYuzuWeapon } from '../../../lib/namearena/yuzuMechanics';
+import {
+  drawYuzuWeapon,
+  ensureYuzuMarkedTarget,
+} from '../../../lib/namearena/yuzuMechanics';
+import {
+  processPuruisaishiRoundEnd,
+  spawnPuruisaishiEvent,
+} from '../../../lib/namearena/puruisaishiMechanics';
 import {
   assert,
   localProject,
@@ -2153,15 +2160,49 @@ export function runCharacterHookCases(): string[] {
     });
 
     const actual = engine.applyDamage(engineYuzu, 100, 'skill', false, attacker, { actionName: '分摊测试' });
-    assert(actual === 9, `Yuzu phase-1 reduction plus 90% team share should leave 9 HP damage, got ${actual}`);
-    assert(engineYuzu.currentHp === 991, `Yuzu should take 9 damage after sharing, got ${engineYuzu.currentHp}`);
-    assert(engineAlly.currentHp === 924, `Yuzu ally should take 76 shared damage, got ${engineAlly.currentHp}`);
+    assert(actual === 0, `Yuzu phase-1 reduction plus 100% team share should leave no HP damage on Yuzu, got ${actual}`);
+    assert(engineYuzu.currentHp === 1000, `Yuzu should take no HP damage after full sharing, got ${engineYuzu.currentHp}`);
+    assert(engineAlly.currentHp === 915, `Yuzu ally should take 85 shared damage, got ${engineAlly.currentHp}`);
 
     engineYuzu.yuzuPhase = 2;
     engine.markDefeated(engineAlly, { message: '💀 【测试】分摊队友倒下。', awardKill: false });
     engine.finishStep({ current: false });
     assert(engineYuzu.yuzuPhase === 3, `Yuzu team phase should enter phase 3 when teammates are gone, got ${engineYuzu.yuzuPhase}`);
     cases.push('Yuzu team damage sharing and team-loss phase 3');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const allies = [
+      makeFighter('分摊队友一@A'),
+      makeFighter('分摊队友二@A'),
+      makeFighter('分摊队友三@A'),
+      makeFighter('分摊队友四@A'),
+    ];
+    const enemy = makeFighter('分摊敌人@B');
+    const { engine } = makeDeathEngine([yuzu, ...allies, enemy]);
+    const engineYuzu = engine.fighters[0];
+    const engineAllies = engine.fighters.slice(1, 5);
+    const attacker = engine.fighters[5];
+
+    [engineYuzu, ...engineAllies].forEach((fighter) => {
+      fighter.maxHp = 1000;
+      localProject.setCurrentHp(fighter, 1000);
+      fighter.yuzuShield = 0;
+      fighter.status = fighter.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    });
+
+    const actual = withRandomSequence([0, 0, 0], () =>
+      engine.applyDamage(engineYuzu, 100, 'skill', false, attacker, { actionName: '三人分摊测试' }),
+    );
+
+    assert(actual === 0, `Yuzu should pass all shareable damage to random teammates, got ${actual}`);
+    assert(engineYuzu.currentHp === 1000, `Yuzu should not take HP damage when three teammates share everything, got ${engineYuzu.currentHp}`);
+    assert(engineAllies[0].currentHp === 971, `First selected ally should take 29 shared damage, got ${engineAllies[0].currentHp}`);
+    assert(engineAllies[1].currentHp === 972, `Second selected ally should take 28 shared damage, got ${engineAllies[1].currentHp}`);
+    assert(engineAllies[2].currentHp === 972, `Third selected ally should take 28 shared damage, got ${engineAllies[2].currentHp}`);
+    assert(engineAllies[3].currentHp === 1000, `Fourth ally should not be selected when three allies already share, got ${engineAllies[3].currentHp}`);
+    cases.push('Yuzu team damage sharing picks at most three random teammates');
   }
 
   {
@@ -2248,6 +2289,50 @@ export function runCharacterHookCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('【Furioso-Replica】第 9/9 击抽到 镰刀')), 'Furioso final hit should force scythe');
     assert(furiosoDamage >= 1800, `Furioso should retain self-stat floor damage against high defense, got ${furiosoDamage}`);
     cases.push('Yuzu phase 3 mark immunity and Furioso final scythe');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const enemy = makeFighter('普通敌人@B');
+    const { engine } = makeDeathEngine([yuzu, enemy]);
+    const engineYuzu = engine.fighters[0];
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+
+    const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
+    const core = engine.fighters.find((fighter) => fighter.isOriginiumCore);
+    const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
+    assert(puruisaishi && core && crystal, 'Puruisaishi event should provide Puruisaishi, Ananna and a crystal for Yuzu mark test');
+
+    engineYuzu.yuzuPhase = 3;
+    ensureYuzuMarkedTarget(engine.createCharacterHookRuntime(), engineYuzu);
+
+    assert(engineYuzu.yuzuMarkedTargetId === crystal.id, `Yuzu phase-3 mark should prefer originium crystal, got ${engineYuzu.yuzuMarkedTargetId}`);
+    assert(!puruisaishi.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should not mark Puruisaishi');
+    assert(!core.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should not mark Ananna');
+    assert(crystal.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should mark the originium crystal');
+    cases.push('Yuzu phase 3 mark targets originium crystals instead of Puruisaishi or Ananna');
+  }
+
+  {
+    const killer = makeFighter('已退场击杀者@K');
+    const emote = makeFighter('表情@E');
+    const { engine, logs } = makeDeathEngine([killer, emote]);
+    const engineKiller = engine.fighters[0];
+    const engineEmote = engine.fighters[1];
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+
+    localProject.setCurrentHp(engineKiller, 0);
+    engineKiller.isDead = true;
+    engineKiller.isDeadAnnounced = true;
+    engine.markDefeated(engineEmote, { message: '💀 【测试】表情被 NPC 锚点包围时倒下。', killer: engineKiller });
+
+    assert(engineEmote.emoteFinalDead, 'Emote should truly die when only Puruisaishi event NPCs remain as zero-kill bodies');
+    assert(logs.some((entry) => entry.text.includes('找不到任何还活着的玩家可以认主')), 'Emote should log that NPCs are not valid owner candidates');
+    cases.push('Emote zero-kill anchors ignore Puruisaishi event NPCs');
   }
 
   {

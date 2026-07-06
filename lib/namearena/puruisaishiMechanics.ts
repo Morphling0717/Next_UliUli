@@ -352,10 +352,11 @@ function processPuruisaishiPhase(runtime: PuruisaishiRuntime): void {
   if (!puruisaishi) return;
   const phase = puruisaishi.puruisaishiPhase ?? 1;
   const enteredTurn = puruisaishi.puruisaishiEnteredTurn ?? runtime.turnCount;
+  const phaseTwoTurn = enteredTurn + PURUISAISHI_PHASE_TWO_TURN;
 
-  if (phase < 2 && runtime.turnCount - enteredTurn >= PURUISAISHI_PHASE_TWO_TURN) {
+  if (phase < 2 && runtime.turnCount >= phaseTwoTurn) {
     puruisaishi.puruisaishiPhase = 2;
-    puruisaishi.puruisaishiPhaseTwoStartedTurn = runtime.turnCount;
+    puruisaishi.puruisaishiPhaseTwoStartedTurn = phaseTwoTurn;
     puruisaishi.untargetableUntilTurn = undefined;
     puruisaishi.puruisaishiShield = Math.max(puruisaishi.puruisaishiShield ?? 0, PURUISAISHI_PHASE_TWO_SHIELD);
     puruisaishi.status.push({ type: 'PURUISAISHI_SHIELD', duration: 999 });
