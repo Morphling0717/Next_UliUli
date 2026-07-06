@@ -37,6 +37,8 @@ function activePlayerTargets(ctx: SkillContext): Fighter[] {
   return ctx.fighters.filter((fighter) =>
     fighter.id !== ctx.user.id &&
     !fighter.isSummon &&
+    !fighter.isNpc &&
+    !fighter.cannotWin &&
     fighter.currentHp > 0 &&
     !fighter.isDead &&
     !fighter.isDeadAnnounced,

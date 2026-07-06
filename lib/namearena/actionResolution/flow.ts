@@ -44,6 +44,7 @@ import type { ActionResolutionRuntime } from './types';
 function createTargetingRuntime(runtime: ActionResolutionRuntime) {
   return {
     fighters: runtime.fighters,
+    turnCount: runtime.turnCount,
     getTeamId: runtime.getTeamId,
     isActiveCombatant: runtime.isActiveCombatant,
   };

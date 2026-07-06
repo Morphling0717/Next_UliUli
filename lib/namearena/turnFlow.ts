@@ -1,4 +1,5 @@
 import type { Fighter, StatusEffectsMap } from './types';
+import { canActNormally, isWinningCombatant } from './combatState';
 import { CONTROL_STATUS_TYPES, COUNTER_STANCE_STATUS_TYPES, isStatusType } from './statusRules';
 import type { CharacterHookRuntime } from './characterHooks';
 import { shouldCharacterPreventWin } from './characterHooks';
@@ -28,10 +29,12 @@ export function determineActor(
   runtime?: Pick<TurnFlowRuntime, 'isPassiveCharmCounter'>,
 ): Fighter | null {
   if (alive.length === 0) return null;
+  const actionable = alive.filter(canActNormally);
+  if (actionable.length === 0) return null;
   const candidates = runtime
-    ? alive.filter((fighter) => !hasWaitingCounterStatus(fighter, runtime))
-    : alive;
-  const actorPool = candidates.length > 0 ? candidates : alive;
+    ? actionable.filter((fighter) => !hasWaitingCounterStatus(fighter, runtime))
+    : actionable;
+  const actorPool = candidates.length > 0 ? candidates : actionable;
   const actionWeight = (fighter: Fighter) => {
     let multiplier = 1;
     if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.13;
@@ -49,21 +52,22 @@ export function determineActor(
 
 export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): boolean {
   const aliveCombatants = alive.filter((fighter) => runtime.isActiveCombatant(fighter));
-  const activeTeams = new Set(aliveCombatants.map((fighter) => runtime.getTeamId(fighter)));
+  const winningCombatants = aliveCombatants.filter(isWinningCombatant);
+  const activeTeams = new Set(winningCombatants.map((fighter) => runtime.getTeamId(fighter)));
   let preventEnd = false;
 
   const hookRuntime = runtime.createCharacterHookRuntime();
   for (const fighter of runtime.fighters) {
-    if (shouldCharacterPreventWin({ fighter, runtime: hookRuntime, aliveCombatants, activeTeams })) preventEnd = true;
+    if (shouldCharacterPreventWin({ fighter, runtime: hookRuntime, aliveCombatants: winningCombatants, activeTeams })) preventEnd = true;
   }
 
   if (activeTeams.size <= 1 && !preventEnd) {
-    const winners = aliveCombatants.map((fighter) => {
+    const winners = winningCombatants.map((fighter) => {
       if (!fighter.isSummon || !fighter.summonerId) return fighter.name;
       const summoner = runtime.fighters.find((candidate) => candidate.id === fighter.summonerId);
       return summoner ? `${fighter.name}（${summoner.name}召唤）` : fighter.name;
     }).join(' & ');
-    const winTeam = aliveCombatants.length > 0 ? (aliveCombatants[0].teamId ? `【${aliveCombatants[0].teamId}】` : '') : '';
+    const winTeam = winningCombatants.length > 0 ? (winningCombatants[0].teamId ? `【${winningCombatants[0].teamId}】` : '') : '';
     const winnerLabel = [winTeam, winners || '无（同归于尽）'].filter(Boolean).join(' ');
     runtime.log('win', `🏆 最终胜者：${winnerLabel}！`);
     return true;

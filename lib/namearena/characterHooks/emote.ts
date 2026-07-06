@@ -20,6 +20,8 @@ function activePlayerCandidates(runtime: CharacterHookRuntime, emote: Fighter): 
   return runtime.fighters.filter((candidate) =>
     candidate.id !== emote.id &&
     !candidate.isSummon &&
+    !candidate.isNpc &&
+    !candidate.cannotWin &&
     runtime.isActiveCombatant(candidate),
   );
 }
@@ -29,6 +31,8 @@ function activeEnemies(runtime: CharacterHookRuntime, actor: Fighter): Fighter[]
   return runtime.fighters.filter((candidate) =>
     candidate.id !== actor.id &&
     !candidate.isSummon &&
+    !candidate.isNpc &&
+    !candidate.cannotWin &&
     runtime.isActiveCombatant(candidate) &&
     runtime.getTeamId(candidate) !== actorTeamId,
   );
@@ -38,7 +42,7 @@ function findKillerFallback(runtime: CharacterHookRuntime, fighter: Fighter, kil
   if (killer && killer.id !== fighter.id) return killer;
   const attackerId = fighter.lastDamage?.attackerId;
   if (!attackerId || attackerId === fighter.id) return undefined;
-  return runtime.fighters.find((candidate) => candidate.id === attackerId);
+  return runtime.fighters.find((candidate) => candidate.id === attackerId && !candidate.isNpc && !candidate.cannotWin);
 }
 
 function clearFamiliarMarks(runtime: CharacterHookRuntime, emote: Fighter): void {

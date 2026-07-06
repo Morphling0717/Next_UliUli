@@ -2,6 +2,7 @@ import type { Fighter } from './types';
 
 export interface TargetingRuntime {
   fighters: Fighter[];
+  turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
 }
@@ -16,6 +17,8 @@ export function isSelectableTargetFor(
   user: Fighter,
   target: Fighter,
 ): boolean {
+  if (target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) return false;
+  if ((target.untargetableUntilTurn ?? -1) >= runtime.turnCount) return false;
   return runtime.isActiveCombatant(target) &&
     target.id !== user.id &&
     runtime.getTeamId(target) !== runtime.getTeamId(user) &&
@@ -27,6 +30,9 @@ export function getSelectableTargets(runtime: TargetingRuntime, user: Fighter): 
 }
 
 function getTargetWeight(target: Fighter): number {
+  if (target.isOriginiumCrystal) return 0.18;
+  if (target.isOriginiumCore) return 0.28;
+  if (target.isPuruisaishi) return 0.35;
   const waitingOnTokusatsuThrone = target.isTokusatsu &&
     target.job === 'MIRACLE_BUJIN' &&
     target.status.some((status) => status.type === 'WAIT_COUNTER');

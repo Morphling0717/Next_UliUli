@@ -11,6 +11,7 @@ import type {
   BattleEngineCore,
   StatusEffectsMap,
 } from './types';
+import type { PuruisaishiRuntime } from './puruisaishiMechanics';
 import { cloneJobDefinition, healFighter, isActiveCombatant, setCurrentHp, syncHpPct } from './combatState';
 import {
   ActionResolutionRuntime,
@@ -143,6 +144,15 @@ import {
   YUZU_PHASE_THREE_REDUCTION,
   YUZU_TEAM_SHARE_RATIO,
 } from './yuzuMechanics';
+import {
+  consumePuruisaishiShield,
+  notePuruisaishiRoundActor,
+  noteOriginiumDamageLanded,
+  processPuruisaishiRoundEnd,
+  redirectOriginiumCoreDamage,
+  spawnCrystalFromInfectedDeath,
+  trySpawnPuruisaishiEvent,
+} from './puruisaishiMechanics';
 
 const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   skill: '技能伤害',
@@ -151,6 +161,7 @@ const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   reflect: '反弹伤害',
   transfer: '转移伤害',
   yuzu_share: '镜界分摊伤害',
+  originium_share: '阿喃那伤害均摊',
 };
 
 function getDamageSourceLabel(source: string): string {
@@ -465,6 +476,20 @@ export class BattleEngine {
     return buildTurnFlowRuntime(this);
   }
 
+  createPuruisaishiRuntime(): PuruisaishiRuntime {
+    return {
+      fighters: this.fighters,
+      core: this.Core,
+      turnCount: this.turnCount,
+      log: (type, text) => this.log(type, text),
+      isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
+      syncHpPct: (fighter) => this.syncHpPct(fighter),
+      applyDamage: (target, amount, source, isTrueDamage, attacker, options) =>
+        this.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+      markDefeated: (target, options) => this.markDefeated(target, options),
+    };
+  }
+
   maybeEnterGamerWorldStage(fighter: Fighter, reason: string, options: DamageApplicationOptions = {}): void {
     if (!isOriginalGamer(fighter) || fighter.job !== 'ALL_PLATFORM_CHAMPION' || fighter.hasUsedGamerWorldStage) return;
     if ((fighter.apm ?? 0) < GAMER_WORLD_STAGE_THRESHOLD) return;
@@ -532,6 +557,16 @@ export class BattleEngine {
   ): number {
     if (amount <= 0 || target.isDead || target.currentHp <= 0) return 0;
     if (target.status.some((s) => s.type === 'SYNERGY_SLACKING')) return 0;
+
+    const originiumRedirect = redirectOriginiumCoreDamage(
+      this.createPuruisaishiRuntime(),
+      target,
+      amount,
+      source,
+      isTrueDamage,
+      attacker,
+    );
+    if (originiumRedirect.handled) return originiumRedirect.actualDamage;
 
     if (
       target.isYuzu &&
@@ -657,6 +692,15 @@ export class BattleEngine {
       }
     }
 
+    const puruisaishiShield = consumePuruisaishiShield(this.createPuruisaishiRuntime(), target, amount);
+    if (puruisaishiShield.absorbed > 0) {
+      amount = puruisaishiShield.remaining;
+      if (puruisaishiShield.retreated || amount <= 0) {
+        this.syncHpPct(target);
+        return 0;
+      }
+    }
+
     const isProtected =
       target.isMorphling || target.isJoker || target.isTokusatsu || target.isGacha ||
       target.isTing || target.isSuccubus || target.isSigua || target.isTuJuanJuan || target.isWT ||
@@ -733,6 +777,7 @@ export class BattleEngine {
     const hpBeforeDamage = target.currentHp;
     target.currentHp -= amount;
     target.stats.dmgTaken += amount;
+    noteOriginiumDamageLanded(this.createPuruisaishiRuntime(), target, source, attacker);
     if (amount > 0) {
       target.lastDamage = {
         amount,
@@ -963,7 +1008,7 @@ export class BattleEngine {
     target.isDeadAnnounced = true;
     this.runDefeatHooksOnce(target);
 
-    const shouldAwardKill = options.awardKill ?? true;
+    const shouldAwardKill = options.awardKill ?? !target.isNpc;
     if (shouldAwardKill && options.killer && options.killer.id !== target.id) {
       options.killer.stats.kills += 1;
       this.grantGamerKillMomentum(options.killer, target);
@@ -1103,6 +1148,7 @@ export class BattleEngine {
     this.runDefeatHooksOnce(f, spinalSwordRef);
 
     this.tryMorphlingSonRescue(f);
+    if (f.isDead) spawnCrystalFromInfectedDeath(this.createPuruisaishiRuntime(), f);
   }
 
   checkWinCondition(alive: Fighter[]): boolean {
@@ -1131,6 +1177,8 @@ export class BattleEngine {
     this.advanceGlobalTimedStatuses();
     runCharacterGlobalTickHooks({ runtime: this.createCharacterHookRuntime() });
     runCharacterReentryHooks({ runtime: this.createCharacterHookRuntime() });
+    processPuruisaishiRoundEnd(this.createPuruisaishiRuntime());
+    this.handleDeathsAndRevives(spinalSwordRef);
   }
 
   resolveGachaInstantActions(spinalSwordRef: SpinalSwordRef): void {
@@ -1618,11 +1666,13 @@ export class BattleEngine {
     if (this.turnCount === 901) {
       this.log('info', '⏳ 战斗拖入深度疲劳阶段！久战者的防线开始崩坏，伤害提升速度加快。');
     }
+    trySpawnPuruisaishiEvent(this.createPuruisaishiRuntime());
 
     const actor = this.determineActor(alive);
     if (!actor) { this.finishStep(spinalSwordRef); return false; }
 
     actor.isActing = true;
+    notePuruisaishiRoundActor(this.createPuruisaishiRuntime(), actor);
     this.handleSpinalSwordDrop(actor, spinalSwordRef);
 
     const canAct = this.processStatus(actor);

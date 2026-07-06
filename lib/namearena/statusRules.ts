@@ -81,6 +81,8 @@ export const PERMANENT_STATUS_TYPES: string[] = [
   'EMOTE_OWNER_BONUS',
   'YUZU_BARRIER',
   'YUZU_MARKED',
+  'ORIGINIUM_DISEASE',
+  'PURUISAISHI_SHIELD',
 ];
 
 export const PERMANENT_STATUS_PREFIXES: string[] = [

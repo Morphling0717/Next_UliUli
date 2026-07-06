@@ -2,12 +2,14 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { BattleEngine } from "@/lib/namearena/battleEngine";
-import { cloneFighters, isActiveCombatant } from "@/lib/namearena/combatState";
+import { cloneFighters, isWinningCombatant } from "@/lib/namearena/combatState";
 import { namerenaCore } from "@/lib/namearena/core";
 import { namerenaData } from "@/lib/namearena/data";
 import { getDefenseStatusDisplayName } from "@/lib/namearena/defenseStatus";
 import { generateNameArenaFighter } from "@/lib/namearena/fighterFactory";
 import { namerenaJobs } from "@/lib/namearena/jobs";
+import { hasPuruisaishiAppeared, spawnPuruisaishiEvent } from "@/lib/namearena/puruisaishiMechanics";
+import { parseNameArenaSetupInput } from "@/lib/namearena/setupInput";
 import { namerenaSkills } from "@/lib/namearena/skills";
 import { getStatusTickMode } from "@/lib/namearena/statusRules";
 import type { Fighter, StatusEffectInfo, StatusEntry } from "@/lib/namearena/types";
@@ -59,7 +61,7 @@ const isTransformLog = (log: BattleLogEntry) =>
 const isHighlightLog = (log: BattleLogEntry) =>
   log.type === 'win' ||
   isTransformLog(log) ||
-  /最终胜者|浴火重生|并没有死|从地狱归来|不甘倒下|欧皇护符|大保底启动|小保底启动|欧皇时刻|究极进化|人设时钟|光速切片|时间轴回拨|帝皇不可阻挡|摸鱼伙伴羁绊|突发状况|脊髓剑|GREAT！MONSTER|GREAT MONSTER|彩虹狂热|GOTCHARD|飓刃】收割|宇宙分裂|复活】|弑神反噬|大招充能完毕|资金充足|冥驹|武神王座|谢幕返场|乘员昏迷/.test(log.text);
+  /最终胜者|浴火重生|并没有死|从地狱归来|不甘倒下|欧皇护符|大保底启动|小保底启动|欧皇时刻|究极进化|人设时钟|光速切片|时间轴回拨|帝皇不可阻挡|摸鱼伙伴羁绊|突发状况|脊髓剑|GREAT！MONSTER|GREAT MONSTER|彩虹狂热|GOTCHARD|飓刃】收割|宇宙分裂|复活】|弑神反噬|大招充能完毕|资金充足|冥驹|武神王座|谢幕返场|乘员昏迷|普瑞赛斯|阿喃那|矿石病/.test(log.text);
 
 const getLogPlaybackDelay = (log: BattleLogEntry, speed: number) => {
   const profile = LOG_PLAYBACK_PROFILE_BY_SPEED[speed] ?? LOG_PLAYBACK_PROFILE_BY_SPEED[500];
@@ -94,7 +96,7 @@ const buildSettlementRows = (fighters: Fighter[]): SettlementRow[] => {
   const rows: SettlementRow[] = [];
 
   fighters.forEach((fighter) => {
-    if (fighter.isSummon) return;
+    if (fighter.isSummon || fighter.isNpc) return;
     const row: SettlementRow = {
       id: fighter.id,
       fighter,
@@ -110,7 +112,7 @@ const buildSettlementRows = (fighters: Fighter[]): SettlementRow[] => {
   });
 
   fighters.forEach((fighter) => {
-    if (!fighter.isSummon) return;
+    if (!fighter.isSummon || fighter.isNpc) return;
     const stats = copySettlementStats(fighter);
     const summonerRow = fighter.summonerId ? rowsById.get(fighter.summonerId) : undefined;
     if (summonerRow) {
@@ -256,6 +258,8 @@ const STATUS_DISPLAY_FALLBACKS: Record<string, StatusEffectInfo> = {
   YUZU_RES_DOWN: { name: '魔抗破坏', icon: '🪞', desc: '魔抗下降' },
   YUZU_ATK_DOWN: { name: '攻击破坏', icon: '🪞', desc: '攻击力下降' },
   YUZU_SLOW: { name: '减速', icon: '🪞', desc: '行动速度下降' },
+  ORIGINIUM_DISEASE: { name: '矿石病', icon: '🦠', desc: '源石侵蚀层数；层数越高越危险，80 层死亡' },
+  PURUISAISHI_SHIELD: { name: '源石映像护盾', icon: '🜲', desc: '普瑞赛斯二阶段护盾；场上有源石结晶时不会低于 1' },
 };
 
 const RESOURCE_TONE_STYLES: Record<ResourceTone, string> = {
@@ -310,6 +314,7 @@ const DEFENSE_STATUS_TYPES = new Set([
   'RA_PHOENIX',
   'VALO_ULT_RUN_IT_BACK',
   'VALO_HARBOR_WALL',
+  'PURUISAISHI_SHIELD',
 ]);
 
 const DAMAGE_STATUS_TYPES = new Set([
@@ -334,6 +339,7 @@ const DAMAGE_STATUS_TYPES = new Set([
   'YUZU_RES_DOWN',
   'YUZU_ATK_DOWN',
   'YUZU_SLOW',
+  'ORIGINIUM_DISEASE',
 ]);
 
 const RECOVERY_STATUS_TYPES = new Set([
@@ -394,6 +400,7 @@ const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   GACHA_BLUE_EYES_GUARD_COOLDOWN: 44,
   GACHA_ULTIMATE_GUARD_COOLDOWN: 44,
   YUZU_TAUNT: 45,
+  PURUISAISHI_SHIELD: 26,
   YUZU_MARKED: 63,
   YUZU_EVADE_DOWN: 64,
   YUZU_DEF_DOWN: 64,
@@ -403,6 +410,7 @@ const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   BURN: 60,
   POISON: 61,
   BLEED: 61,
+  ORIGINIUM_DISEASE: 60,
   NO_HEAL: 62,
 };
 
@@ -574,6 +582,52 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[]): ResourceChip
     !candidate.isDead &&
     candidate.currentHp > 0,
   );
+
+  if ((fighter.originiumInfectionStacks ?? 0) > 0) {
+    chips.push({
+      icon: '🦠',
+      label: '矿石病',
+      value: `${fighter.originiumInfectionStacks ?? 0}/80`,
+      title: getResourceTitle('矿石病层数', `${fighter.originiumInfectionStacks ?? 0}/80`, '60 层以上攻击与魔抗加成清零，80 层死亡'),
+      tone: 'combat',
+      priority: 5,
+    });
+  }
+
+  if (fighter.isPuruisaishi) {
+    const phase = Math.max(1, fighter.puruisaishiPhase ?? 1);
+    const shield = Math.max(0, Math.floor(fighter.puruisaishiShield ?? 0));
+    chips.push({
+      icon: '🜲',
+      label: '源石映像',
+      value: `${phase}阶段`,
+      title: getResourceTitle('普瑞赛斯阶段', `${phase}阶段`, phase >= 2 ? '每个大回合随机提高场上单位矿石病层数' : '一阶段不可被选为目标'),
+      tone: 'tech',
+      priority: 6,
+    });
+    if (shield > 0) {
+      chips.push({
+        icon: '🛡️',
+        label: '护盾',
+        value: String(shield),
+        title: getResourceTitle('普瑞赛斯护盾', String(shield), '场上存在源石结晶时不会低于 1'),
+        tone: 'shield',
+        priority: 7,
+      });
+    }
+  }
+
+  if (fighter.isOriginiumCore || fighter.isOriginiumCrystal) {
+    const protectedUntil = fighter.untargetableUntilTurn ?? -1;
+    chips.push({
+      icon: fighter.isOriginiumCore ? '🜚' : '◆',
+      label: fighter.isOriginiumCore ? '阿喃那' : '结晶',
+      value: protectedUntil >= 0 ? `保护至${protectedUntil}` : '活性',
+      title: getResourceTitle(fighter.isOriginiumCore ? '阿喃那' : '源石结晶', protectedUntil >= 0 ? `保护至第 ${protectedUntil} 回合` : '可被攻击'),
+      tone: 'neutral',
+      priority: 8,
+    });
+  }
 
   if (fighter.isYuzu) {
     const phase = Math.max(1, fighter.yuzuPhase ?? 1);
@@ -826,14 +880,20 @@ function ResourceStrip({ fighter, fighters }: { fighter: Fighter; fighters: Figh
 
 function HealthBar({ fighter }: { fighter: Fighter }) {
   const hpPct = Math.max(0, Math.min(100, fighter.hpPct * 100));
-  const shield = Math.max(0, Math.floor(fighter.yuzuShield ?? 0));
+  const yuzuShield = Math.max(0, Math.floor(fighter.yuzuShield ?? 0));
+  const puruisaishiShield = Math.max(0, Math.floor(fighter.puruisaishiShield ?? 0));
+  const shield = yuzuShield + puruisaishiShield;
   const shieldPct = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (shield / fighter.maxHp) * 100)) : 0;
   const effectivePct = fighter.maxHp > 0
     ? Math.max(0, Math.min(100, ((fighter.currentHp + shield) / fighter.maxHp) * 100))
     : hpPct;
   const hasShield = shield > 0;
+  const shieldLabel = [
+    yuzuShield > 0 ? `镜界护盾：${yuzuShield}` : null,
+    puruisaishiShield > 0 ? `源石映像护盾：${puruisaishiShield}` : null,
+  ].filter(Boolean).join('\n');
   const title = hasShield
-    ? `生命：${fighter.currentHp}/${fighter.maxHp}\n镜界护盾：${shield}\n蓝色区域表示护盾覆盖量，护盾会先于生命承受伤害。`
+    ? `生命：${fighter.currentHp}/${fighter.maxHp}\n${shieldLabel}\n蓝色区域表示护盾覆盖量，护盾会先于生命承受伤害。`
     : `生命：${fighter.currentHp}/${fighter.maxHp}`;
 
   return (
@@ -1144,6 +1204,7 @@ export function NameArenaGame() {
         const settlementRows = buildSettlementRows(fighters);
         const sortedByDmg = [...settlementRows].sort((a, b) => b.stats.dmgDealt - a.stats.dmgDealt);
         const maxDmg = Math.max(1, sortedByDmg[0]?.stats.dmgDealt || 1);
+        const showPuruisaishiProphecy = hasPuruisaishiAppeared(fighters);
 
         const mvpDmg = sortedByDmg[0];
         const mvpTank = [...settlementRows].sort((a, b) => b.stats.dmgTaken - a.stats.dmgTaken)[0];
@@ -1164,6 +1225,13 @@ export function NameArenaGame() {
                     <h2 className="text-2xl font-bold text-white flex items-center gap-2">📊 赛后结算面板</h2>
                     <button onClick={() => setShowMvp(false)} className="text-slate-400 hover:text-white p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition"><Icons.X size={20}/></button>
                 </div>
+
+                {showPuruisaishiProphecy ? (
+                    <div className="mb-6 shrink-0 rounded-2xl border border-violet-400/40 bg-violet-950/40 p-5 text-center shadow-[0_0_24px_rgba(139,92,246,0.25)]">
+                        <div className="text-xs font-black uppercase tracking-[0.25em] text-violet-300">普瑞赛斯</div>
+                        <div className="mt-2 text-xl font-black text-white">“我会一直看着你，预言家”</div>
+                    </div>
+                ) : null}
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 shrink-0">
                     <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 flex flex-col items-center shadow-xl relative overflow-hidden">
@@ -1250,18 +1318,36 @@ export function NameArenaGame() {
                                     <span className="text-teal-400">丝瓜uli</span>、<span className="text-pink-400 font-bold">兔卷卷</span>、<span className="text-yellow-500 font-bold">M1</span>
                                 </p>
                                 <textarea value={inputNames} onChange={(e) => setInputNames(e.target.value)} className="w-full h-32 md:h-48 bg-slate-950 border border-slate-800 rounded-xl p-4 text-slate-300 focus:ring-indigo-500 outline-none font-mono text-sm md:text-base shadow-inner" />
-                                <button onClick={() => {
+                                <button onClick={async () => {
                                     const { SeededRNG } = namerenaCore;
                                     if (!SeededRNG) return alert("核心组件未加载，请检查 1_core.js");
-                                    const list = inputNames.split('\n').map(n => n.trim()).filter(Boolean);
+                                    let list: string[];
+                                    let forcePuruisaishi = false;
+                                    try {
+                                        const parsedInput = await parseNameArenaSetupInput(inputNames);
+                                        list = parsedInput.names;
+                                        forcePuruisaishi = parsedInput.forcePuruisaishi;
+                                    } catch (error) {
+                                        const message = error instanceof Error ? error.message : String(error);
+                                        return alert(message);
+                                    }
                                     if(list.length<2) return alert("至少2人");
                                     const f = list.map(generateNameArenaFighter).filter((x): x is Fighter => x !== null);
                                     if (f.length < list.length) return alert("存在空名字或角色生成失败，请检查输入");
 
                     fullLogsRef.current = []; setFullLogSnapshot([]); setDisplayLogs([]);
                     battleTurnRef.current = 0;
+                    addLog({type:'system', text:'⚔️ 战斗开始！'});
+                    if (forcePuruisaishi) {
+                        spawnPuruisaishiEvent({
+                            fighters: f,
+                            core: namerenaCore,
+                            turnCount: 0,
+                            log: (type, text) => addLog({ type, text }),
+                        }, '隐藏调试指令启动');
+                    }
                     fightersRef.current = f;
-                    setFighters(f); addLog({type:'system', text:'⚔️ 战斗开始！'});
+                    setFighters(f);
                     setGameState('FIGHTING'); spinalSwordRef.current = false; changeSpeed(1500);
                                 }} className="mt-6 w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 shadow-lg">
                                     <Icons.Play size={20} /> 开始战斗
@@ -1273,7 +1359,7 @@ export function NameArenaGame() {
                     <>
                         <section className="relative flex min-h-0 min-w-0 flex-1 flex-col border-slate-800 bg-slate-900/30 lg:border-r">
                             <div className="z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/50 p-3 shadow-sm backdrop-blur">
-                                <span className="text-sm font-bold tracking-wide">存活人数: <span className="text-indigo-400">{fighters.filter(isActiveCombatant).length}</span></span>
+                                <span className="text-sm font-bold tracking-wide">存活人数: <span className="text-indigo-400">{fighters.filter(isWinningCombatant).length}</span></span>
                                 {(gameState === 'FIGHTING' || gameState === 'END') && (
                                     <button onClick={resetGame} className="bg-red-600/80 hover:bg-red-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 transition-colors shadow-md" title="重开一局">
                                         <Icons.RotateCcw size={14}/> <span className="hidden sm:inline">重置大厅</span>
@@ -1300,8 +1386,8 @@ export function NameArenaGame() {
                                                     </span>
                                                     <span className="inline-flex shrink-0 items-center gap-1 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-bold text-slate-400 shadow-inner">
                                                         <span>{f.currentHp}/{f.maxHp}</span>
-                                                        {(f.yuzuShield ?? 0) > 0 ? (
-                                                            <span className="rounded bg-sky-500/15 px-1 text-sky-200">+{Math.floor(f.yuzuShield ?? 0)}</span>
+                                                        {((f.yuzuShield ?? 0) + (f.puruisaishiShield ?? 0)) > 0 ? (
+                                                            <span className="rounded bg-sky-500/15 px-1 text-sky-200">+{Math.floor((f.yuzuShield ?? 0) + (f.puruisaishiShield ?? 0))}</span>
                                                         ) : null}
                                                     </span>
                                                 </div>

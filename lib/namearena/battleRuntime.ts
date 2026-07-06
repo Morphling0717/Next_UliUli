@@ -88,6 +88,7 @@ export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHoo
 export function buildTargetingRuntime(host: BattleRuntimeHost): TargetingRuntime {
   return {
     fighters: host.fighters,
+    turnCount: host.turnCount,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
   };

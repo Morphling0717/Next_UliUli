@@ -28,6 +28,14 @@ export function isActiveCombatant(fighter: Fighter): boolean {
   return !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0;
 }
 
+export function isWinningCombatant(fighter: Fighter): boolean {
+  return isActiveCombatant(fighter) && !fighter.cannotWin && !fighter.isNpc;
+}
+
+export function canActNormally(fighter: Fighter): boolean {
+  return isActiveCombatant(fighter) && !fighter.cannotAct && !fighter.isNpc;
+}
+
 export function hasStatus(fighter: Fighter, type: string): boolean {
   return fighter.status.some((s) => s.type === type);
 }
@@ -47,6 +55,8 @@ export function cloneFighter(fighter: Fighter): Fighter {
     status: cloneStatuses(fighter.status),
     stats: { ...fighter.stats },
     exodiaPieces: fighter.exodiaPieces ? [...fighter.exodiaPieces] : fighter.exodiaPieces,
+    puruisaishiRoundActorIds: fighter.puruisaishiRoundActorIds ? [...fighter.puruisaishiRoundActorIds] : fighter.puruisaishiRoundActorIds,
+    originiumGrowthRoundActorIds: fighter.originiumGrowthRoundActorIds ? [...fighter.originiumGrowthRoundActorIds] : fighter.originiumGrowthRoundActorIds,
     emoteAdaptStats: fighter.emoteAdaptStats ? { ...fighter.emoteAdaptStats } : fighter.emoteAdaptStats,
     emoteOwnerBonus: fighter.emoteOwnerBonus ? { ...fighter.emoteOwnerBonus } : fighter.emoteOwnerBonus,
   };

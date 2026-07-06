@@ -146,6 +146,27 @@ export interface Fighter {
   isSon?: boolean;         // Water god's son
   summonerId?: string;
   summonBaseName?: string;
+  isNpc?: boolean;         // Non-player battlefield event unit
+  cannotWin?: boolean;     // Active unit that must not count as a winner/team for end condition
+  cannotAct?: boolean;     // Active unit that should never be picked by the normal action scheduler
+
+  // ── Puruisaishi / originium battlefield-event system ────────────────
+  isPuruisaishi?: boolean;
+  isOriginiumCore?: boolean;
+  isOriginiumCrystal?: boolean;
+  puruisaishiPhase?: number;
+  puruisaishiEnteredTurn?: number;
+  puruisaishiAppeared?: boolean;
+  puruisaishiShield?: number;
+  puruisaishiRoundActorIds?: string[];
+  untargetableUntilTurn?: number;
+  originiumParentId?: string;
+  originiumSpawnTurn?: number;
+  originiumGrowthRoundActorIds?: string[];
+  originiumWasAttackedTurn?: number;
+  originiumWasAttackedThisGrowthRound?: boolean;
+  originiumInfectionStacks?: number;
+  originiumBaseStats?: Pick<BaseStats, 'atk' | 'def' | 'res'> & { maxHp: number };
 
   // ── Battle-round state ─────────────────────────────────────────────────
   transformed?: boolean;
