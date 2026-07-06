@@ -10,7 +10,7 @@ import { generateNameArenaFighter } from "@/lib/namearena/fighterFactory";
 import { namerenaJobs } from "@/lib/namearena/jobs";
 import { namerenaSkills } from "@/lib/namearena/skills";
 import { getStatusTickMode } from "@/lib/namearena/statusRules";
-import type { Fighter, StatusEntry } from "@/lib/namearena/types";
+import type { Fighter, StatusEffectInfo, StatusEntry } from "@/lib/namearena/types";
 
 type BattleLogEntry = { type: string; text: string };
 type BattlePlaybackItem = {
@@ -246,6 +246,17 @@ const STATUS_CATEGORY_STYLES: Record<StatusCategory, string> = {
   unknown: 'border-rose-300/40 bg-rose-500/10 text-rose-100',
 };
 
+const STATUS_DISPLAY_FALLBACKS: Record<string, StatusEffectInfo> = {
+  YUZU_BARRIER: { name: '镜界护盾', icon: '🛡️', desc: '柚子施加的数值护盾，会先于生命承受伤害' },
+  YUZU_TAUNT: { name: '满级嘲讽', icon: '🪞', desc: '柚子抽到盾牌后吸引敌方火力' },
+  YUZU_MARKED: { name: '镜界标记', icon: '🎯', desc: '柚子三阶段定制目标，承受柚子更高伤害' },
+  YUZU_EVADE_DOWN: { name: '闪避破坏', icon: '🪞', desc: '闪避率下降' },
+  YUZU_DEF_DOWN: { name: '防御破坏', icon: '🪞', desc: '防御力下降' },
+  YUZU_RES_DOWN: { name: '魔抗破坏', icon: '🪞', desc: '魔抗下降' },
+  YUZU_ATK_DOWN: { name: '攻击破坏', icon: '🪞', desc: '攻击力下降' },
+  YUZU_SLOW: { name: '减速', icon: '🪞', desc: '行动速度下降' },
+};
+
 const RESOURCE_TONE_STYLES: Record<ResourceTone, string> = {
   luck: 'border-yellow-300/40 bg-yellow-400/10 text-yellow-100',
   tech: 'border-cyan-300/40 bg-cyan-400/10 text-cyan-100',
@@ -436,7 +447,7 @@ const getStatusDurationLabel = (status: StatusEntry) => {
 };
 
 const getStatusDisplayInfo = (status: StatusEntry): StatusDisplayInfo => {
-  const effect = namerenaData.STATUS_EFFECTS?.[status.type];
+  const effect = namerenaData.STATUS_EFFECTS?.[status.type] ?? STATUS_DISPLAY_FALLBACKS[status.type];
   const sourceName = getDefenseStatusDisplayName(status);
   const isUnknown = !effect;
   const category = getStatusCategory(status.type, isUnknown);
