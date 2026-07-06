@@ -2153,9 +2153,9 @@ export function runCharacterHookCases(): string[] {
     });
 
     const actual = engine.applyDamage(engineYuzu, 100, 'skill', false, attacker, { actionName: '分摊测试' });
-    assert(actual === 60, `Yuzu phase-1 reduction plus 30% team share should leave 60 HP damage, got ${actual}`);
-    assert(engineYuzu.currentHp === 940, `Yuzu should take 60 damage after sharing, got ${engineYuzu.currentHp}`);
-    assert(engineAlly.currentHp === 975, `Yuzu ally should take 25 shared damage, got ${engineAlly.currentHp}`);
+    assert(actual === 9, `Yuzu phase-1 reduction plus 90% team share should leave 9 HP damage, got ${actual}`);
+    assert(engineYuzu.currentHp === 991, `Yuzu should take 9 damage after sharing, got ${engineYuzu.currentHp}`);
+    assert(engineAlly.currentHp === 924, `Yuzu ally should take 76 shared damage, got ${engineAlly.currentHp}`);
 
     engineYuzu.yuzuPhase = 2;
     engine.markDefeated(engineAlly, { message: '💀 【测试】分摊队友倒下。', awardKill: false });
