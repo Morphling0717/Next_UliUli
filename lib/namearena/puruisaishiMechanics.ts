@@ -17,8 +17,10 @@ const PURUISAISHI_PHASE_TWO_SHIELD = 16000;
 const PURUISAISHI_PHASE_TWO_STACKS = 4;
 const PURUISAISHI_PHASE_TWO_TARGET_MIN = 1;
 const PURUISAISHI_PHASE_TWO_TARGET_MAX = 3;
+const PURUISAISHI_PHASE_TWO_PULSE_TURNS = 20;
 
 const ANANNA_UNTARGETABLE_TURNS = 5;
+const ANANNA_GROWTH_TURNS = 20;
 const CRYSTAL_UNTARGETABLE_TURNS = 1;
 const CRYSTAL_MAX_COUNT = 12;
 const CRYSTAL_THRESHOLD_COUNT = 10;
@@ -300,15 +302,28 @@ function growCrystal(runtime: PuruisaishiRuntime, parentId: string, reason: stri
   return true;
 }
 
-function processOriginiumGrowth(runtime: PuruisaishiRuntime): void {
+function shouldTriggerInterval(runtime: PuruisaishiRuntime, startTurn: number, intervalTurns: number): boolean {
+  const elapsed = runtime.turnCount - startTurn;
+  return elapsed > 0 && elapsed % intervalTurns === 0;
+}
+
+function processAnannaGrowth(runtime: PuruisaishiRuntime): void {
+  const core = runtime.fighters.find((fighter) => fighter.isOriginiumCore && runtime.isActiveCombatant(fighter));
+  if (!core) return;
+  const spawnTurn = core.originiumSpawnTurn ?? runtime.turnCount;
+  if (core.originiumLastGrowthTurn === runtime.turnCount) return;
+  if (!shouldTriggerInterval(runtime, spawnTurn, ANANNA_GROWTH_TURNS)) return;
+  core.originiumLastGrowthTurn = runtime.turnCount;
+  growCrystal(runtime, core.id, '阿喃那经过 20 回合完成增殖');
+}
+
+function processOriginiumCrystalGrowth(runtime: PuruisaishiRuntime): void {
   const actors = activePhaseRoundActors(runtime);
   if (actors.length === 0) return;
   const actorIds = new Set(actors.map((actor) => actor.id));
   const core = runtime.fighters.find((fighter) => fighter.isOriginiumCore && runtime.isActiveCombatant(fighter));
-  const growthSources = [
-    ...(core ? [core] : []),
-    ...activeCrystals(runtime),
-  ].filter((source) => (source.originiumSpawnTurn ?? runtime.turnCount) < runtime.turnCount);
+  const growthSources = activeCrystals(runtime)
+    .filter((source) => (source.originiumSpawnTurn ?? runtime.turnCount) < runtime.turnCount);
 
   growthSources.forEach((source) => {
     const actedIds = new Set((source.originiumGrowthRoundActorIds ?? []).filter((id) => actorIds.has(id)));
@@ -318,12 +333,8 @@ function processOriginiumGrowth(runtime: PuruisaishiRuntime): void {
     const wasAttacked = !!source.originiumWasAttackedThisGrowthRound;
     source.originiumGrowthRoundActorIds = [];
     source.originiumWasAttackedThisGrowthRound = false;
-    if (source.isOriginiumCrystal && wasAttacked) return;
-    if (source.isOriginiumCore) {
-      growCrystal(runtime, source.id, '阿喃那完成一个大回合增殖');
-    } else {
-      growCrystal(runtime, source.originiumParentId ?? core?.id ?? source.id, `${source.name} 一个大回合内没有被攻击`);
-    }
+    if (wasAttacked) return;
+    growCrystal(runtime, source.originiumParentId ?? core?.id ?? source.id, `${source.name} 一个大回合内没有被攻击`);
   });
 }
 
@@ -344,24 +355,21 @@ function processPuruisaishiPhase(runtime: PuruisaishiRuntime): void {
 
   if (phase < 2 && runtime.turnCount - enteredTurn >= PURUISAISHI_PHASE_TWO_TURN) {
     puruisaishi.puruisaishiPhase = 2;
+    puruisaishi.puruisaishiPhaseTwoStartedTurn = runtime.turnCount;
     puruisaishi.untargetableUntilTurn = undefined;
     puruisaishi.puruisaishiShield = Math.max(puruisaishi.puruisaishiShield ?? 0, PURUISAISHI_PHASE_TWO_SHIELD);
-    puruisaishi.puruisaishiRoundActorIds = [];
     puruisaishi.status.push({ type: 'PURUISAISHI_SHIELD', duration: 999 });
     runtime.log('transform', `🜲 【这里万籁俱寂，太安静了，别丢下我】${puruisaishi.name} 出场 50 回合后进入二阶段，生成 ${puruisaishi.puruisaishiShield} 点护盾。`);
   }
 }
 
-function processPuruisaishiPhaseTwoBigRound(runtime: PuruisaishiRuntime): void {
+function processPuruisaishiPhaseTwoPulse(runtime: PuruisaishiRuntime): void {
   const puruisaishi = activePuruisaishi(runtime);
   if (!puruisaishi || (puruisaishi.puruisaishiPhase ?? 1) < 2) return;
-
-  const actors = activePhaseRoundActors(runtime);
-  if (actors.length === 0) return;
-  const actorIds = new Set(actors.map((actor) => actor.id));
-  const actedIds = new Set((puruisaishi.puruisaishiRoundActorIds ?? []).filter((id) => actorIds.has(id)));
-  puruisaishi.puruisaishiRoundActorIds = [...actedIds];
-  if (actors.some((actor) => !actedIds.has(actor.id))) return;
+  const phaseTwoStartedTurn = puruisaishi.puruisaishiPhaseTwoStartedTurn ?? runtime.turnCount;
+  if (puruisaishi.puruisaishiLastPhaseTwoPulseTurn === runtime.turnCount) return;
+  if (!shouldTriggerInterval(runtime, phaseTwoStartedTurn, PURUISAISHI_PHASE_TWO_PULSE_TURNS)) return;
+  puruisaishi.puruisaishiLastPhaseTwoPulseTurn = runtime.turnCount;
 
   const candidates = activeInfectionTargets(runtime);
   const targetCount = Math.min(
@@ -369,7 +377,7 @@ function processPuruisaishiPhaseTwoBigRound(runtime: PuruisaishiRuntime): void {
     PURUISAISHI_PHASE_TWO_TARGET_MIN + Math.floor(Math.random() * (PURUISAISHI_PHASE_TWO_TARGET_MAX - PURUISAISHI_PHASE_TWO_TARGET_MIN + 1)),
   );
   const picked = new Set<string>();
-  runtime.log('poison', `🜲 【普瑞赛斯二阶段注视】场上可行动单位完成一个大回合，源石映像开始随机加深矿石病。`);
+  runtime.log('poison', `🜲 【普瑞赛斯二阶段注视】距离二阶段启动已过去 ${runtime.turnCount - phaseTwoStartedTurn} 回合，源石映像开始随机加深矿石病。`);
   for (let i = 0; i < targetCount; i += 1) {
     const remaining = candidates.filter((target) => !picked.has(target.id));
     const target = roll(remaining);
@@ -377,7 +385,6 @@ function processPuruisaishiPhaseTwoBigRound(runtime: PuruisaishiRuntime): void {
     picked.add(target.id);
     addOriginiumInfection(runtime, target, PURUISAISHI_PHASE_TWO_STACKS, '普瑞赛斯二阶段注视');
   }
-  puruisaishi.puruisaishiRoundActorIds = [];
 }
 
 function processOriginiumDot(runtime: PuruisaishiRuntime): void {
@@ -414,8 +421,9 @@ function processOriginiumDot(runtime: PuruisaishiRuntime): void {
 export function processPuruisaishiRoundEnd(runtime: PuruisaishiRuntime): void {
   if (!runtime.fighters.some((fighter) => fighter.isPuruisaishi)) return;
   processPuruisaishiPhase(runtime);
-  processPuruisaishiPhaseTwoBigRound(runtime);
-  processOriginiumGrowth(runtime);
+  processPuruisaishiPhaseTwoPulse(runtime);
+  processAnannaGrowth(runtime);
+  processOriginiumCrystalGrowth(runtime);
   processCrystalOverflowInfection(runtime);
   processOriginiumDot(runtime);
 }
@@ -423,15 +431,8 @@ export function processPuruisaishiRoundEnd(runtime: PuruisaishiRuntime): void {
 export function notePuruisaishiRoundActor(runtime: PuruisaishiRuntime, actor: Fighter): void {
   if (!runtime.isActiveCombatant(actor) || actor.isNpc || actor.cannotAct || hasRoundBlockingStatus(actor)) return;
 
-  const puruisaishi = activePuruisaishi(runtime);
-  if (puruisaishi && (puruisaishi.puruisaishiPhase ?? 1) >= 2) {
-    const ids = new Set(puruisaishi.puruisaishiRoundActorIds ?? []);
-    ids.add(actor.id);
-    puruisaishi.puruisaishiRoundActorIds = [...ids];
-  }
-
   runtime.fighters.forEach((fighter) => {
-    if (!fighter.isOriginiumCore && !fighter.isOriginiumCrystal) return;
+    if (!fighter.isOriginiumCrystal) return;
     if (!runtime.isActiveCombatant(fighter)) return;
     const ids = new Set(fighter.originiumGrowthRoundActorIds ?? []);
     ids.add(actor.id);

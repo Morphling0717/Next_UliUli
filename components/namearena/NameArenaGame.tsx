@@ -601,7 +601,7 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[]): ResourceChip
       icon: '🜲',
       label: '源石映像',
       value: `${phase}阶段`,
-      title: getResourceTitle('普瑞赛斯阶段', `${phase}阶段`, phase >= 2 ? '每个大回合随机提高场上单位矿石病层数' : '一阶段不可被选为目标'),
+      title: getResourceTitle('普瑞赛斯阶段', `${phase}阶段`, phase >= 2 ? '二阶段后每 20 回合随机提高场上单位矿石病层数' : '一阶段不可被选为目标'),
       tone: 'tech',
       priority: 6,
     });

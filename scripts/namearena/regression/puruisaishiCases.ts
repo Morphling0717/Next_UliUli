@@ -48,8 +48,8 @@ export function runPuruisaishiCases(): string[] {
       makeFighter('旁观者C@C'),
     ]);
     spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
-    engine.turnCount = 6;
-    completeOriginiumBigRound(engine);
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     const core = engine.fighters.find((fighter) => fighter.isOriginiumCore);
     const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
     assert(core && crystal, 'Ananna growth should create an originium crystal');
@@ -73,8 +73,8 @@ export function runPuruisaishiCases(): string[] {
       makeFighter('旁观者C@C'),
     ]);
     spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
-    engine.turnCount = 6;
-    completeOriginiumBigRound(engine);
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     const attacker = engine.fighters[0];
     const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
     assert(crystal, 'Originium crystal should exist for infection-on-attack test');
@@ -96,27 +96,26 @@ export function runPuruisaishiCases(): string[] {
       makeFighter('增殖C@C'),
     ]);
     spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
-    engine.turnCount = 6;
+    engine.turnCount = 19;
 
-    notePuruisaishiRoundActor(engine.createPuruisaishiRuntime(), engine.fighters[0]);
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 0, 'Ananna should not grow before a completed big round');
+    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 0, 'Ananna should not grow before 20 global turns');
 
-    notePuruisaishiRoundActor(engine.createPuruisaishiRuntime(), engine.fighters[1]);
-    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 0, 'Ananna should still wait for all active actors');
-
-    notePuruisaishiRoundActor(engine.createPuruisaishiRuntime(), engine.fighters[2]);
+    engine.turnCount = 20;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     const firstCrystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
-    assert(firstCrystal, 'Ananna should grow one crystal after a completed big round');
+    assert(firstCrystal, 'Ananna should grow one crystal at the 20-turn interval');
 
-    engine.turnCount = 7;
+    engine.turnCount = 21;
     firstCrystal.untargetableUntilTurn = 0;
     engine.applyDamage(firstCrystal, 1, 'skill', false, engine.fighters[0], { actionName: '阻止增殖测试' });
     completeOriginiumBigRound(engine);
-    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 2, 'Attacked crystal should not grow during that big round, while Ananna still grows one crystal');
-    cases.push('Originium growth uses completed big rounds and attacked crystals skip growth');
+    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 1, 'Attacked crystal should not grow during that big round, and Ananna should wait for the next 20-turn interval');
+
+    engine.turnCount = 22;
+    completeOriginiumBigRound(engine);
+    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 2, 'Unattacked crystals should still use completed big rounds for growth');
+    cases.push('Ananna grows every 20 turns and attacked crystals skip big-round growth');
   }
 
   {
@@ -145,8 +144,8 @@ export function runPuruisaishiCases(): string[] {
       makeFighter('旁观者C@C'),
     ]);
     spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
-    engine.turnCount = 1;
-    completeOriginiumBigRound(engine);
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     engine.turnCount = 50;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
@@ -177,33 +176,32 @@ export function runPuruisaishiCases(): string[] {
 
   {
     const { engine, logs } = makeDeathEngine([
-      makeFighter('大回合A@A'),
-      makeFighter('大回合B@B'),
-      makeFighter('大回合C@C'),
+      makeFighter('二阶段A@A'),
+      makeFighter('二阶段B@B'),
+      makeFighter('二阶段C@C'),
     ]);
     spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
     engine.turnCount = 50;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
-    assert(puruisaishi && (puruisaishi.puruisaishiPhase ?? 1) === 2, 'Puruisaishi should be phase 2 before big-round stack test');
+    assert(puruisaishi && (puruisaishi.puruisaishiPhase ?? 1) === 2, 'Puruisaishi should be phase 2 before 20-turn stack test');
 
-    notePuruisaishiRoundActor(engine.createPuruisaishiRuntime(), engine.fighters[0]);
+    engine.turnCount = 69;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    assert(engine.fighters.every((fighter) => (fighter.originiumInfectionStacks ?? 0) === 0), 'Puruisaishi phase 2 should not add stacks after only one actor in the big round');
+    assert(engine.fighters.every((fighter) => (fighter.originiumInfectionStacks ?? 0) === 0), 'Puruisaishi phase 2 should not add stacks before 20 turns have elapsed');
 
-    notePuruisaishiRoundActor(engine.createPuruisaishiRuntime(), engine.fighters[1]);
-    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    assert(engine.fighters.every((fighter) => (fighter.originiumInfectionStacks ?? 0) === 0), 'Puruisaishi phase 2 should not add stacks before every actor has acted');
-
+    engine.turnCount = 70;
     withRandomSequence([0, 0], () => {
-      notePuruisaishiRoundActor(engine.createPuruisaishiRuntime(), engine.fighters[2]);
       processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     });
 
     const totalStacks = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
-    assert(totalStacks === 4, `Puruisaishi should add exactly one phase-2 target package after a completed big round, got total stacks ${totalStacks}`);
-    assert(logs.some((entry) => entry.text.includes('完成一个大回合')), 'Puruisaishi phase-2 stack log should explain the big-round trigger');
-    cases.push('Puruisaishi phase-2 stacks once per completed big round');
+    assert(totalStacks === 4, `Puruisaishi should add exactly one phase-2 target package after 20 turns, got total stacks ${totalStacks}`);
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const totalStacksAfterDuplicateCall = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    assert(totalStacksAfterDuplicateCall === 4, 'Puruisaishi phase-2 20-turn pulse should not duplicate in the same turn');
+    assert(logs.some((entry) => entry.text.includes('已过去 20 回合')), 'Puruisaishi phase-2 stack log should explain the 20-turn trigger');
+    cases.push('Puruisaishi phase-2 stacks once per 20 turns');
   }
 
   return cases;

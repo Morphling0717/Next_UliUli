@@ -156,12 +156,14 @@ export interface Fighter {
   isOriginiumCrystal?: boolean;
   puruisaishiPhase?: number;
   puruisaishiEnteredTurn?: number;
+  puruisaishiPhaseTwoStartedTurn?: number;
+  puruisaishiLastPhaseTwoPulseTurn?: number;
   puruisaishiAppeared?: boolean;
   puruisaishiShield?: number;
-  puruisaishiRoundActorIds?: string[];
   untargetableUntilTurn?: number;
   originiumParentId?: string;
   originiumSpawnTurn?: number;
+  originiumLastGrowthTurn?: number;
   originiumGrowthRoundActorIds?: string[];
   originiumWasAttackedTurn?: number;
   originiumWasAttackedThisGrowthRound?: boolean;
