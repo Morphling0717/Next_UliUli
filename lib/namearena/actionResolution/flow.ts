@@ -102,6 +102,7 @@ export function executeSkillAction(
     skills: runtime.skills,
     data: runtime.data,
     fighters: runtime.fighters,
+    turnCount: runtime.turnCount,
     getTeamId: runtime.getTeamId,
     isActiveCombatant: runtime.isActiveCombatant,
     log: (type, text) => runtime.log(type, text),

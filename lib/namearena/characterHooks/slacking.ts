@@ -96,6 +96,7 @@ export function executeSlackingSynergy(ctx: SkillContext): boolean {
   } else if (ctx.user.job === 'VALO_JUNIOR') {
     fallback = selectValorantSkill(ctx.user, {
       fighters: ctx.fighters,
+      turnCount: ctx.turnCount,
       getTeamId: ctx.getTeamId,
       isActiveCombatant: (fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
       log: ctx.log,
@@ -103,6 +104,7 @@ export function executeSlackingSynergy(ctx: SkillContext): boolean {
   } else if (ctx.user.job === 'MY_BABY') {
     fallback = selectBabySupportSkill(ctx.user, {
       fighters: ctx.fighters,
+      turnCount: ctx.turnCount,
       getTeamId: ctx.getTeamId,
       isActiveCombatant: (fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
     });

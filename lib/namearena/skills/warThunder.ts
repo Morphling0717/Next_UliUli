@@ -10,6 +10,7 @@ import {
   grantStatus,
 } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
+import { isSelectableTargetFor } from '../targeting';
 
 const { SKILL_TAGS } = Data;
 
@@ -117,15 +118,13 @@ function consumeAim(user: Fighter): boolean {
 }
 
 function isCasEligibleTarget(ctx: SkillContext, fighter: SkillContext['target'] | undefined): boolean {
-  return (
-    !!fighter &&
-    fighter.id !== ctx.user.id &&
-    fighter.currentHp > 0 &&
-    !fighter.isDead &&
-    !fighter.isDeadAnnounced &&
-    ctx.getTeamId(fighter) !== ctx.getTeamId(ctx.user) &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING')
-  );
+  if (!fighter) return false;
+  return isSelectableTargetFor({
+    fighters: ctx.fighters,
+    turnCount: ctx.turnCount,
+    getTeamId: ctx.getTeamId,
+    isActiveCombatant,
+  }, ctx.user, fighter);
 }
 
 export const warThunderSkills: Record<string, SkillDefinition> = {

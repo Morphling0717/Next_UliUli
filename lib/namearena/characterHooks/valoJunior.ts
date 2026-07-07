@@ -1,6 +1,7 @@
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 import { grantStatus } from '../defenseStatus';
+import { isSelectableTargetFor } from '../targeting';
 
 const VALO_ULT_THRESHOLD = 5;
 const VALO_CLUTCH_ULT_THRESHOLD = 5;
@@ -29,7 +30,7 @@ const VALO_ULT_DISPLAY_NAMES: Record<string, string> = {
   valo_ult_neural_theft: '神经取缔',
 };
 
-type ValorantRuntime = Pick<CharacterHookRuntime, 'fighters' | 'getTeamId' | 'isActiveCombatant' | 'log'>;
+type ValorantRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant' | 'log'>;
 
 function hasStatus(actor: Fighter, type: string): boolean {
   return actor.status.some((status) => status.type === type);
@@ -40,12 +41,8 @@ function refreshStatus(actor: Fighter, type: string, duration: number, sourceId?
 }
 
 function activeEnemies(actor: Fighter, runtime: ValorantRuntime): Fighter[] {
-  const actorTeamId = runtime.getTeamId(actor);
   return runtime.fighters.filter((fighter) =>
-    fighter.id !== actor.id &&
-    runtime.isActiveCombatant(fighter) &&
-    runtime.getTeamId(fighter) !== actorTeamId &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    isSelectableTargetFor(runtime, actor, fighter),
   );
 }
 

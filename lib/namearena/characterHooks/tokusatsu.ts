@@ -2,6 +2,7 @@ import { cloneJobDefinition } from '../combatState';
 import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 import { grantStatus } from '../defenseStatus';
+import { isSelectableTargetFor } from '../targeting';
 import {
   addTokusatsuThroneResonance,
   clearTokusatsuThroneResonance,
@@ -17,11 +18,8 @@ function hasNegativeStatus(target: Parameters<CharacterHookRuntime['syncHpPct']>
 }
 
 function activeEnemies(runtime: CharacterHookRuntime, actor: Parameters<CharacterHookRuntime['syncHpPct']>[0]) {
-  const actorTeamId = runtime.getTeamId(actor);
   return runtime.fighters.filter((fighter) =>
-    fighter.id !== actor.id &&
-    runtime.isActiveCombatant(fighter) &&
-    runtime.getTeamId(fighter) !== actorTeamId,
+    isSelectableTargetFor(runtime, actor, fighter),
   );
 }
 

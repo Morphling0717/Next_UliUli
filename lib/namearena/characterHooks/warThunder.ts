@@ -2,6 +2,7 @@ import { cloneJobDefinition } from '../combatState';
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 import { grantStatus } from '../defenseStatus';
+import { isSelectableTargetFor } from '../targeting';
 
 const WT_BACKUP_COST = 7;
 const WT_CAS_COST = 5;
@@ -37,12 +38,8 @@ function hasStatus(fighter: Fighter, type: string): boolean {
 }
 
 function activeEnemies(runtime: CharacterHookRuntime, actor: Fighter): Fighter[] {
-  const actorTeamId = runtime.getTeamId(actor);
   return runtime.fighters.filter((fighter) =>
-    fighter.id !== actor.id &&
-    runtime.isActiveCombatant(fighter) &&
-    runtime.getTeamId(fighter) !== actorTeamId &&
-    !hasStatus(fighter, 'SYNERGY_SLACKING'),
+    isSelectableTargetFor(runtime, actor, fighter),
   );
 }
 
@@ -59,8 +56,7 @@ function hasRepairNeed(actor: Fighter): boolean {
 function hasMarkedLiveTarget(actor: Fighter, runtime: CharacterHookRuntime): boolean {
   return !!actor.wtMarkedTargetId && runtime.fighters.some((fighter) =>
     fighter.id === actor.wtMarkedTargetId &&
-    runtime.isActiveCombatant(fighter) &&
-    runtime.getTeamId(fighter) !== runtime.getTeamId(actor),
+    isSelectableTargetFor(runtime, actor, fighter),
   );
 }
 
@@ -208,8 +204,7 @@ export const warThunderHook: CharacterHook = {
 
     const revengeTarget = runtime.fighters.find((candidate) =>
       candidate.id === fighter.lastDamage?.attackerId &&
-      runtime.isActiveCombatant(candidate) &&
-      runtime.getTeamId(candidate) !== runtime.getTeamId(fighter),
+      isSelectableTargetFor(runtime, fighter, candidate),
     );
     if (revengeTarget) {
       fighter.wtMarkedTargetId = revengeTarget.id;

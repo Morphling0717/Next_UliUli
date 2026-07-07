@@ -17,6 +17,7 @@ import {
   formatControlBlocked,
   grantStatus,
 } from './defenseStatus';
+import { isSelectableTargetFor } from './targeting';
 
 export const GACHA_LUCK_MAX = 5;
 export const GACHA_SUMMON_LIFESTEAL_STATUS = 'GACHA_SUMMON_LIFESTEAL';
@@ -33,6 +34,7 @@ type LogFn = (type: string, text: string) => void;
 type LuckDrawRuntime = {
   fighters?: Fighter[];
   data: BattleEngineData;
+  turnCount?: number;
   getTeamId?: (fighter: Fighter) => string;
   isActiveCombatant?: (fighter: Fighter) => boolean;
   log: LogFn;
@@ -55,9 +57,18 @@ function activeFighters(runtime: LuckDrawRuntime): Fighter[] {
 }
 
 function activeEnemies(runtime: LuckDrawRuntime, user: Fighter): Fighter[] {
+  if (runtime.fighters && runtime.getTeamId && runtime.isActiveCombatant && runtime.turnCount !== undefined) {
+    return runtime.fighters.filter((fighter) => isSelectableTargetFor({
+      fighters: runtime.fighters!,
+      turnCount: runtime.turnCount!,
+      getTeamId: runtime.getTeamId!,
+      isActiveCombatant: runtime.isActiveCombatant!,
+    }, user, fighter));
+  }
   const userTeamId = runtime.getTeamId?.(user) ?? user.teamId ?? user.id;
   return activeFighters(runtime).filter((fighter) =>
     fighter.id !== user.id &&
+    !(fighter.isPuruisaishi && (fighter.puruisaishiPhase ?? 1) <= 1) &&
     (runtime.getTeamId?.(fighter) ?? fighter.teamId ?? fighter.id) !== userTeamId,
   );
 }
@@ -291,14 +302,13 @@ export function triggerGachaDeathSave(
 }
 
 function activeContextEnemies(ctx: SkillContext): Fighter[] {
-  const myTeamId = ctx.getTeamId(ctx.user);
   return ctx.fighters.filter((fighter) =>
-    fighter.id !== ctx.user.id &&
-    !fighter.isDead &&
-    !fighter.isDeadAnnounced &&
-    fighter.currentHp > 0 &&
-    ctx.getTeamId(fighter) !== myTeamId &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    isSelectableTargetFor({
+      fighters: ctx.fighters,
+      turnCount: ctx.turnCount,
+      getTeamId: ctx.getTeamId,
+      isActiveCombatant,
+    }, ctx.user, fighter),
   );
 }
 

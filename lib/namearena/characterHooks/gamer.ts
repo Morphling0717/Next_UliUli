@@ -2,8 +2,9 @@ import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from '../statusRules';
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 import { grantStatus } from '../defenseStatus';
+import { isSelectableTargetFor } from '../targeting';
 
-type GamerRuntime = Pick<CharacterHookRuntime, 'fighters' | 'getTeamId' | 'isActiveCombatant' | 'jobs' | 'log'>;
+type GamerRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant' | 'jobs' | 'log'>;
 
 const MAX_APM = 12;
 const WORLD_STAGE_THRESHOLD = 11;
@@ -60,12 +61,9 @@ function gainApm(actor: Fighter, amount = 1, runtime?: Pick<GamerRuntime, 'log'>
   }
 }
 
-function getEnemies(actor: Fighter, runtime: Pick<GamerRuntime, 'fighters' | 'getTeamId' | 'isActiveCombatant'>): Fighter[] {
-  const actorTeamId = runtime.getTeamId(actor);
+function getEnemies(actor: Fighter, runtime: Pick<GamerRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant'>): Fighter[] {
   return runtime.fighters.filter((candidate) =>
-    candidate.id !== actor.id &&
-    runtime.isActiveCombatant(candidate) &&
-    runtime.getTeamId(candidate) !== actorTeamId,
+    isSelectableTargetFor(runtime, actor, candidate),
   );
 }
 

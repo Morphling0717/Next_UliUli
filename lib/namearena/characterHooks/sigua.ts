@@ -1,7 +1,8 @@
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
+import { isSelectableTargetFor } from '../targeting';
 
-type TeamRuntime = Pick<CharacterHookRuntime, 'fighters' | 'getTeamId' | 'isActiveCombatant'>;
+type TeamRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant'>;
 
 const CLEANSABLE_STATUS_TYPES = new Set([
   'STUN',
@@ -33,11 +34,8 @@ function findTeamClaire(actor: Fighter, runtime: TeamRuntime): Fighter | undefin
 }
 
 function getEnemies(actor: Fighter, runtime: TeamRuntime): Fighter[] {
-  const actorTeamId = runtime.getTeamId(actor);
   return runtime.fighters.filter((candidate) =>
-    candidate.id !== actor.id &&
-    runtime.isActiveCombatant(candidate) &&
-    runtime.getTeamId(candidate) !== actorTeamId,
+    isSelectableTargetFor(runtime, actor, candidate),
   );
 }
 

@@ -1,5 +1,6 @@
 import type { Fighter, GachaEntry, SkillDefinition, StatKey } from '../../../lib/namearena/types';
 import {
+  clearYuzuMark,
   drawYuzuWeapon,
   ensureYuzuMarkedTarget,
 } from '../../../lib/namearena/yuzuMechanics';
@@ -2304,15 +2305,29 @@ export function runCharacterHookCases(): string[] {
     const core = engine.fighters.find((fighter) => fighter.isOriginiumCore);
     const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
     assert(puruisaishi && core && crystal, 'Puruisaishi event should provide Puruisaishi, Ananna and a crystal for Yuzu mark test');
+    crystal.untargetableUntilTurn = 0;
 
     engineYuzu.yuzuPhase = 3;
-    ensureYuzuMarkedTarget(engine.createCharacterHookRuntime(), engineYuzu);
+    const yuzuRuntime = engine.createCharacterHookRuntime();
+    withRandomSequence([0], () => {
+      ensureYuzuMarkedTarget(yuzuRuntime, engineYuzu);
+    });
 
-    assert(engineYuzu.yuzuMarkedTargetId === crystal.id, `Yuzu phase-3 mark should prefer originium crystal, got ${engineYuzu.yuzuMarkedTargetId}`);
+    assert(engineYuzu.yuzuMarkedTargetId === engine.fighters[1].id, `Yuzu phase-3 mark should not prefer originium crystal over normal enemies, got ${engineYuzu.yuzuMarkedTargetId}`);
     assert(!puruisaishi.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should not mark Puruisaishi');
     assert(!core.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should not mark Ananna');
-    assert(crystal.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should mark the originium crystal');
-    cases.push('Yuzu phase 3 mark targets originium crystals instead of Puruisaishi or Ananna');
+    assert(!crystal.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should not force priority onto the originium crystal');
+
+    clearYuzuMark(yuzuRuntime, engineYuzu);
+    withRandomSequence([0.99], () => {
+      ensureYuzuMarkedTarget(yuzuRuntime, engineYuzu);
+    });
+
+    assert(engineYuzu.yuzuMarkedTargetId === crystal.id, `Yuzu phase-3 mark should still allow random originium crystal marks, got ${engineYuzu.yuzuMarkedTargetId}`);
+    assert(crystal.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should keep originium crystal in the random mark pool');
+    assert(!puruisaishi.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should still not mark Puruisaishi after reroll');
+    assert(!core.status.some((status) => status.type === 'YUZU_MARKED'), 'Yuzu should still not mark Ananna after reroll');
+    cases.push('Yuzu phase 3 mark allows but does not prefer originium crystals');
   }
 
   {

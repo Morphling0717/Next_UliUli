@@ -1,4 +1,5 @@
 import type { CharacterHook } from './types';
+import { isSelectableTargetFor } from '../targeting';
 
 const TING_TRANSFORM_SKILL_RATE = 0.92;
 
@@ -13,11 +14,8 @@ export const tingHook: CharacterHook = {
     if (phase !== 'preMechanics' || !actor.isTing || !actor.transformed) return null;
     if (Math.random() > TING_TRANSFORM_SKILL_RATE) return null;
 
-    const actorTeamId = runtime.getTeamId(actor);
     const enemies = runtime.fighters.filter((fighter) =>
-      fighter.id !== actor.id &&
-      runtime.getTeamId(fighter) !== actorTeamId &&
-      runtime.isActiveCombatant(fighter),
+      isSelectableTargetFor(runtime, actor, fighter),
     );
 
     if (actor.job === 'EXPLOSIVE_ANTI_CROC') {

@@ -32,7 +32,7 @@ export function getSelectableTargets(runtime: TargetingRuntime, user: Fighter): 
 function getTargetWeight(target: Fighter): number {
   if (target.isOriginiumCrystal) return 0.18;
   if (target.isOriginiumCore) return 0.28;
-  if (target.isPuruisaishi) return 0.35;
+  if (target.isPuruisaishi) return 0.5;
   const waitingOnTokusatsuThrone = target.isTokusatsu &&
     target.job === 'MIRACLE_BUJIN' &&
     target.status.some((status) => status.type === 'WAIT_COUNTER');

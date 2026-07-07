@@ -138,6 +138,7 @@ export function buildSupportResolutionRuntime(host: BattleRuntimeHost): SupportR
     fighters: host.fighters,
     skillTags: host.SKILL_TAGS,
     data: host.Data,
+    turnCount: host.turnCount,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     syncHpPct: (fighter) => host.syncHpPct(fighter),

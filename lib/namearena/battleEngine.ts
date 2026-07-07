@@ -361,12 +361,8 @@ export class BattleEngine {
     this.syncHpPct(target);
     this.queueOrLogDamageEvent(target, options, 'heal', `🔥 【神不死鸟】${target.name} 在致死瞬间化为太阳火焰复燃，恢复到 ${target.currentHp} 点生命！`);
 
-    const myTeamId = this.getTeamId(target);
     const enemies = this.fighters.filter((fighter) =>
-      fighter.id !== target.id &&
-      this.isActiveCombatant(fighter) &&
-      this.getTeamId(fighter) !== myTeamId &&
-      !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+      isSelectableTargetFor(this.createTargetingRuntime(), target, fighter),
     );
     const phoenixDmg = Math.floor(target.mag * 2.8 + target.atk * 1.4);
     enemies.forEach((enemy) => {
@@ -748,14 +744,8 @@ export class BattleEngine {
       } else {
         const originalAmount = amount;
         amount = 0;
-        const myTeamId = this.getTeamId(target);
         const enemies = this.fighters.filter((f) =>
-          !f.isDead &&
-          !f.isDeadAnnounced &&
-          f.currentHp > 0 &&
-          f.id !== target.id &&
-          this.getTeamId(f) !== myTeamId &&
-          !f.status.some((s) => s.type === 'SYNERGY_SLACKING'),
+          isSelectableTargetFor(this.createTargetingRuntime(), target, f),
         );
         if (enemies.length > 0) {
           const victim = enemies[Math.floor(Math.random() * enemies.length)];
@@ -1519,6 +1509,7 @@ export class BattleEngine {
       skills: this.SKILLS,
       data: this.Data,
       fighters: this.fighters,
+      turnCount: this.turnCount,
       getTeamId: (fighter) => this.getTeamId(fighter),
       isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
       log: (type, text) => this.log(type, text),

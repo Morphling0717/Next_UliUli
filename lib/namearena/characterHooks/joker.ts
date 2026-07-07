@@ -1,5 +1,6 @@
 import { cloneJobDefinition } from '../combatState';
 import type { DamageApplicationOptions } from '../types';
+import { isSelectableTargetFor } from '../targeting';
 import type { CharacterHook } from './types';
 
 export const jokerHook: CharacterHook = {
@@ -85,13 +86,13 @@ export const jokerHook: CharacterHook = {
     fighter.status = [];
     runtime.log('buff', `🤡 ${fighter.name} 从地狱归来！转职为【${GOD_OF_TROLLS ? GOD_OF_TROLLS.name : '乐子人'}】！\n"接下来，是我的谢幕演出！"`);
 
-    const enemies = runtime.fighters.filter((enemy) => runtime.isActiveCombatant(enemy) && runtime.getTeamId(enemy) !== myTeamId);
+    const enemies = runtime.fighters.filter((enemy) => isSelectableTargetFor(runtime, fighter, enemy));
     if (enemies.length > 0) {
       const aoeDmg = Math.floor(fighter.mag * 2.06);
       runtime.log('skill', `💥 【谢幕返场】${fighter.name} 的地狱笑话席卷 ${enemies.length} 名敌人：${enemies.map((enemy) => enemy.name).join('、')}！`);
       for (const enemy of enemies) {
         if (!runtime.isActiveCombatant(fighter)) break;
-        if (!runtime.isActiveCombatant(enemy) || runtime.getTeamId(enemy) === myTeamId) continue;
+        if (!isSelectableTargetFor(runtime, fighter, enemy)) continue;
         const damageOptions: DamageApplicationOptions = {
           deferTransform: true,
           respectDefenses: true,

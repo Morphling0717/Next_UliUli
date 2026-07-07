@@ -1,4 +1,5 @@
 import type { Fighter, StatusEntry } from './types';
+import { isSelectableTargetFor } from './targeting';
 
 export type YuzuWeaponId =
   | 'sword'
@@ -149,9 +150,10 @@ function isYuzuMarkEligibleTarget(target: Fighter): boolean {
 }
 
 function activeYuzuMarkTargets(runtime: YuzuRuntime, yuzu: Fighter): Fighter[] {
-  const enemies = activeYuzuEnemies(runtime, yuzu).filter(isYuzuMarkEligibleTarget);
-  const crystals = enemies.filter((enemy) => enemy.isOriginiumCrystal);
-  return crystals.length > 0 ? crystals : enemies;
+  return activeYuzuEnemies(runtime, yuzu).filter((target) =>
+    isYuzuMarkEligibleTarget(target) &&
+    isSelectableTargetFor(runtime, yuzu, target),
+  );
 }
 
 function weightedPickWeapon(pool: YuzuWeapon[]): YuzuWeapon {
@@ -297,6 +299,7 @@ export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fig
       fighter.id === yuzu.yuzuMarkedTargetId &&
       runtime.isActiveCombatant(fighter) &&
       isYuzuMarkEligibleTarget(fighter) &&
+      isSelectableTargetFor(runtime, yuzu, fighter) &&
       !sameTeam(runtime, yuzu, fighter),
     )
     : undefined;

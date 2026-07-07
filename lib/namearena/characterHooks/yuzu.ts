@@ -7,6 +7,7 @@ import {
   tryAdvanceYuzuPhaseByTeamLoss,
   type YuzuRuntime,
 } from '../yuzuMechanics';
+import { isSelectableTargetFor } from '../targeting';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 
 const PHASE_ONE_SKILLS = [
@@ -42,11 +43,8 @@ function asYuzuRuntime(runtime: CharacterHookRuntime): YuzuRuntime {
 }
 
 function activeEnemies(runtime: CharacterHookRuntime, actor: Fighter): Fighter[] {
-  const actorTeamId = runtime.getTeamId(actor);
   return runtime.fighters.filter((fighter) =>
-    fighter.id !== actor.id &&
-    runtime.isActiveCombatant(fighter) &&
-    runtime.getTeamId(fighter) !== actorTeamId,
+    isSelectableTargetFor(runtime, actor, fighter),
   );
 }
 

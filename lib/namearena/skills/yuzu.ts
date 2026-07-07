@@ -13,6 +13,7 @@ import {
   type YuzuWeaponId,
   yuzuWeaponSummary,
 } from '../yuzuMechanics';
+import { isSelectableTargetFor } from '../targeting';
 
 const { SKILL_TAGS } = Data;
 
@@ -51,11 +52,8 @@ function yuzuRuntime(ctx: SkillContext): YuzuRuntime {
 }
 
 function enemyTargets(ctx: SkillContext): Fighter[] {
-  const userTeamId = ctx.getTeamId(ctx.user);
   return ctx.fighters.filter((fighter) =>
-    fighter.id !== ctx.user.id &&
-    isActive(fighter) &&
-    ctx.getTeamId(fighter) !== userTeamId,
+    isSelectableTargetFor(yuzuRuntime(ctx), ctx.user, fighter),
   );
 }
 

@@ -10,6 +10,7 @@ import {
   grantStatus,
   statusSourceFromSkill,
 } from '../defenseStatus';
+import { isSelectableTargetFor } from '../targeting';
 
 const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
   chimera_devour: 'baby_feed',
@@ -47,12 +48,8 @@ function restoreValorantOperatorMobility(fighter: Fighter): boolean {
 }
 
 function activeEnemyCount(runtime: ActionResolutionRuntime, user: Fighter): number {
-  const userTeamId = runtime.getTeamId(user);
   return runtime.fighters.filter((fighter) =>
-    runtime.isActiveCombatant(fighter) &&
-    fighter.id !== user.id &&
-    runtime.getTeamId(fighter) !== userTeamId &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    isSelectableTargetFor(runtime, user, fighter),
   ).length;
 }
 

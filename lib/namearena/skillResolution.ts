@@ -9,6 +9,7 @@ export interface SkillResolutionRuntime {
   skills: Record<string, SkillDefinition>;
   data: BattleEngineData;
   fighters?: Fighter[];
+  turnCount?: number;
   getTeamId?: (fighter: Fighter) => string;
   isActiveCombatant?: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;

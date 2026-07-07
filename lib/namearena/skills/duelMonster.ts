@@ -7,18 +7,18 @@ import {
   grantStatus,
 } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
+import { isSelectableTargetFor } from '../targeting';
 
 const { SKILL_TAGS } = Data;
 
 function activeEnemies(ctx: Parameters<NonNullable<SkillDefinition['onExecute']>>[0]) {
-  const myTeamId = ctx.getTeamId(ctx.user);
   return ctx.fighters.filter((fighter) =>
-    fighter.id !== ctx.user.id &&
-    !fighter.isDead &&
-    !fighter.isDeadAnnounced &&
-    fighter.currentHp > 0 &&
-    ctx.getTeamId(fighter) !== myTeamId &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    isSelectableTargetFor({
+      fighters: ctx.fighters,
+      turnCount: ctx.turnCount,
+      getTeamId: ctx.getTeamId,
+      isActiveCombatant,
+    }, ctx.user, fighter),
   );
 }
 

@@ -6,6 +6,7 @@ import {
   isStatusType,
 } from '../statusRules';
 import { grantStatus } from '../defenseStatus';
+import { isSelectableTargetFor } from '../targeting';
 import {
   enterTokusatsuThroneStance,
   getTokusatsuThroneResonance,
@@ -52,11 +53,13 @@ function userCanContinue(ctx: SkillContext): boolean {
 }
 
 function enemiesOf(ctx: SkillContext, user = ctx.user): Fighter[] {
-  const userTeamId = ctx.getTeamId(user);
   return ctx.fighters.filter((fighter) =>
-    fighter.id !== user.id &&
-    isActive(fighter) &&
-    ctx.getTeamId(fighter) !== userTeamId,
+    isSelectableTargetFor({
+      fighters: ctx.fighters,
+      turnCount: ctx.turnCount,
+      getTeamId: ctx.getTeamId,
+      isActiveCombatant: isActive,
+    }, user, fighter),
   );
 }
 

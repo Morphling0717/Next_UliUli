@@ -16,11 +16,13 @@ import {
   grantStatus,
   statusSourceFromSkill,
 } from './defenseStatus';
+import { isSelectableTargetFor } from './targeting';
 
 export interface SupportResolutionRuntime {
   fighters: Fighter[];
   skillTags: Record<string, string>;
   data: BattleEngineData;
+  turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   syncHpPct: (fighter: Fighter) => void;
@@ -117,11 +119,8 @@ function isChimeraPluginInstall(runtime: SupportResolutionRuntime, target: Fight
 }
 
 function activeEnemiesOf(runtime: SupportResolutionRuntime, user: Fighter): Fighter[] {
-  const userTeamId = runtime.getTeamId(user);
   return runtime.fighters.filter((fighter) =>
-    fighter.id !== user.id &&
-    runtime.isActiveCombatant(fighter) &&
-    runtime.getTeamId(fighter) !== userTeamId,
+    isSelectableTargetFor(runtime, user, fighter),
   );
 }
 

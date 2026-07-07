@@ -43,6 +43,34 @@ export function runPuruisaishiCases(): string[] {
 
   {
     const { engine, logs } = makeDeathEngine([
+      makeFighter('群伤测试者@A'),
+      makeFighter('普通受击者@B'),
+      makeFighter('旁观者C@C'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    const caster = engine.fighters[0];
+    const normalTarget = engine.fighters[1];
+    const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
+    const core = engine.fighters.find((fighter) => fighter.isOriginiumCore);
+    assert(puruisaishi && core, 'Puruisaishi AoE test should have phase-1 Puruisaishi and Ananna');
+    const puruHpBefore = puruisaishi.currentHp;
+    const coreHpBefore = core.currentHp;
+    const targetHpBefore = normalTarget.currentHp;
+
+    caster.mag = 500;
+    caster.atk = 300;
+    engine.executeSkillAction('exodia_obliterate', caster, normalTarget);
+
+    assert(normalTarget.currentHp < targetHpBefore, 'AoE skill should still hit normal selectable enemies');
+    assert(puruisaishi.currentHp === puruHpBefore, 'Phase-1 Puruisaishi should not take AoE damage');
+    assert(core.currentHp === coreHpBefore, 'Protected Ananna should not take AoE damage');
+    assert(!logs.some((entry) => entry.text.includes('怒火命中 普瑞赛斯')), 'AoE logs should not claim a hit on phase-1 Puruisaishi');
+    assert(!logs.some((entry) => entry.text.includes('怒火命中 阿喃那')), 'AoE logs should not claim a hit on protected Ananna');
+    cases.push('Phase-1 Puruisaishi and protected Ananna ignore hostile AoE');
+  }
+
+  {
+    const { engine, logs } = makeDeathEngine([
       makeFighter('阿喃那攻击者@A'),
       makeFighter('旁观者B@B'),
       makeFighter('旁观者C@C'),
