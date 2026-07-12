@@ -1,10 +1,13 @@
-import { isActiveCombatant, isWinningCombatant, setCurrentHp, syncHpPct } from './combatState';
+import { healFighter, isActiveCombatant, isWinningCombatant, setCurrentHp, syncHpPct } from './combatState';
 import type {
   BattleEngineCore,
+  DamageApplicationOptions,
   DefeatOptions,
   Fighter,
   JobDefinition,
 } from './types';
+import { createLifecycleStatus, refreshLifecycleStatus } from './statusLifecycle';
+import { withTimedStatModifiersSuspended } from './statModifiers';
 
 export const ORIGINIUM_DISEASE_STATUS = 'ORIGINIUM_DISEASE';
 export const PURUISAISHI_SETTLEMENT_MESSAGE = '我会一直看着你，预言家';
@@ -27,16 +30,29 @@ const CRYSTAL_THRESHOLD_COUNT = 10;
 const CRYSTAL_ATTACK_INFECTION_CHANCE = 0.35;
 const CRYSTAL_ATTACK_INFECTION_STACKS = 3;
 const CRYSTAL_OVERFLOW_INFECTION_STACKS = 2;
+const CRYSTAL_BREAK_CLEANSE_STACKS = 2;
+const CRYSTAL_BREAK_HEAL_RATIO = 0.03;
 const ORIGINIUM_MAX_STACKS = 80;
 const ORIGINIUM_BONUS_CLEAR_STACKS = 60;
 
 type OriginiumStatKey = 'maxHp' | 'atk' | 'def' | 'res';
-const ORIGINIUM_STAT_KEYS: OriginiumStatKey[] = ['maxHp', 'atk', 'def', 'res'];
+type OriginiumStatMultipliers = Record<OriginiumStatKey, number>;
+
+const NEUTRAL_ORIGINIUM_MULTIPLIERS: OriginiumStatMultipliers = {
+  maxHp: 1,
+  atk: 1,
+  def: 1,
+  res: 1,
+};
 
 export interface PuruisaishiRuntime {
   fighters: Fighter[];
   core: BattleEngineCore;
   turnCount: number;
+  largeRound?: number;
+  completedLargeRound?: number;
+  largeRoundParticipantIds?: string[];
+  largeRoundActedIds?: string[];
   log: (type: string, text: string) => void;
   isActiveCombatant: (fighter: Fighter) => boolean;
   syncHpPct: (fighter: Fighter) => void;
@@ -52,10 +68,11 @@ export interface PuruisaishiRuntime {
       respectDefenses?: boolean;
     },
   ) => number;
+  flushDeferredDamageEvents?: (fighter: Fighter) => void;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
 }
 
-type PuruisaishiSpawnRuntime = Pick<PuruisaishiRuntime, 'fighters' | 'core' | 'turnCount' | 'log'>;
+type PuruisaishiSpawnRuntime = Pick<PuruisaishiRuntime, 'fighters' | 'core' | 'turnCount' | 'log' | 'largeRound'>;
 
 function createNpcJob(name: string, icon: string): JobDefinition {
   return {
@@ -138,6 +155,7 @@ function createOriginiumCrystal(runtime: PuruisaishiRuntime, parentId: string): 
   crystal.isOriginiumCrystal = true;
   crystal.originiumParentId = parentId;
   crystal.originiumSpawnTurn = runtime.turnCount;
+  crystal.originiumSpawnLargeRound = runtime.largeRound ?? 1;
   crystal.originiumGrowthRoundActorIds = [];
   crystal.untargetableUntilTurn = runtime.turnCount + CRYSTAL_UNTARGETABLE_TURNS;
   return crystal;
@@ -210,51 +228,75 @@ export function trySpawnPuruisaishiEvent(runtime: PuruisaishiRuntime): boolean {
   return true;
 }
 
-function ensureOriginiumBaseStats(target: Fighter): void {
-  if (target.originiumBaseStats) return;
-  target.originiumBaseStats = {
-    maxHp: target.maxHp,
-    atk: target.atk,
-    def: target.def,
-    res: target.res,
-  };
-}
-
 function ensureOriginiumStatus(target: Fighter): void {
   const status = target.status.find((entry) => entry.type === ORIGINIUM_DISEASE_STATUS);
   if (status) {
-    status.duration = 999;
+    refreshLifecycleStatus(status, 999);
     return;
   }
-  target.status.push({ type: ORIGINIUM_DISEASE_STATUS, duration: 999 });
+  target.status.push(createLifecycleStatus(ORIGINIUM_DISEASE_STATUS, 999));
 }
 
-function applyOriginiumStatShape(target: Fighter): void {
-  const stacks = Math.max(0, Math.min(ORIGINIUM_MAX_STACKS, target.originiumInfectionStacks ?? 0));
-  const base = target.originiumBaseStats;
-  if (!base) return;
-
+function originiumMultipliersForStacks(stacks: number): OriginiumStatMultipliers {
   const hpMultiplier = Math.max(0.42, 1 - stacks * 0.0065);
   const defMultiplier = Math.max(0.28, 1 - stacks * 0.008);
   const hasOffensiveBonus = stacks < ORIGINIUM_BONUS_CLEAR_STACKS;
   const offenseMultiplier = hasOffensiveBonus ? 1 + stacks * 0.01 : 1;
+  return {
+    maxHp: hpMultiplier,
+    atk: offenseMultiplier,
+    def: defMultiplier,
+    res: offenseMultiplier,
+  };
+}
 
-  target.maxHp = Math.max(1, Math.floor(base.maxHp * hpMultiplier));
-  target.def = Math.max(1, Math.floor(base.def * defMultiplier));
-  target.atk = Math.max(1, Math.floor(base.atk * offenseMultiplier));
-  target.res = Math.max(1, Math.floor(base.res * offenseMultiplier));
-  if (target.currentHp > target.maxHp) target.currentHp = target.maxHp;
-  syncHpPct(target);
+function sameOriginiumMultipliers(a: OriginiumStatMultipliers, b: OriginiumStatMultipliers): boolean {
+  return a.maxHp === b.maxHp && a.atk === b.atk && a.def === b.def && a.res === b.res;
+}
+
+function transitionOriginiumStatShape(target: Fighter, next: OriginiumStatMultipliers): void {
+  const previous = target.originiumStatMultipliers ?? NEUTRAL_ORIGINIUM_MULTIPLIERS;
+  if (sameOriginiumMultipliers(previous, next)) return;
+  withTimedStatModifiersSuspended(target, () => {
+    const rescale = (value: number, from: number, to: number) => {
+      const unshaped = Math.max(1, Math.round(value / Math.max(0.0001, from)));
+      return Math.max(1, Math.floor(unshaped * to));
+    };
+
+    target.maxHp = rescale(target.maxHp, previous.maxHp, next.maxHp);
+    target.atk = rescale(target.atk, previous.atk, next.atk);
+    target.def = rescale(target.def, previous.def, next.def);
+    target.res = rescale(target.res, previous.res, next.res);
+    target.originiumStatMultipliers = { ...next };
+    if (target.currentHp > target.maxHp) target.currentHp = target.maxHp;
+    syncHpPct(target);
+  });
+}
+
+function applyOriginiumStatShape(target: Fighter): void {
+  const stacks = Math.max(0, Math.min(ORIGINIUM_MAX_STACKS, target.originiumInfectionStacks ?? 0));
+  transitionOriginiumStatShape(target, originiumMultipliersForStacks(stacks));
+}
+
+export function withOriginiumStatShapeSuspended(target: Fighter, mutate: () => void): void {
+  const stacks = Math.max(0, Math.min(ORIGINIUM_MAX_STACKS, target.originiumInfectionStacks ?? 0));
+  const hasShape = stacks > 0 && !!target.originiumStatMultipliers;
+  if (!hasShape) {
+    mutate();
+    return;
+  }
+
+  transitionOriginiumStatShape(target, NEUTRAL_ORIGINIUM_MULTIPLIERS);
+  try {
+    mutate();
+  } finally {
+    applyOriginiumStatShape(target);
+  }
 }
 
 function clearOriginiumInfection(target: Fighter): void {
-  const base = target.originiumBaseStats;
-  if (base) {
-    ORIGINIUM_STAT_KEYS.forEach((key) => {
-      target[key] = base[key];
-    });
-  }
-  delete target.originiumBaseStats;
+  transitionOriginiumStatShape(target, NEUTRAL_ORIGINIUM_MULTIPLIERS);
+  delete target.originiumStatMultipliers;
   target.originiumInfectionStacks = 0;
   target.status = target.status.filter((status) => status.type !== ORIGINIUM_DISEASE_STATUS);
   if (target.currentHp > target.maxHp) target.currentHp = target.maxHp;
@@ -266,27 +308,40 @@ export function addOriginiumInfection(
   target: Fighter,
   stacks: number,
   reason: string,
+  options: { log?: boolean; deferDefeat?: boolean } = {},
 ): number {
   if (stacks <= 0 || !runtime.isActiveCombatant(target)) return 0;
   if (target.isPuruisaishi || target.isOriginiumCore || target.isOriginiumCrystal) return 0;
 
-  ensureOriginiumBaseStats(target);
   const before = Math.max(0, target.originiumInfectionStacks ?? 0);
   const next = Math.min(ORIGINIUM_MAX_STACKS, before + stacks);
   target.originiumInfectionStacks = next;
   ensureOriginiumStatus(target);
   applyOriginiumStatShape(target);
   const gained = next - before;
-  if (gained > 0) {
+  if (gained > 0 && options.log !== false) {
     runtime.log('poison', `🦠 【矿石病】${target.name} 因${reason}感染加深 +${gained} 层（当前 ${next}/${ORIGINIUM_MAX_STACKS}）。`);
   }
-  if (next >= ORIGINIUM_MAX_STACKS) {
+  if (next >= ORIGINIUM_MAX_STACKS && !options.deferDefeat) {
     runtime.markDefeated(target, {
       message: `💀 【矿石病】${target.name} 的矿石病达到 80 层，身体被源石彻底吞没！`,
       awardKill: false,
     });
   }
   return gained;
+}
+
+export function reduceOriginiumInfection(target: Fighter, stacks: number): number {
+  const before = Math.max(0, target.originiumInfectionStacks ?? 0);
+  if (before <= 0 || stacks <= 0) return 0;
+  const next = Math.max(0, before - stacks);
+  target.originiumInfectionStacks = next;
+  applyOriginiumStatShape(target);
+  if (next === 0) {
+    delete target.originiumStatMultipliers;
+    target.status = target.status.filter((status) => status.type !== ORIGINIUM_DISEASE_STATUS);
+  }
+  return before - next;
 }
 
 function roll<T>(items: T[]): T | undefined {
@@ -318,6 +373,25 @@ function processAnannaGrowth(runtime: PuruisaishiRuntime): void {
 }
 
 function processOriginiumCrystalGrowth(runtime: PuruisaishiRuntime): void {
+  if (runtime.completedLargeRound !== undefined) {
+    const completedRound = runtime.completedLargeRound;
+    const core = runtime.fighters.find((fighter) => fighter.isOriginiumCore && runtime.isActiveCombatant(fighter));
+    activeCrystals(runtime).forEach((source) => {
+      const wasAttacked = !!source.originiumWasAttackedThisGrowthRound;
+      source.originiumGrowthRoundActorIds = [];
+      source.originiumWasAttackedThisGrowthRound = false;
+      const existedForFullRound = (source.originiumSpawnLargeRound ?? completedRound) < completedRound;
+      if (!existedForFullRound) return;
+      if (wasAttacked) return;
+      growCrystal(
+        runtime,
+        source.originiumParentId ?? core?.id ?? source.id,
+        `${source.name} 在第 ${completedRound} 个大回合内没有被攻击`,
+      );
+    });
+    return;
+  }
+
   const actors = activePhaseRoundActors(runtime);
   if (actors.length === 0) return;
   const actorIds = new Set(actors.map((actor) => actor.id));
@@ -338,13 +412,36 @@ function processOriginiumCrystalGrowth(runtime: PuruisaishiRuntime): void {
   });
 }
 
+export function processPuruisaishiLargeRoundEnd(runtime: PuruisaishiRuntime): void {
+  if (!runtime.fighters.some((fighter) => fighter.isPuruisaishi)) return;
+  processOriginiumCrystalGrowth(runtime);
+}
+
 function processCrystalOverflowInfection(runtime: PuruisaishiRuntime): void {
   const count = activeCrystals(runtime).length;
   if (count <= CRYSTAL_THRESHOLD_COUNT) return;
   const targets = activeInfectionTargets(runtime);
   if (targets.length === 0) return;
-  runtime.log('poison', `🦠 【源石泛滥】场上源石结晶达到 ${count} 个，除普瑞赛斯外全场感染矿石病！`);
-  targets.forEach((target) => addOriginiumInfection(runtime, target, CRYSTAL_OVERFLOW_INFECTION_STACKS, '源石结晶泛滥'));
+  const terminalTargets: Fighter[] = [];
+  const affected = targets.flatMap((target) => {
+    const gained = addOriginiumInfection(
+      runtime,
+      target,
+      CRYSTAL_OVERFLOW_INFECTION_STACKS,
+      '源石结晶泛滥',
+      { log: false, deferDefeat: true },
+    );
+    if ((target.originiumInfectionStacks ?? 0) >= ORIGINIUM_MAX_STACKS) terminalTargets.push(target);
+    return gained > 0 ? [`${target.name} +${gained}（${target.originiumInfectionStacks ?? 0}/${ORIGINIUM_MAX_STACKS}）`] : [];
+  });
+  const affectedText = affected.length > 0 ? `本轮感染：${affected.join('、')}。` : '本轮没有可继续加深感染的目标。';
+  runtime.log('poison', `🦠 【源石泛滥】场上源石结晶达到 ${count} 个，除普瑞赛斯外全场感染矿石病！${affectedText}`);
+  terminalTargets.forEach((target) => {
+    runtime.markDefeated(target, {
+      message: `💀 【矿石病】${target.name} 的矿石病达到 80 层，身体被源石彻底吞没！`,
+      awardKill: false,
+    });
+  });
 }
 
 function processPuruisaishiPhase(runtime: PuruisaishiRuntime): void {
@@ -359,7 +456,7 @@ function processPuruisaishiPhase(runtime: PuruisaishiRuntime): void {
     puruisaishi.puruisaishiPhaseTwoStartedTurn = phaseTwoTurn;
     puruisaishi.untargetableUntilTurn = undefined;
     puruisaishi.puruisaishiShield = Math.max(puruisaishi.puruisaishiShield ?? 0, PURUISAISHI_PHASE_TWO_SHIELD);
-    puruisaishi.status.push({ type: 'PURUISAISHI_SHIELD', duration: 999 });
+    puruisaishi.status.push(createLifecycleStatus('PURUISAISHI_SHIELD', 999));
     runtime.log('transform', `🜲 【这里万籁俱寂，太安静了，别丢下我】${puruisaishi.name} 出场 50 回合后进入二阶段，生成 ${puruisaishi.puruisaishiShield} 点护盾。`);
   }
 }
@@ -390,9 +487,12 @@ function processPuruisaishiPhaseTwoPulse(runtime: PuruisaishiRuntime): void {
 
 function processOriginiumDot(runtime: PuruisaishiRuntime): void {
   const targets = activeInfectionTargets(runtime).filter((fighter) => (fighter.originiumInfectionStacks ?? 0) > 0);
+  const settlements: string[] = [];
+  const defeatedTargets: Fighter[] = [];
   targets.forEach((target) => {
     if (!runtime.isActiveCombatant(target)) return;
     const stacks = Math.max(0, target.originiumInfectionStacks ?? 0);
+    ensureOriginiumStatus(target);
     applyOriginiumStatShape(target);
     if (stacks >= ORIGINIUM_MAX_STACKS) {
       runtime.markDefeated(target, {
@@ -408,14 +508,20 @@ function processOriginiumDot(runtime: PuruisaishiRuntime): void {
       respectDefenses: false,
     });
     if (actual > 0) {
-      runtime.log('poison', `🦠 【矿石病】${target.name} 承受 ${actual} 点源石侵蚀伤害（${stacks}/${ORIGINIUM_MAX_STACKS} 层）。`);
+      settlements.push(`${target.name} ${actual} 点（${stacks}/${ORIGINIUM_MAX_STACKS} 层）`);
     }
     if (target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
-      runtime.markDefeated(target, {
-        message: `💀 【矿石病】${target.name} 被源石侵蚀拖垮，倒在战场上！`,
-        awardKill: false,
-      });
+      defeatedTargets.push(target);
     }
+  });
+  if (settlements.length > 0) {
+    runtime.log('poison', `🦠 【矿石病侵蚀】${settlements.join('、')}。`);
+  }
+  defeatedTargets.forEach((target) => {
+    runtime.markDefeated(target, {
+      message: `💀 【矿石病】${target.name} 被源石侵蚀拖垮，倒在战场上！`,
+      awardKill: false,
+    });
   });
 }
 
@@ -424,12 +530,19 @@ export function processPuruisaishiRoundEnd(runtime: PuruisaishiRuntime): void {
   processPuruisaishiPhase(runtime);
   processPuruisaishiPhaseTwoPulse(runtime);
   processAnannaGrowth(runtime);
-  processOriginiumCrystalGrowth(runtime);
+  processPuruisaishiLargeRoundEnd(runtime);
   processCrystalOverflowInfection(runtime);
   processOriginiumDot(runtime);
 }
 
 export function notePuruisaishiRoundActor(runtime: PuruisaishiRuntime, actor: Fighter): void {
+  if (runtime.largeRoundParticipantIds) {
+    runtime.fighters.forEach((fighter) => {
+      if (!fighter.isOriginiumCrystal || !runtime.isActiveCombatant(fighter)) return;
+      fighter.originiumGrowthRoundActorIds = [...(runtime.largeRoundActedIds ?? [])];
+    });
+    return;
+  }
   if (!runtime.isActiveCombatant(actor) || actor.isNpc || actor.cannotAct || hasRoundBlockingStatus(actor)) return;
 
   runtime.fighters.forEach((fighter) => {
@@ -448,28 +561,47 @@ export function redirectOriginiumCoreDamage(
   source: string,
   isTrueDamage: boolean,
   attacker?: Fighter,
+  options?: DamageApplicationOptions,
 ): { handled: boolean; actualDamage: number } {
   if (!target.isOriginiumCore || source === 'originium_share') return { handled: false, actualDamage: amount };
   const crystals = activeCrystals(runtime);
   if (crystals.length === 0) return { handled: false, actualDamage: amount };
+  if (options) options.redirectedByOriginiumCore = true;
 
-  const share = Math.max(1, Math.floor(amount / crystals.length));
+  const baseShare = Math.floor(amount / crystals.length);
+  let remainder = amount % crystals.length;
   let actualTotal = 0;
-  runtime.log('info', `🜚 【阿喃那】${target.name} 将 ${amount} 点伤害均摊给 ${crystals.length} 个源石结晶。`);
+  const incoming = attacker
+    ? `${attacker.name} 的${options?.actionName ? `【${options.actionName}】` : '攻击'}`
+    : options?.actionName
+      ? `【${options.actionName}】`
+      : '来袭攻击';
+  runtime.log('info', `🜚 【阿喃那】${target.name} 截获 ${incoming} 形成的 ${amount} 点冲击，并将其均摊给 ${crystals.length} 个源石结晶；阿喃那本体不承受伤害。`);
   crystals.forEach((crystal) => {
+    const share = baseShare + (remainder > 0 ? 1 : 0);
+    if (remainder > 0) remainder -= 1;
+    if (share <= 0) return;
     const actual = runtime.applyDamage(crystal, share, 'originium_share', isTrueDamage, attacker, {
       deferTransform: true,
       actionName: '阿喃那伤害均摊',
       respectDefenses: false,
     });
     actualTotal += actual;
+    runtime.flushDeferredDamageEvents?.(crystal);
+    if (crystal.currentHp <= 0 && !crystal.isDead && !crystal.isDeadAnnounced) {
+      runtime.markDefeated(crystal, {
+        message: `💀 【阿喃那伤害均摊】${crystal.name} 被 ${incoming} 经源石网络分流的 ${actual} 点伤害击碎！`,
+        killer: attacker,
+      });
+    }
   });
+  if (options) options.redirectedOriginiumDamage = actualTotal;
   return { handled: true, actualDamage: actualTotal };
 }
 
-export function consumePuruisaishiShield(runtime: PuruisaishiRuntime, target: Fighter, amount: number): { remaining: number; absorbed: number; retreated: boolean } {
+export function consumePuruisaishiShield(runtime: PuruisaishiRuntime, target: Fighter, amount: number): { handled: boolean; remaining: number; absorbed: number; retreated: boolean } {
   if (!target.isPuruisaishi || (target.puruisaishiShield ?? 0) <= 0 || amount <= 0) {
-    return { remaining: amount, absorbed: 0, retreated: false };
+    return { handled: false, remaining: amount, absorbed: 0, retreated: false };
   }
 
   const before = target.puruisaishiShield ?? 0;
@@ -478,14 +610,16 @@ export function consumePuruisaishiShield(runtime: PuruisaishiRuntime, target: Fi
   const after = Math.max(floor, before - amount);
   const absorbed = before - after;
   target.puruisaishiShield = after;
-  runtime.log('info', `🛡️ 【普瑞赛斯护盾】${target.name} 的护盾吸收 ${absorbed} 点伤害，剩余 ${after}。`);
+  const diverted = crystalsExist && after === 1 ? Math.max(0, amount - absorbed) : 0;
+  const networkText = diverted > 0 ? `；源石结晶维系最后 1 点护盾，并导走剩余 ${diverted} 点冲击` : '';
+  runtime.log('info', `🛡️ 【普瑞赛斯护盾】${target.name} 的护盾吸收 ${absorbed} 点伤害，剩余 ${after}${networkText}。`);
 
   if (after <= 0 && !crystalsExist) {
     clearAllOriginiumAndRetreat(runtime, target);
-    return { remaining: 0, absorbed, retreated: true };
+    return { handled: true, remaining: 0, absorbed, retreated: true };
   }
 
-  return { remaining: crystalsExist ? 0 : Math.max(0, amount - absorbed), absorbed, retreated: false };
+  return { handled: true, remaining: crystalsExist ? 0 : Math.max(0, amount - absorbed), absorbed, retreated: false };
 }
 
 export function noteOriginiumDamageLanded(
@@ -518,6 +652,27 @@ export function spawnCrystalFromInfectedDeath(runtime: PuruisaishiRuntime, carri
   const crystal = createOriginiumCrystal(runtime, parent?.id ?? carrier.id);
   runtime.fighters.push(crystal);
   runtime.log('death', `◆ 【源石析出】${carrier.name} 死亡后，体内矿石病结晶化，生成了 ${crystal.name}。`);
+}
+
+export function grantOriginiumCrystalBreakReward(
+  runtime: Pick<PuruisaishiRuntime, 'fighters' | 'log'>,
+  crystal: Fighter,
+  killer?: Fighter,
+): void {
+  if (!crystal.isOriginiumCrystal || !killer) return;
+  const summoner = killer.isSummon && killer.summonerId
+    ? runtime.fighters.find((fighter) => fighter.id === killer.summonerId)
+    : undefined;
+  const beneficiary = summoner ?? killer;
+  if (beneficiary.isNpc || beneficiary.cannotWin || beneficiary.isDead || beneficiary.currentHp <= 0) return;
+
+  const reduced = reduceOriginiumInfection(beneficiary, CRYSTAL_BREAK_CLEANSE_STACKS);
+  const healed = healFighter(beneficiary, Math.floor(beneficiary.maxHp * CRYSTAL_BREAK_HEAL_RATIO));
+  const recovery = [
+    reduced > 0 ? `矿石病 -${reduced} 层（当前 ${beneficiary.originiumInfectionStacks ?? 0}/${ORIGINIUM_MAX_STACKS}）` : '没有可清除的矿石病层数',
+    healed > 0 ? `恢复 ${healed} 点生命` : '生命已满',
+  ].join('，');
+  runtime.log(healed > 0 || reduced > 0 ? 'heal' : 'info', `◆ 【源石破拆】${beneficiary.name} 摧毁 ${crystal.name}，从崩解源石中争取到喘息：${recovery}。`);
 }
 
 export function clearAllOriginiumAndRetreat(runtime: PuruisaishiRuntime, puruisaishi: Fighter): void {

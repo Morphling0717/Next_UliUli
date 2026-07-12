@@ -3,10 +3,13 @@ import { healFighter } from '../combatState';
 import { namerenaData as Data } from '../data';
 import {
   formatEmoteStats,
+  consumeEmoteClaimableKills,
   getEmoteAdaptTotal,
+  getEmoteClaimableKills,
   grantEmoteAdaptStats,
   randomEmoteStatKeys,
 } from '../emoteMechanics';
+import { grantStatus } from '../defenseStatus';
 
 const { SKILL_TAGS } = Data;
 
@@ -14,6 +17,7 @@ type EmoteDamageResult = {
   actual: number;
   interrupted: boolean;
   redirected: boolean;
+  redirectKind: 'joker' | 'originium' | null;
 };
 
 function canContinueEmoteAction(fighter: Fighter): boolean {
@@ -21,16 +25,7 @@ function canContinueEmoteAction(fighter: Fighter): boolean {
 }
 
 function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  const existing = fighter.status.find((status) =>
-    status.type === type && (!sourceId || status.sourceId === sourceId),
-  );
-  if (existing) {
-    existing.duration = Math.max(existing.duration, duration);
-    if (sourceId) existing.sourceId = sourceId;
-    delete existing.appliedTurn;
-    return;
-  }
-  fighter.status.push({ type, duration, ...(sourceId ? { sourceId } : {}) });
+  grantStatus(fighter, type, duration, sourceId);
 }
 
 function activePlayerTargets(ctx: SkillContext): Fighter[] {
@@ -46,7 +41,7 @@ function activePlayerTargets(ctx: SkillContext): Fighter[] {
 }
 
 function livingKillTargets(ctx: SkillContext): Fighter[] {
-  return activePlayerTargets(ctx).filter((fighter) => fighter.stats.kills > 0);
+  return activePlayerTargets(ctx).filter((fighter) => getEmoteClaimableKills(fighter) > 0);
 }
 
 function resolveEmoteAttackGuards(ctx: SkillContext, target: Fighter, actionName: string): boolean {
@@ -61,34 +56,44 @@ function applyEmoteDamage(
   target: Fighter,
   amount: number,
   actionName: string,
-  logText: (actual: number, redirected: boolean) => string,
+  logText: (actual: number, redirectKind: EmoteDamageResult['redirectKind']) => string,
   guardsResolved = false,
 ): EmoteDamageResult {
   if (!guardsResolved && !resolveEmoteAttackGuards(ctx, target, actionName)) {
-    return { actual: 0, interrupted: true, redirected: false };
+    return { actual: 0, interrupted: true, redirected: false, redirectKind: null };
   }
 
+  ctx.log('skill', `🎬 【${actionName}】${ctx.user.name} 锁定 ${target.name}，动作开始结算！`);
   const damageOptions: DamageApplicationOptions = {
     actionName,
     respectDefenses: true,
     canTriggerWaitCounter: false,
   };
   const actual = ctx.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, ctx.user, damageOptions);
-  const redirected = !!damageOptions.redirectedByJoker;
+  const redirectKind: EmoteDamageResult['redirectKind'] = damageOptions.redirectedByJoker
+    ? 'joker'
+    : damageOptions.redirectedByOriginiumCore
+      ? 'originium'
+      : null;
+  const redirected = redirectKind !== null;
+  const resolvedActual = redirectKind === 'joker'
+    ? damageOptions.redirectedJokerDamage ?? actual
+    : redirectKind === 'originium'
+      ? damageOptions.redirectedOriginiumDamage ?? actual
+      : actual;
   if (!canContinueEmoteAction(ctx.user)) {
-    return { actual, interrupted: true, redirected };
+    return { actual: resolvedActual, interrupted: true, redirected, redirectKind };
   }
 
-  ctx.user.stats.dmgDealt += actual;
-  ctx.log(actual > 0 ? 'skill' : 'info', logText(actual, redirected));
-  if (actual > 0) ctx.flushDeferredDamageEvents?.();
+  ctx.log(resolvedActual > 0 ? 'skill' : 'info', logText(resolvedActual, redirectKind));
+  if (resolvedActual > 0) ctx.flushDeferredDamageEvents?.();
   if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     ctx.markDefeated(target, {
       message: `💀 【${actionName}】${target.name} 被 ${ctx.user.name} 的适应轮盘碾碎！`,
       killer: ctx.user,
     });
   }
-  return { actual, interrupted: false, redirected };
+  return { actual: resolvedActual, interrupted: false, redirected, redirectKind };
 }
 
 function hasStatus(fighter: Fighter, type: string): boolean {
@@ -100,19 +105,22 @@ function executeMemeSlap(ctx: SkillContext): boolean {
   const amount = ctx.user.mag * 1.2 + ctx.user.wis * 0.8 + ctx.user.maxHp * 0.045 + adaptTotal * 0.08;
   const statusPool = ['WEAK', 'CONFUSED', 'NO_HEAL'];
   const status = statusPool[Math.floor(Math.random() * statusPool.length)] ?? 'WEAK';
-  const { actual, interrupted } = applyEmoteDamage(
+  const { actual, interrupted, redirected } = applyEmoteDamage(
     ctx,
     ctx.target,
     amount,
     '表情包糊脸',
-    (damage, redirected) => redirected
-      ? `🫠 【表情包糊脸】${ctx.user.name} 把一整套怪表情怼向 ${ctx.target.name}，但表情包被随机恶作剧带偏，原目标实际造成 ${damage} 点伤害！`
-      : `🫠 【表情包糊脸】${ctx.user.name} 把一整套怪表情怼到 ${ctx.target.name} 脸上，实际造成 ${damage} 点伤害！`,
+    (damage, redirectKind) => redirectKind === 'joker'
+      ? `🫠 【表情包糊脸】${ctx.user.name} 把一整套怪表情怼向 ${ctx.target.name}，但表情包被随机恶作剧带偏，转移目标实际承受 ${damage} 点伤害！`
+      : redirectKind === 'originium'
+        ? `🫠 【表情包糊脸】${ctx.user.name} 把一整套怪表情怼向 ${ctx.target.name}，但阿喃那将冲击转入源石网络，共对源石结晶结算 ${damage} 点伤害；阿喃那本体未受伤！`
+        : `🫠 【表情包糊脸】${ctx.user.name} 把一整套怪表情怼到 ${ctx.target.name} 脸上，实际造成 ${damage} 点伤害！`,
   );
   if (interrupted) return true;
-  if (actual > 0 && Math.random() < 0.45 && ctx.target.currentHp > 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
-    refreshStatus(ctx.target, status, 1);
-    ctx.log('debuff', `🫠 【表情污染】${ctx.target.name} 被表情干扰，获得【${ctx.STATUS_EFFECTS[status]?.name ?? status}】1 回合！`);
+  if (actual > 0 && !redirected && Math.random() < 0.45 && ctx.target.currentHp > 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
+    if (ctx.applyStatus(ctx.target, status, 1)) {
+      ctx.log('debuff', `🫠 【表情污染】${ctx.target.name} 被表情干扰，获得【${ctx.STATUS_EFFECTS[status]?.name ?? status}】1 回合！`);
+    }
   }
   return true;
 }
@@ -120,24 +128,28 @@ function executeMemeSlap(ctx: SkillContext): boolean {
 function executeTenthClaim(ctx: SkillContext): boolean {
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
   const amount = ctx.user.atk * 1.5 + ctx.user.mag * 1.2 + ctx.user.maxHp * 0.055 + adaptTotal * 0.12;
-  const killsBefore = ctx.target.stats.kills;
+  const killsBefore = getEmoteClaimableKills(ctx.target);
   const { actual, interrupted, redirected } = applyEmoteDamage(
     ctx,
     ctx.target,
     amount,
     '十分之一索赔',
-    (damage, wasRedirected) => wasRedirected
-      ? `📜 【十分之一索赔】${ctx.user.name} 翻出认主账本，向 ${ctx.target.name} 追讨战绩债，但账本被随机恶作剧带偏，原目标实际造成 ${damage} 点伤害！`
-      : `📜 【十分之一索赔】${ctx.user.name} 翻出认主账本，向 ${ctx.target.name} 追讨战绩债，实际造成 ${damage} 点伤害！`,
+    (damage, redirectKind) => redirectKind === 'joker'
+      ? `📜 【十分之一索赔】${ctx.user.name} 翻出认主账本，向 ${ctx.target.name} 追讨战绩债，但账本被随机恶作剧带偏，转移目标实际承受 ${damage} 点伤害！`
+      : redirectKind === 'originium'
+        ? `📜 【十分之一索赔】${ctx.user.name} 向 ${ctx.target.name} 追讨战绩债，但阿喃那将冲击转入源石网络，共对源石结晶结算 ${damage} 点伤害；阿喃那本体未受伤！`
+        : `📜 【十分之一索赔】${ctx.user.name} 翻出认主账本，向 ${ctx.target.name} 追讨战绩债，实际造成 ${damage} 点伤害！`,
   );
   if (interrupted) return true;
   if (redirected) return true;
+  if (!canContinueEmoteAction(ctx.target)) return true;
 
   if (actual > 0 && killsBefore > 0) {
-    ctx.target.stats.kills = Math.max(0, ctx.target.stats.kills - 1);
+    consumeEmoteClaimableKills(ctx.target, 1);
+    const killsAfter = getEmoteClaimableKills(ctx.target);
     const keys = randomEmoteStatKeys(2);
     const gain = grantEmoteAdaptStats(ctx.user, ctx.target, 0.05, keys);
-    ctx.log('buff', `📜 【适应记录】${ctx.user.name} 复制 ${ctx.target.name} 的两项属性（${formatEmoteStats(gain)}），${ctx.target.name} 属性不降低，击杀数 ${killsBefore} -> ${ctx.target.stats.kills}。`);
+    ctx.log('buff', `📜 【适应记录】${ctx.user.name} 复制 ${ctx.target.name} 的两项属性（${formatEmoteStats(gain)}），${ctx.target.name} 的真实击杀统计不变，认主账本余额 ${killsBefore} -> ${killsAfter}。`);
   } else if (actual > 0) {
     ctx.log('info', `📜 ${ctx.target.name} 现在没有击杀数，${ctx.user.name} 只能记账，暂时没有复制到属性。`);
   }
@@ -155,33 +167,42 @@ function executeMarkOwner(ctx: SkillContext): boolean {
 
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
   const amount = ctx.user.wis + ctx.user.maxHp * 0.025 + adaptTotal * 0.05;
-  const { actual, interrupted, redirected } = applyEmoteDamage(
+  const { actual, interrupted, redirected, redirectKind } = applyEmoteDamage(
     ctx,
     ctx.target,
     amount,
     '先认个脸熟',
-    (damage, wasRedirected) => wasRedirected
-      ? `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但视线被随机恶作剧带偏，原目标实际造成 ${damage} 点伤害！`
-      : damage > 0
-      ? `👁️ 【先认个脸熟】${ctx.user.name} 死死盯住 ${ctx.target.name}，先把未来主人的脸记下来，实际造成 ${damage} 点伤害！`
-      : `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但防护把视线挡开，实际造成 0 点伤害！`,
+    (damage, kind) => kind === 'joker'
+      ? `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但视线被随机恶作剧带偏，转移目标实际承受 ${damage} 点伤害！`
+      : kind === 'originium'
+        ? `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但阿喃那将冲击转入源石网络，共对源石结晶结算 ${damage} 点伤害；阿喃那本体未受伤！`
+        : damage > 0
+          ? `👁️ 【先认个脸熟】${ctx.user.name} 死死盯住 ${ctx.target.name}，先把未来主人的脸记下来，实际造成 ${damage} 点伤害！`
+          : `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但防护把视线挡开，实际造成 0 点伤害！`,
     true,
   );
   if (interrupted) return true;
   if (redirected) {
-    ctx.log('info', `👁️ 【脸熟失败】${ctx.user.name} 的视线被 ${ctx.target.name} 的随机恶作剧转走，暂时没有记住这张脸。`);
+    ctx.log('info', redirectKind === 'originium'
+      ? `👁️ 【脸熟失败】${ctx.user.name} 的视线被阿喃那转入源石网络，暂时没有记住这张脸。`
+      : `👁️ 【脸熟失败】${ctx.user.name} 的视线被 ${ctx.target.name} 的随机恶作剧转走，暂时没有记住这张脸。`);
     return true;
   }
   if (actual > 0 && ctx.target.currentHp > 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
+    const familiarApplied = ctx.applyStatus(ctx.target, 'EMOTE_FAMILIAR', 3, { sourceId: ctx.user.id });
+    if (!familiarApplied) {
+      ctx.log('info', `👁️ 【脸熟失败】${ctx.target.name} 的保命净化抹掉了这次认脸标记，${ctx.user.name} 保留原来的认主记忆。`);
+      return true;
+    }
     ctx.fighters.forEach((fighter) => {
+      if (fighter.id === ctx.target.id) return;
       fighter.status = fighter.status.filter((status) =>
         !(status.type === 'EMOTE_FAMILIAR' && status.sourceId === ctx.user.id),
       );
     });
     ctx.user.emoteFamiliarTargetId = ctx.target.id;
-    refreshStatus(ctx.target, 'EMOTE_FAMILIAR', 3, ctx.user.id);
-    refreshStatus(ctx.target, 'WEAK', 1);
-    ctx.log('debuff', `👁️ 【脸熟】如果 ${ctx.user.name} 在 3 回合内死亡，认主会优先找 ${ctx.target.name}；${ctx.target.name} 还被盯得有点虚弱。`);
+    const weakened = ctx.applyStatus(ctx.target, 'WEAK', 1);
+    ctx.log('debuff', `👁️ 【脸熟】如果 ${ctx.user.name} 在 3 回合内死亡，认主会优先找 ${ctx.target.name}${weakened ? `；${ctx.target.name} 还被盯得有点虚弱` : '；但虚弱效果被抵抗'}。`);
   } else if (actual <= 0) {
     ctx.log('info', `👁️ 【脸熟失败】${ctx.user.name} 没能穿过 ${ctx.target.name} 的防护，暂时没有记住这张脸。`);
   } else {
@@ -192,7 +213,7 @@ function executeMarkOwner(ctx: SkillContext): boolean {
 
 function executeWheelCleave(ctx: SkillContext): boolean {
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
-  const zeroKillMultiplier = ctx.target.stats.kills === 0 ? 1.2 : 1;
+  const zeroKillMultiplier = getEmoteClaimableKills(ctx.target) === 0 ? 1.2 : 1;
   const amount = (
     ctx.user.atk * 2.0 +
     ctx.user.spd * 1.2 +
@@ -205,10 +226,13 @@ function executeWheelCleave(ctx: SkillContext): boolean {
     ctx.target,
     amount,
     '退魔之剑',
-    (damage, redirected) => {
-      const zeroText = ctx.target.stats.kills === 0 ? '，零击杀目标被轮盘额外校准' : '';
-      if (redirected) {
-        return `🧿 【退魔之剑】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，但刀路被随机恶作剧带偏，原目标实际造成 ${damage} 点伤害！`;
+    (damage, redirectKind) => {
+      const zeroText = getEmoteClaimableKills(ctx.target) === 0 ? '，零杀锚点目标被轮盘额外校准' : '';
+      if (redirectKind === 'joker') {
+        return `🧿 【退魔之剑】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，但刀路被随机恶作剧带偏，转移目标实际承受 ${damage} 点伤害！`;
+      }
+      if (redirectKind === 'originium') {
+        return `🧿 【退魔之剑】${ctx.user.name} 一刀切向 ${ctx.target.name}${zeroText}，但阿喃那将斩击转入源石网络，共对源石结晶结算 ${damage} 点伤害；阿喃那本体未受伤！`;
       }
       return `🧿 【退魔之剑】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，实际造成 ${damage} 点伤害！`;
     },
@@ -238,9 +262,11 @@ function executeAllMastersReturn(ctx: SkillContext): boolean {
       target,
       amount,
       '万主归一',
-      (damage, redirected) => redirected
-        ? `🔁 【万主归一】轮盘账本扫过 ${target.name}，但账页被随机恶作剧带偏，原目标实际造成 ${damage} 点伤害！`
-        : `🔁 【万主归一】轮盘账本扫过 ${target.name}，实际造成 ${damage} 点伤害！`,
+      (damage, redirectKind) => redirectKind === 'joker'
+        ? `🔁 【万主归一】轮盘账本扫过 ${target.name}，但账页被随机恶作剧带偏，转移目标实际承受 ${damage} 点伤害！`
+        : redirectKind === 'originium'
+          ? `🔁 【万主归一】轮盘账本扫过 ${target.name}，但阿喃那将冲击转入源石网络，共对源石结晶结算 ${damage} 点伤害；阿喃那本体未受伤！`
+          : `🔁 【万主归一】轮盘账本扫过 ${target.name}，实际造成 ${damage} 点伤害！`,
     );
     interrupted = result.interrupted;
     if (result.actual > 0 && !result.redirected) affectedTargetIds.add(target.id);
@@ -253,15 +279,16 @@ function executeAllMastersReturn(ctx: SkillContext): boolean {
     target.currentHp > 0 &&
     !target.isDead &&
     !target.isDeadAnnounced &&
-    target.stats.kills > 0,
+    getEmoteClaimableKills(target) > 0,
   );
   const chosen = survivorsWithKills[Math.floor(Math.random() * survivorsWithKills.length)];
   if (!chosen) return true;
 
-  const killsBefore = chosen.stats.kills;
-  chosen.stats.kills = Math.max(0, chosen.stats.kills - 1);
-  ctx.log('debuff', `🔁 【击杀数回拨】${chosen.name} 被 ${ctx.user.name} 的账本划掉一笔，击杀数 ${killsBefore} -> ${chosen.stats.kills}。`);
-  if (killsBefore > 0 && chosen.stats.kills === 0) {
+  const killsBefore = getEmoteClaimableKills(chosen);
+  consumeEmoteClaimableKills(chosen, 1);
+  const killsAfter = getEmoteClaimableKills(chosen);
+  ctx.log('debuff', `🔁 【认主账本回拨】${chosen.name} 被 ${ctx.user.name} 的账本划掉一笔，账本余额 ${killsBefore} -> ${killsAfter}；真实击杀统计不变。`);
+  if (killsBefore > 0 && killsAfter === 0) {
     const healed = healFighter(ctx.user, Math.floor(ctx.user.wis + adaptTotal * 0.08));
     if (healed > 0) {
       ctx.log('heal', `🔁 【零杀锚点】场上出现新的 0 击杀玩家，${ctx.user.name} 的复活锚点发亮，恢复 ${healed} 点生命。`);
@@ -305,6 +332,7 @@ export const emoteSkills: Record<string, SkillDefinition> = {
   emote_all_masters_return: {
     name: '万主归一',
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     rate: 0.18,
     condition: (user) =>
       !hasStatus(user, 'EMOTE_ULT_COOLDOWN') &&

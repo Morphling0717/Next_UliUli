@@ -1,7 +1,7 @@
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 import { grantStatus } from '../defenseStatus';
-import { isSelectableTargetFor } from '../targeting';
+import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
 
 const VALO_ULT_THRESHOLD = 5;
 const VALO_CLUTCH_ULT_THRESHOLD = 5;
@@ -190,7 +190,7 @@ function chooseGunRound(actor: Fighter, runtime: ValorantRuntime, enemies: Fight
   }
 
   if (evasiveEnemy && (actor.crosshairFocus ?? 0) >= 3 && spendFocus(actor, 3, runtime, '锁定高机动目标')) {
-    actor.status.push({ type: 'AIM', duration: 1 });
+    grantStatus(actor, 'AIM', 1);
     return (actor.economy ?? 0) >= VALO_OPERATOR_ECONOMY ? 'valo_operator_shot' : 'valo_vandal_shot';
   }
 
@@ -211,8 +211,9 @@ export function selectValorantSkill(actor: Fighter, runtime: ValorantRuntime): s
   gainFocus(actor, 1);
 
   const enemies = activeEnemies(actor, runtime);
+  const competitiveEnemies = enemies.filter(isCompetitiveTarget);
   const isLowHpClutch = actor.hpPct <= 0.35;
-  const isLateClutch = enemies.length <= 3;
+  const isLateClutch = competitiveEnemies.length <= 3;
   if (isLowHpClutch) enterClutch(actor, runtime, '残血仍然没有退路', true);
   else if (isLateClutch) enterClutch(actor, runtime, '残局人数进入可控范围');
 

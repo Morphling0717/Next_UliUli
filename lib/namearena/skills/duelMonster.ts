@@ -8,6 +8,7 @@ import {
 } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
+import { applyPermanentStatBuff } from '../statModifiers';
 
 const { SKILL_TAGS } = Data;
 
@@ -51,15 +52,16 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     mult: 2.4,
     status: 'STUN',
     text: '🔒 {USER} 展开封印锁链束缚 {TARGET}，造成 {VAL} 点伤害并封锁行动！',
-    afterExecute: (ctx) => {
-      ctx.target.atk = Math.max(1, Math.floor(ctx.target.atk * 0.85));
-      ctx.target.mag = Math.max(1, Math.floor(ctx.target.mag * 0.85));
+    afterExecute: (ctx, actualDmg) => {
+      if (ctx.damageRedirectedByOriginiumCore || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      applyPermanentStatBuff(ctx.target, { atk: 0.85, mag: 0.85 });
       ctx.log('info', `🔒 ${ctx.target.name} 被封印锁链压制，攻击与魔力下降！`);
     },
   },
   exodia_obliterate: {
     name: 'Exodia Obliterate',
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     rate: 0.45,
     condition: (user) => !user.hasUsedExodiaObliterate,
     text: '🧙‍♂️ {USER} 五体解封，宣告【Exodia Obliterate】！',
@@ -78,7 +80,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: 'Exodia Obliterate' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🧙‍♂️ 黑暗大法师的怒火命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -124,7 +126,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '白龙扫射余波' };
         const actualDmg = ctx.applyDamage(enemy, splashDmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🌪️ 白龙扫射的余波命中 ${enemy.name}，实际造成 ${actualDmg} 点溅射伤害！`);
         } else {
@@ -144,8 +146,9 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     mult: 1.8,
     status: 'STUN',
     text: '🐉 {USER} 发出震天龙吼，压制 {TARGET}，造成 {VAL} 点伤害并震慑目标！',
-    afterExecute: (ctx) => {
-      ctx.target.res = Math.max(1, Math.floor(ctx.target.res * 0.9));
+    afterExecute: (ctx, actualDmg) => {
+      if (ctx.damageRedirectedByOriginiumCore || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      applyPermanentStatBuff(ctx.target, { res: 0.9 });
       ctx.log('info', `🐉 ${ctx.target.name} 被白龙威压震慑，魔抗下降！`);
     },
   },
@@ -153,6 +156,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
   ultimate_burst_stream: {
     name: '究极爆裂疾风弹',
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     rate: 0.45,
     text: '🐉 {USER} 三首齐鸣，准备释放究极爆裂疾风弹！',
     onExecute: (ctx) => {
@@ -166,7 +170,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '究极爆裂疾风弹' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🐉 究极龙息命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -180,8 +184,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       if (!isActiveCombatant(ctx.user)) return true;
       ctx.user.blueEyesUltimateStrain = (ctx.user.blueEyesUltimateStrain ?? 0) + 1;
       if ((ctx.user.blueEyesUltimateStrain ?? 0) >= 2) {
-        ctx.user.def = Math.max(1, Math.floor(ctx.user.def * 0.88));
-        ctx.user.res = Math.max(1, Math.floor(ctx.user.res * 0.88));
+        applyPermanentStatBuff(ctx.user, { def: 0.88, res: 0.88 });
         ctx.log('info', `🧬 【融合不稳定】${ctx.user.name} 的融合负荷加重，防御与魔抗下降！`);
       }
       return true;
@@ -190,6 +193,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
   triple_dragon_head: {
     name: '三重龙首',
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     rate: 0.4,
     text: '🐉 {USER} 三颗龙首锁定 {TARGET}，连续撕咬三次！',
     onExecute: (ctx) => {
@@ -201,7 +205,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         const dmg = Math.floor(ctx.user.atk * 1.55 + ctx.user.mag * 0.7);
         const damageOptions: DamageApplicationOptions = { actionName: '三重龙首' };
         const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker) {
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) {
           ctx.log('info', `🐉 第 ${i} 颗龙首的攻击被 ${ctx.target.name} 用随机恶作剧转移，原目标没有受伤；转移伤害已单独结算！`);
           continue;
         }
@@ -250,10 +254,9 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     ignoreDef: true,
     status: 'STUN',
     text: '☀️ {USER} 释放神之威压，压制 {TARGET}，造成 {VAL} 点伤害并震慑！',
-    afterExecute: (ctx) => {
-      ctx.target.atk = Math.max(1, Math.floor(ctx.target.atk * 0.82));
-      ctx.target.mag = Math.max(1, Math.floor(ctx.target.mag * 0.82));
-      ctx.target.res = Math.max(1, Math.floor(ctx.target.res * 0.9));
+    afterExecute: (ctx, actualDmg) => {
+      if (ctx.damageRedirectedByOriginiumCore || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      applyPermanentStatBuff(ctx.target, { atk: 0.82, mag: 0.82, res: 0.9 });
       ctx.log('info', `☀️ ${ctx.target.name} 被太阳神威压削弱，攻击、魔力与魔抗下降！`);
     },
   },

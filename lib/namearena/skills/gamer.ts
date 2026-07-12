@@ -1,12 +1,11 @@
-import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
+import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition, StatKey } from '../types';
 import { namerenaData as Data } from '../data';
 import { healFighter, isActiveCombatant } from '../combatState';
 import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from '../statusRules';
 import {
-  findDefenseStatus,
-  formatControlBlocked,
   grantStatus,
 } from '../defenseStatus';
+import { applyTimedStatModifier, makeTimedStatModifier } from '../statModifiers';
 
 const { SKILL_TAGS } = Data;
 
@@ -22,6 +21,20 @@ function hasStatus(fighter: Fighter, type: string): boolean {
 
 function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
   grantStatus(fighter, type, duration, sourceId);
+}
+
+function applyTemporaryGamerStats(
+  fighter: Fighter,
+  statusType: string,
+  duration: number,
+  buff: Partial<Record<StatKey | 'crit', number>>,
+): void {
+  const sourceId = `gamer:${statusType.toLowerCase()}`;
+  refreshStatus(fighter, statusType, duration, sourceId);
+  const status = fighter.status.find((entry) => entry.type === statusType && entry.sourceId === sourceId);
+  const modifierId = `stat:${statusType}:${sourceId}`;
+  if (status) status.modifierId = modifierId;
+  applyTimedStatModifier(fighter, makeTimedStatModifier(modifierId, statusType, buff, sourceId));
 }
 
 function recoveryText(healed: number): string {
@@ -102,12 +115,7 @@ function completeTechnique(ctx: SkillContext, skillType: GamerSkillType, options
 }
 
 function applyControl(ctx: SkillContext, target: Fighter, status: string, duration: number, label: string): void {
-  const controlImmune = findDefenseStatus(target, 'BKB');
-  if (controlImmune) {
-    ctx.log('info', formatControlBlocked(controlImmune, target.name, label));
-    return;
-  }
-  refreshStatus(target, status, duration);
+  ctx.applyStatus(target, status, duration, { effectName: label });
 }
 
 function applyTrackedDamage(
@@ -120,8 +128,7 @@ function applyTrackedDamage(
 ): { actualDmg: number; redirected: boolean } {
   const options: DamageApplicationOptions = { actionName, deferTransform: true, respectDefenses: true };
   const actualDmg = ctx.applyDamage(target, Math.max(0, amount), 'skill', trueDamage, ctx.user, options);
-  if (options.redirectedByJoker) return { actualDmg: 0, redirected: true };
-  ctx.user.stats.dmgDealt += actualDmg;
+  if (options.redirectedByJoker || options.redirectedByOriginiumCore) return { actualDmg: 0, redirected: true };
   if (actualDmg > 0 && (options.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced)) {
     ctx.log('info', `${logPrefix}，这一击造成 ${actualDmg} 点${trueDamage ? '真实' : ''}伤害并触发了致死连锁；${target.name} 已在后续效果中退场！`);
   } else if (actualDmg > 0) {
@@ -171,7 +178,7 @@ function executeCrackConfirm(ctx: SkillContext, label = '破绽确认'): boolean
 
 export const gamerSkills: Record<string, SkillDefinition> = {
   awp_shot: { name: '大狙盲狙', tag: SKILL_TAGS.PHYS, mult: 3.0, ignoreDef: true, text: '🎯 {USER} 掏出AWP，空中转体360度盲狙，一枪爆了 {TARGET} 的头！造成 {VAL} 真实伤害！' },
-  flash_lol: { name: '闪现A', tag: SKILL_TAGS.PHYS, mult: 1.5, status: 'AIM', text: '✨ {USER} 极限闪现拉近距离，对 {TARGET} 打出必中一击！造成 {VAL} 伤害！' },
+  flash_lol: { name: '闪现A', tag: SKILL_TAGS.PHYS, mult: 1.5, alwaysHit: true, text: '✨ {USER} 极限闪现拉近距离，对 {TARGET} 打出必中一击！造成 {VAL} 伤害！' },
   hook_dota: { name: '肉钩', tag: SKILL_TAGS.PHYS, mult: 1.5, status: 'STUN', text: '🪝 {USER} 盲出肉钩，精准命中了 {TARGET}，造成 {VAL} 伤害并眩晕！' },
   helm_breaker: { name: '登龙剑', tag: SKILL_TAGS.PHYS, mult: 2.5, text: '🐉 {USER} 高高跃起，一招气刃兜割劈在 {TARGET} 身上！造成 {VAL} 伤害！' },
   tcs_mh: { name: '真蓄力斩', tag: SKILL_TAGS.PHYS, mult: 4.0, text: '⚔️ {USER} 完美铁山靠顶住攻击，随后猛力劈下真蓄力斩！对 {TARGET} 造成 {VAL} 伤害！' },
@@ -222,8 +229,10 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       refreshStatus(ctx.user, 'COUNTER', boosted ? 2 : 1);
       refreshStatus(ctx.user, 'BKB', 1, 'gamer_perfect_parry');
       if (boosted) refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'gamer_perfect_parry');
-      ctx.user.def = Math.floor(ctx.user.def * (boosted ? 1.18 : 1.08));
-      ctx.user.res = Math.floor(ctx.user.res * (boosted ? 1.18 : 1.08));
+      applyTemporaryGamerStats(ctx.user, 'GAMER_PARRY_GUARD', 2, {
+        def: boosted ? 1.18 : 1.08,
+        res: boosted ? 1.18 : 1.08,
+      });
       ctx.log('buff', `🛡️ 【${boosted ? '强化完美弹反' : '完美弹反'}】${ctx.user.name} 消耗 ${cost} APM 读准前摇，获得反击、防守抗性${boosted ? '与法术抵挡' : ''}！`);
       completeTechnique(ctx, 'action', { apmGain: boosted ? 1 : 0, reason: '用弹反把防守转成操作资源' });
       return true;
@@ -255,6 +264,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_tactical_pause: {
     name: '开团指挥',
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     condition: (user) => canPay(user, 3),
     text: '⏸️ {USER} 抓住对局节奏强行暂停，读到 {TARGET} 的下一步行动！',
     onExecute: (ctx) => {
@@ -281,6 +291,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_wombo_combo: {
     name: 'Wombo Combo',
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     condition: (user) => canPay(user, 3),
     text: '🌀 {USER} 开启 MOBA 团战思路，准备打一套群体连招！',
     onExecute: (ctx) => {
@@ -347,8 +358,10 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       const boosted = consumeBoost(ctx.user);
       ctx.user.gamerInputBuffer = Math.min(3, (ctx.user.gamerInputBuffer ?? 0) + (boosted ? 2 : 1));
       refreshStatus(ctx.user, 'AIM', boosted ? 2 : 1);
-      ctx.user.spd = Math.floor(ctx.user.spd * (boosted ? 1.12 : 1.06));
-      ctx.user.agl = Math.floor(ctx.user.agl * (boosted ? 1.12 : 1.06));
+      applyTemporaryGamerStats(ctx.user, 'GAMER_ROUTE_BOOST', 2, {
+        spd: boosted ? 1.12 : 1.06,
+        agl: boosted ? 1.12 : 1.06,
+      });
       ctx.log('buff', `🏃 【${boosted ? '强化速通路线优化' : '速通路线优化'}】${ctx.user.name} 消耗 ${cost} APM，获得 ${boosted ? 2 : 1} 层输入缓存、锁头与身位优势！`);
       completeTechnique(ctx, 'macro', { apmGain: boosted ? 1 : 0, reason: '用速通路线优化压缩后续成本' });
       return true;
@@ -386,8 +399,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       if (!result.redirected && result.actualDmg > 0) {
         applyControl(ctx, ctx.target, 'NEURAL_THEFT_DEBUFF', boosted ? 3 : 2, '输入读取');
         if (boosted) {
-          ctx.target.agl = Math.max(0, Math.floor(ctx.target.agl * 0.86));
-          ctx.target.res = Math.max(1, Math.floor(ctx.target.res * 0.9));
+          ctx.applyStatus(ctx.target, 'GAMER_READ_INPUTS', 3);
         }
       }
       completeTechnique(ctx, 'fighting', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '读到对手输入后继续提速' });
@@ -422,6 +434,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_world_combo: {
     name: '全平台冠军连段',
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     condition: (user) => hasStatus(user, 'GAMER_WORLD_STAGE') && canPay(user, 6) && !user.hasUsedGamerChampionCombo,
     text: '🏆 {USER} 进入世界赛状态，开始打出全平台冠军连段！',
     onExecute: (ctx) => {

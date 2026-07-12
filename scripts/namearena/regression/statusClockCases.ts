@@ -2,6 +2,7 @@ import {
   assert,
   localProject,
   makeFighter,
+  withRandomSequence,
 } from '../shared/harness';
 import { makeDeathEngine } from './deathAccountingCases';
 
@@ -62,14 +63,17 @@ export function runStatusClockCases(): string[] {
       { type: 'VALO_HOLDING_ANGLE', duration: 3 },
       { type: 'WAIT_COUNTER', duration: 3 },
     ];
-    const before = fighter.status.map((status) => `${status.type}:${status.duration}`).sort().join(',');
     const { engine } = makeDeathEngine([fighter, makeFighter('旁观者@B')]);
     engine.processStatus(engine.fighters[0]);
     engine.turnCount = 1;
     engine.advanceGlobalTimedStatuses();
-    const after = engine.fighters[0].status.map((status) => `${status.type}:${status.duration}`).sort().join(',');
-    assert(after === before, `trigger statuses should wait for their trigger, before=${before}, after=${after}`);
-    cases.push('trigger statuses do not tick down passively');
+    const statuses = engine.fighters[0].status;
+    assert(statuses.find((status) => status.type === 'AIM')?.charges === 1, 'AIM should be an explicit one-use trigger');
+    assert(statuses.find((status) => status.type === 'SPELL_BLOCK')?.charges === 1, 'SPELL_BLOCK should expose one trigger charge');
+    assert(statuses.find((status) => status.type === 'WAIT_COUNTER')?.charges === 1, 'WAIT_COUNTER should always be a one-use stance');
+    assert(statuses.find((status) => status.type === 'COUNTER')?.remainingTurns === 1, 'COUNTER should have an explicit owner-turn expiry');
+    assert(statuses.find((status) => status.type === 'VALO_HOLDING_ANGLE')?.remainingTurns === 2, 'holding angle should have an explicit owner-turn expiry');
+    cases.push('status charges and turn duration use separate clocks');
   }
 
   {
@@ -101,6 +105,23 @@ export function runStatusClockCases(): string[] {
     assert(engine.fighters[0].status.find((status) => status.type === 'CTR_CHARM')?.duration === 4, 'non-passive counter stance should tick down if it is not triggered');
     assert(engine.fighters[0].stats.dmgTaken > 0, 'self-timed DoT should apply damage on owner turn');
     cases.push('self-timed statuses tick on owner turns');
+  }
+
+  {
+    const fighter = makeFighter('控制末回合测试@A');
+    const opponent = makeFighter('控制日志旁观者@B');
+    fighter.spd = 100000;
+    opponent.spd = 1;
+    fighter.status = [{ type: 'STUN', duration: 1 }];
+    const { engine, logs } = makeDeathEngine([fighter, opponent]);
+
+    withRandomSequence([0], () => {
+      engine.step({ current: false });
+    });
+
+    assert(!engine.fighters[0].status.some((status) => status.type === 'STUN'), 'One-turn control should expire after consuming the owner action');
+    assert(logs.some((entry) => entry.text.includes(engine.fighters[0].name) && entry.text.includes('【眩晕】') && entry.text.includes('无法行动')), 'The final control turn should still explain why the fighter lost the action');
+    cases.push('expiring control still logs the skipped action cause');
   }
 
   {
@@ -173,6 +194,7 @@ export function runStatusClockCases(): string[] {
     const target = makeFighter('反击持有者@B');
     attacker.atk = 100;
     attacker.agl = 10000;
+    attacker.status.push({ type: 'AIM', duration: 1 });
     attacker.maxHp = 100000;
     localProject.setCurrentHp(attacker, 100000);
     target.maxHp = 100000;
@@ -210,7 +232,9 @@ export function runStatusClockCases(): string[] {
       target.status.push({ type: counterCase.type, duration: 5 });
 
       const { engine, logs } = makeDeathEngine([attacker, target]);
-      engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
+      withRandomSequence([0.5, 0.5, 0.5], () => {
+        engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
+      });
       const joinedLogs = logs.map((entry) => entry.text).join('\n');
 
       assert(

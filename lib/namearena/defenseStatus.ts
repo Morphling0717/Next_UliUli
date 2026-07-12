@@ -1,4 +1,9 @@
 import type { Fighter, SkillDefinition, StatusEntry } from './types';
+import {
+  consumeStatusCharge,
+  createLifecycleStatus,
+  refreshLifecycleStatus,
+} from './statusLifecycle';
 
 export const DEFENSE_STATUS_TYPES = new Set(['SPELL_BLOCK', 'BKB', 'INVUL']);
 
@@ -383,18 +388,19 @@ function applyTemplate(template: string, vars: DefenseTemplateVars): string {
 }
 
 export function grantStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  const existing = fighter.status.find((status) => status.type === type);
+  const existing = fighter.status.find((status) =>
+    status.type === type && (!sourceId || status.sourceId === sourceId),
+  );
   if (existing) {
-    existing.duration = Math.max(existing.duration, duration);
-    if (sourceId && isDefenseStatusType(type)) existing.sourceId = sourceId;
-    delete existing.appliedTurn;
+    refreshLifecycleStatus(existing, duration);
+    if (sourceId) existing.sourceId = sourceId;
     return;
   }
-  fighter.status.push({ type, duration, ...(sourceId && isDefenseStatusType(type) ? { sourceId } : {}) });
+  fighter.status.push(createLifecycleStatus(type, duration, sourceId));
 }
 
 export function createStatusEntry(type: string, duration: number, sourceId?: string): StatusEntry {
-  return { type, duration, ...(sourceId && isDefenseStatusType(type) ? { sourceId } : {}) };
+  return createLifecycleStatus(type, duration, sourceId);
 }
 
 export function statusSourceFromSkill(skill: SkillDefinition): string | undefined {
@@ -408,7 +414,7 @@ export function findDefenseStatus(fighter: Fighter, type: DefenseStatusKind): St
 export function consumeSpellBlock(fighter: Fighter): StatusEntry | undefined {
   const spellBlock = findDefenseStatus(fighter, 'SPELL_BLOCK');
   if (!spellBlock) return undefined;
-  fighter.status = fighter.status.filter((status) => status !== spellBlock);
+  consumeStatusCharge(fighter, spellBlock);
   return spellBlock;
 }
 

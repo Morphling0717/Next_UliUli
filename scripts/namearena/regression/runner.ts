@@ -9,6 +9,7 @@ import {
   type LogIssue,
 } from '../shared/harness';
 import { runCharacterHookCases } from './characterHookCases';
+import { runArchitectureCases } from './architectureCases';
 import { runDeathAccountingCases } from './deathAccountingCases';
 import { assertFactoryMapping } from './factoryMapping';
 import { runPuruisaishiCases } from './puruisaishiCases';
@@ -43,6 +44,7 @@ type RegressionSummary = {
   statusClockCaseCount: number;
   characterHookCaseCount: number;
   puruisaishiCaseCount: number;
+  architectureCaseCount: number;
   battleCount: number;
   failures: FailureSummary[];
 };
@@ -63,6 +65,7 @@ export function main(): void {
   const statusClockCases = runStatusClockCases();
   const characterHookCases = runCharacterHookCases();
   const puruisaishiCases = runPuruisaishiCases();
+  const architectureCases = runArchitectureCases();
   const specs = buildRegressionSpecs();
   const failures: Failure[] = [];
 
@@ -87,6 +90,7 @@ export function main(): void {
     statusClockCaseCount: statusClockCases.length,
     characterHookCaseCount: characterHookCases.length,
     puruisaishiCaseCount: puruisaishiCases.length,
+    architectureCaseCount: architectureCases.length,
     battleCount: specs.length,
     failures: failures.map((failure) => ({
       label: failure.result.label,

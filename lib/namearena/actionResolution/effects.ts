@@ -5,12 +5,12 @@ import type {
 import { healFighter } from '../combatState';
 import type { ActionResolutionRuntime } from './types';
 import {
-  findDefenseStatus,
-  formatControlBlocked,
   grantStatus,
   statusSourceFromSkill,
 } from '../defenseStatus';
-import { isSelectableTargetFor } from '../targeting';
+import { consumeStatusCharge } from '../statusLifecycle';
+import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
+import { withTimedStatModifiersSuspended } from '../statModifiers';
 
 const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
   chimera_devour: 'baby_feed',
@@ -49,7 +49,7 @@ function restoreValorantOperatorMobility(fighter: Fighter): boolean {
 
 function activeEnemyCount(runtime: ActionResolutionRuntime, user: Fighter): number {
   return runtime.fighters.filter((fighter) =>
-    isSelectableTargetFor(runtime, user, fighter),
+    isCompetitiveTarget(fighter) && isSelectableTargetFor(runtime, user, fighter),
   ).length;
 }
 
@@ -74,22 +74,26 @@ export function applyAttackerStyleEffects(
   runtime: ActionResolutionRuntime,
   user: Fighter,
   target: Fighter,
+  allowHostileStatus = true,
 ): void {
   if (user.status.some((status) => status.type === 'STYLE_VAIN')) {
     const stealAtk = Math.floor(target.atk * 0.1);
     const stealMag = Math.floor(target.mag * 0.1);
-    target.atk = Math.max(1, target.atk - stealAtk);
-    target.mag = Math.max(1, target.mag - stealMag);
-    user.atk += stealAtk;
-    user.mag += stealMag;
+    withTimedStatModifiersSuspended(target, () => {
+      target.atk = Math.max(1, target.atk - stealAtk);
+      target.mag = Math.max(1, target.mag - stealMag);
+    });
+    withTimedStatModifiersSuspended(user, () => {
+      user.atk += stealAtk;
+      user.mag += stealMag;
+    });
     runtime.log('buff', `💅 虚荣窃取！${user.name} 偷走了 ${target.name} 的属性化为己用！(吸收了攻击和魔力)`);
   }
 
-  if (user.status.some((status) => status.type === 'STYLE_FOOL') && Math.random() < 0.5) {
+  if (allowHostileStatus && user.status.some((status) => status.type === 'STYLE_FOOL') && Math.random() < 0.5) {
     const debuffs = ['STUN', 'FREEZE', 'POISON', 'BURN'];
     const randomDebuff = debuffs[Math.floor(Math.random() * debuffs.length)];
-    if (!target.status.some((status) => status.type === 'BKB')) {
-      target.status.push({ type: randomDebuff, duration: 2 });
+    if (runtime.applyStatus(target, randomDebuff, 2)) {
       runtime.log('skill', `🤪 笨蛋女人乱拳挥舞！不经意间给 ${target.name} 附加了【${runtime.statusEffects[randomDebuff]?.name ?? randomDebuff}】异常状态！`);
     }
   }
@@ -98,18 +102,16 @@ export function applyAttackerStyleEffects(
 export function applySkillStatusEffect(
   runtime: ActionResolutionRuntime,
   skill: SkillDefinition,
+  user: Fighter,
   target: Fighter,
+  allowTargetStatus = true,
 ): void {
   if (!skill.status) return;
 
-  const controlImmune = findDefenseStatus(target, 'BKB');
-  if (controlImmune && ['STUN', 'FREEZE', 'SILENCE', 'CONFUSED', 'CHARMED'].includes(skill.status)) {
-    const effectName = `${runtime.statusEffects[skill.status]?.name ?? skill.status}效果`;
-    runtime.log('info', formatControlBlocked(controlImmune, target.name, effectName));
-    return;
-  }
+  const recipient = skill.statusTarget === 'user' ? user : target;
+  if (!allowTargetStatus && recipient.id === target.id) return;
   const sourceId = statusSourceFromSkill(skill);
-  target.status.push({ type: skill.status, duration: 2, ...(sourceId ? { sourceId } : {}) });
+  runtime.applyStatus(recipient, skill.status, 2, { sourceId });
 }
 
 export function handleValorantWeaponDrop(
@@ -142,7 +144,8 @@ export function handlePhysicalCounterReflect(
 ): void {
   if (skill.tag !== runtime.skillTags.PHYS || !target.status.some((status) => status.type === 'COUNTER')) return;
 
-  target.status = target.status.filter((status) => status.type !== 'COUNTER');
+  const counter = target.status.find((status) => status.type === 'COUNTER');
+  if (counter) consumeStatusCharge(target, counter);
   if (!runtime.isActiveCombatant(user)) {
     runtime.log('info', `💢 ${target.name} 的反击护盾亮起，但 ${user.name} 已经退场，反弹没有继续结算。`);
     return;
@@ -153,7 +156,7 @@ export function handlePhysicalCounterReflect(
   } else {
     runtime.log('info', `💢 ${target.name} 触发反击，但反弹没有对 ${user.name} 造成实际伤害！`);
   }
-  if (reflectedDmg > 0) runtime.flushDeferredDamageEvents(user);
+  if (reflectedDmg > 0 || (user.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(user);
   if (user.currentHp <= 0) {
     runtime.markDefeated(user, { message: `💀 ${user.name} 被自己造成的反弹伤害反死了！`, killer: target });
   }
@@ -182,9 +185,10 @@ export function grantValorantKillRewards(
 export function grantValorantHitRewards(
   runtime: ActionResolutionRuntime,
   user: Fighter,
+  target: Fighter,
   actualDmg: number,
 ): void {
-  if (user.job !== 'VALO_JUNIOR' || actualDmg <= 0) return;
+  if (user.job !== 'VALO_JUNIOR' || !isCompetitiveTarget(target) || actualDmg <= 0) return;
 
   user.economy = Math.min(12, (user.economy ?? 0) + 1);
   if (actualDmg < Math.max(300, user.atk)) return;
@@ -202,12 +206,14 @@ export function handlePrimaryTargetDefeat(
   user: Fighter,
   target: Fighter,
   skill?: SkillDefinition,
-): void {
-  if (target.currentHp > 0) return;
+): boolean {
+  if (target.currentHp > 0) return false;
 
   const skillName = skill?.name && !['普通攻击', '魔力攻击'].includes(skill.name) ? `【${skill.name}】` : '攻击';
+  const grantsCompetitiveRewards = isCompetitiveTarget(target);
   const defeated = runtime.markDefeated(target, { message: `💀 【击杀】${target.name} 被 ${user.name} 的${skillName}击败！`, killer: user });
-  if (defeated) grantValorantKillRewards(runtime, user);
+  if (defeated && grantsCompetitiveRewards) grantValorantKillRewards(runtime, user);
+  return defeated;
 }
 
 export function applyLifestealEffects(
@@ -252,9 +258,13 @@ export function consumeAimAfterAttack(
   skill: SkillDefinition,
 ): void {
   if (skill.tag === runtime.skillTags.HEAL || skill.tag === runtime.skillTags.BUFF) return;
-  if (!user.status.some((status) => status.type === 'AIM')) return;
 
-  user.status = user.status.filter((status) => status.type !== 'AIM');
+  const aim = user.status.find((status) => status.type === 'AIM');
+  if (aim) consumeStatusCharge(user, aim);
+  if (user.isWT && user.wtMarkedTargetId) {
+    user.wtMarkedTargetId = undefined;
+    runtime.log('info', `🎯 ${user.name} 已消耗激光测距坐标，本次火控优先窗口关闭。`);
+  }
 }
 
 export function triggerSuccubusBabyFollowup(

@@ -20,7 +20,7 @@ export const DIVA_BUFF_POOL: GachaEntry[] = [
 ];
 
 export const VALORANT_POOL: GachaEntry[] = [
-  { text: "🌪️ {USER} 杰特(Jett)附体！瞬风 (Tailwind)！速度拉满冲向 {TARGET} 造成 {VAL} 伤害！", tag: SKILL_TAGS.PHYS, mult: 2.5, status: 'INVUL', statusSource: 'valorant_jett_tailwind' },
+  { text: "🌪️ {USER} 杰特(Jett)附体！瞬风 (Tailwind)！速度拉满冲向 {TARGET} 造成 {VAL} 伤害！", tag: SKILL_TAGS.PHYS, mult: 2.5, status: 'INVUL', statusSource: 'valorant_jett_tailwind', statusTarget: 'user' },
   { text: "🔥 {USER} 菲尼克斯(Phoenix)！火冒三丈！投掷火球对自己回血，对 {TARGET} 造成 {VAL} 伤害！", tag: SKILL_TAGS.MAG, mult: 2.0, lifesteal: 1.0, status: 'BURN' },
   { text: "🧛 {USER} 蕾娜(Reyna)！吞噬 (Devour)！处决了 {TARGET} 的一部分灵魂，回复大量生命 {VAL}！", tag: SKILL_TAGS.MAG, mult: 2.5, lifesteal: 1.2 },
   { text: "⚡ {USER} 霓虹(Neon)！极速过载！指尖闪电连射 {TARGET}，造成 {VAL} 点伤害！", tag: SKILL_TAGS.MAG, mult: 3.0, hits: 3 },

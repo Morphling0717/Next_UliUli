@@ -1,4 +1,5 @@
 import type { CharacterHook } from './types';
+import { grantStatus } from '../defenseStatus';
 
 export const morphlingHook: CharacterHook = {
   id: 'morphling',
@@ -11,7 +12,7 @@ export const morphlingHook: CharacterHook = {
       fighter.maxHp = 5000;
       fighter.currentHp = fighter.maxHp;
       fighter.atk = fighter.mag = fighter.def = fighter.res = fighter.wis = fighter.spd = fighter.agl = 300;
-      fighter.status.push({ type: 'LIQUID_BODY', duration: 999 });
+      grantStatus(fighter, 'LIQUID_BODY', 999);
     });
     return true;
   },

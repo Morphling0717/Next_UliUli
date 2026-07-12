@@ -13,7 +13,6 @@ import {
   isLuckEmperor,
 } from './gachaMechanics';
 import {
-  createStatusEntry,
   grantStatus,
 } from './defenseStatus';
 
@@ -95,13 +94,7 @@ export function executeSummonSkill(
       runtime.log('info', `🚫 ${user.name} 试图召唤 ${skill.summonName}，但场上祭品不足！`);
       if (isLuckEmperor(user)) {
         grantGachaLuck(user, 1, runtime.log, '献祭失败');
-        const shield = user.status.find((status) => status.type === 'SPELL_BLOCK');
-        if (shield) {
-          shield.duration = Math.max(shield.duration, 2);
-          shield.sourceId = 'gacha_tribute_compensation';
-        } else {
-          user.status.push(createStatusEntry('SPELL_BLOCK', 2, 'gacha_tribute_compensation'));
-        }
+        grantStatus(user, 'SPELL_BLOCK', 2, 'gacha_tribute_compensation');
         if (!user.status.some((status) => status.type === 'NO_HEAL')) {
           const healed = healFighter(user, Math.floor(user.maxHp * 0.1));
           if (healed > 0) runtime.log('heal', `🍀 祭品不足反而歪出补偿，${user.name} 恢复了 ${healed} 点生命并获得法术抵挡！`);
@@ -171,10 +164,10 @@ export function executeSummonSkill(
   };
   if (skill.summonName === '翼神龙') {
     summon.raChantBoost = 1;
-    summon.status.push({ type: GACHA_RA_PHOENIX_STATUS, duration: 6 });
+    grantStatus(summon, GACHA_RA_PHOENIX_STATUS, 6);
     grantStatus(summon, 'SPELL_BLOCK', 2, 'ra_divine_aura');
     grantStatus(summon, 'BKB', 1, 'ra_divine_aura');
-    summon.status.push({ type: 'REGEN', duration: 3 });
+    grantStatus(summon, 'REGEN', 3);
   }
   runtime.fighters.push(summon);
   if (skill.summonName === '小汀(傀儡)') runtime.syncPuppetMasterStatus(user);

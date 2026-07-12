@@ -76,10 +76,10 @@ export function executeSlackingSynergy(ctx: SkillContext): boolean {
           participant.status = participant.status.filter(
             (status) => !['VALO_HOLDING_ANGLE', 'WAIT_COUNTER', 'COUNTER', 'AIM'].includes(status.type) && !status.type.startsWith('CTR_'),
           );
-          participant.status.push({ type: 'SYNERGY_SLACKING', duration: 5 });
+          participant.status.push(createStatusEntry('SYNERGY_SLACKING', 5, 'slacking_off_field'));
           participant.status.push(createStatusEntry('INVUL', 5, 'slacking_off_field'));
           participant.status.push(createStatusEntry('BKB', 5, 'slacking_off_field'));
-          participant.status.push({ type: 'STUN', duration: 5 });
+          participant.status.push(createStatusEntry('STUN', 5, 'slacking_off_field'));
           participant.wasSynergySlacking = true;
         };
 

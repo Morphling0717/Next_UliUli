@@ -1,7 +1,12 @@
 import { cloneJobDefinition } from '../combatState';
 import type { DamageApplicationOptions } from '../types';
 import { isSelectableTargetFor } from '../targeting';
+import {
+  ORIGINIUM_DISEASE_STATUS,
+  withOriginiumStatShapeSuspended,
+} from '../puruisaishiMechanics';
 import type { CharacterHook } from './types';
+import { cleanupOrphanedTimedStatModifiers, withTimedStatModifiersSuspended } from '../statModifiers';
 
 export const jokerHook: CharacterHook = {
   id: 'joker',
@@ -67,23 +72,30 @@ export const jokerHook: CharacterHook = {
     fighter.hasResurrected = true;
     fighter.isDeadAnnounced = false;
     const GOD_OF_TROLLS = runtime.jobs.GOD_OF_TROLLS;
-    if (GOD_OF_TROLLS) {
-      fighter.jobData = cloneJobDefinition(GOD_OF_TROLLS);
-      fighter.job = 'GOD_OF_TROLLS';
-      fighter.maxHp = Math.floor(fighter.maxHp * 1.6);
-      fighter.currentHp = fighter.maxHp;
-      fighter.spd = 150;
-      fighter.atk = Math.max(100, fighter.atk * 2);
-      fighter.def = Math.max(80, fighter.def * 2);
-      fighter.res = Math.max(150, fighter.res * 2);
-      fighter.mag = Math.max(225, fighter.mag * 3.02);
-      fighter.agl = Math.max(250, fighter.agl * 3);
-      fighter.wis = Math.max(200, fighter.wis * 3);
-    } else {
-      fighter.currentHp = fighter.maxHp;
-    }
+    withTimedStatModifiersSuspended(fighter, () => {
+      withOriginiumStatShapeSuspended(fighter, () => {
+        if (GOD_OF_TROLLS) {
+          fighter.jobData = cloneJobDefinition(GOD_OF_TROLLS);
+          fighter.job = 'GOD_OF_TROLLS';
+          fighter.maxHp = Math.floor(fighter.maxHp * 1.6);
+          fighter.currentHp = fighter.maxHp;
+          fighter.spd = 150;
+          fighter.atk = Math.max(100, fighter.atk * 2);
+          fighter.def = Math.max(80, fighter.def * 2);
+          fighter.res = Math.max(150, fighter.res * 2);
+          fighter.mag = Math.max(225, fighter.mag * 3.02);
+          fighter.agl = Math.max(250, fighter.agl * 3);
+          fighter.wis = Math.max(200, fighter.wis * 3);
+        } else {
+          fighter.currentHp = fighter.maxHp;
+        }
+      });
+    });
     runtime.syncHpPct(fighter);
-    fighter.status = [];
+    fighter.status = fighter.status.filter((status) =>
+      status.type === ORIGINIUM_DISEASE_STATUS && (fighter.originiumInfectionStacks ?? 0) > 0,
+    );
+    cleanupOrphanedTimedStatModifiers(fighter);
     runtime.log('buff', `🤡 ${fighter.name} 从地狱归来！转职为【${GOD_OF_TROLLS ? GOD_OF_TROLLS.name : '乐子人'}】！\n"接下来，是我的谢幕演出！"`);
 
     const enemies = runtime.fighters.filter((enemy) => isSelectableTargetFor(runtime, fighter, enemy));
@@ -99,18 +111,24 @@ export const jokerHook: CharacterHook = {
           actionName: '谢幕返场',
         };
         const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter, damageOptions);
-        if (damageOptions.redirectedByJoker) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
         if (actualDmg > 0) {
-          runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害，并施加【混乱】！`);
+          runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害！`);
         } else {
           runtime.log('info', `💥 地狱笑话扫过 ${enemy.name}，但没有造成实际伤害，【混乱】没有生效！`);
         }
-        if (actualDmg > 0) runtime.flushDeferredDamageEvents(enemy);
+        const confused = actualDmg > 0 &&
+          enemy.currentHp > 0 &&
+          !enemy.isDead &&
+          !enemy.isDeadAnnounced &&
+          !damageOptions.suppressOnHitStatuses &&
+          runtime.applyStatus(enemy, 'CONFUSED', 1);
+        if (confused) {
+          runtime.log('debuff', `🌀 【谢幕返场】${enemy.name} 被地狱笑话扰乱，陷入 1 回合混乱！`);
+        }
+        if (actualDmg > 0 || (enemy.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(enemy);
         if (enemy.currentHp <= 0 && !enemy.isDead) {
           runtime.finalizeFighterDeath(enemy, spinalSwordRef, `💀 【击杀】${enemy.name} 被地狱笑话震死了！`, fighter);
-        }
-        if (actualDmg > 0 && runtime.isActiveCombatant(enemy)) {
-          enemy.status.push({ type: 'CONFUSED', duration: 1 });
         }
       }
     }

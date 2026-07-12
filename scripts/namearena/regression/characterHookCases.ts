@@ -1,4 +1,4 @@
-import type { Fighter, GachaEntry, SkillDefinition, StatKey } from '../../../lib/namearena/types';
+import type { DamageApplicationOptions, Fighter, GachaEntry, SkillDefinition, StatKey } from '../../../lib/namearena/types';
 import {
   clearYuzuMark,
   drawYuzuWeapon,
@@ -109,6 +109,75 @@ export function runCharacterHookCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('随机恶作剧')), 'Joker should still transfer the forced regression hit');
     assert(!logs.some((entry) => /认真一拳.*屑.*造成/.test(entry.text)), 'Joker-targeting skill text should not claim damage already landed before transfer resolution');
     cases.push('Joker-targeting skill uses pre-resolution damage log');
+  }
+
+  {
+    const joker = makeFighter('屑@A');
+    const croc = makeFighter('牢鳄@B');
+    const bystander = makeFighter('抽卡转移受害者@B');
+    const { engine, logs } = makeDeathEngine([joker, croc, bystander]);
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for gacha preview tests');
+    engine.fighters[0].job = 'GOD_OF_TROLLS';
+    engine.fighters[0].jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    forceLuckEmperor(engine.fighters[1]);
+    engine.fighters[1].jobData.skills = ['gacha_pull'];
+    engine.fighters[2].maxHp = 10000;
+    localProject.setCurrentHp(engine.fighters[2], 10000);
+
+    withRandomSequence([0, 0.5, 0.99, 0, 0], () => {
+      engine.executeSkillAction('gacha_pull', engine.fighters[1], engine.fighters[0]);
+    });
+
+    assert(logs.some((entry) => entry.text.includes('【牌面揭示】') && entry.text.includes('手机砸向 屑')), 'Redirected gacha attacks should preserve the concrete drawn-card flavor');
+    assert(logs.some((entry) => entry.text.includes('伤害数值为转移与防御结算前预估')), 'Gacha preview should label its damage as pre-resolution estimate');
+    cases.push('Redirected gacha hit keeps its card reveal before settlement');
+  }
+
+  {
+    const joker = makeFighter('屑@A');
+    const attacker = makeFighter('转移数值来源@B');
+    const bystander = makeFighter('转移数值受害者@B');
+    const { engine } = makeDeathEngine([joker, attacker, bystander]);
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for redirected damage output tests');
+    engine.fighters[0].job = 'GOD_OF_TROLLS';
+    engine.fighters[0].jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    engine.fighters[0].transformed = true;
+    engine.fighters[2].maxHp = 10000;
+    localProject.setCurrentHp(engine.fighters[2], 10000);
+    const options: DamageApplicationOptions = { actionName: '转移数值测试' };
+
+    withRandomSequence([0, 0.99], () => {
+      engine.applyDamage(engine.fighters[0], 400, 'skill', true, engine.fighters[1], options);
+    });
+
+    assert(options.redirectedByJoker, 'Forced Joker prank should mark the hit as redirected');
+    assert(options.redirectedJokerDamage === 400, `Joker redirect should return the transferred settlement amount, got ${options.redirectedJokerDamage}`);
+    cases.push('Joker redirect exposes its actual transferred damage to custom logs');
+  }
+
+  {
+    const joker = makeFighter('屑@A');
+    const attacker = makeFighter('零伤转移来源@B');
+    const emote = makeFighter('表情@B');
+    const { engine, logs } = makeDeathEngine([joker, attacker, emote]);
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for zero-damage redirect flush tests');
+    engine.fighters[0].job = 'GOD_OF_TROLLS';
+    engine.fighters[0].jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    engine.fighters[0].transformed = true;
+    engine.fighters[2].status.push({ type: 'EMOTE_ADAPT', duration: 2 });
+    engine.fighters[2].yuzuShield = 10000;
+
+    withRandomSequence([0, 0.99], () => {
+      engine.applyDamage(engine.fighters[0], 100, 'skill', true, engine.fighters[1], { actionName: '零伤转移测试' });
+    });
+
+    assert(!engine.fighters[2].pendingDamageEvents?.length, 'A fully shielded Joker redirect should flush Emote deferred reactions');
+    assert(logs.some((entry) => entry.text.includes('转移伤害落在 表情 身上') && entry.text.includes('没有造成实际伤害')), 'A fully shielded Joker redirect should log its zero-HP settlement');
+    assert(logs.some((entry) => entry.text.includes('【适应转轮】表情') && entry.text.includes('零伤转移来源')), 'Emote deferred adaptation should still be explained after a fully shielded redirect');
+    cases.push('Joker zero-damage redirect flushes deferred Emote reaction');
   }
 
   {
@@ -421,7 +490,7 @@ export function runCharacterHookCases(): string[] {
 
     engine.executeSkillAction('bujin_chair', engineTokusatsu, engine.fighters[1]);
 
-    assert(engineTokusatsu.status.some((status) => status.type === 'WAIT_COUNTER' && status.duration === 4), 'Tokusatsu chair should add a 4-turn wait counter');
+    assert(engineTokusatsu.status.some((status) => status.type === 'WAIT_COUNTER' && status.charges === 1), 'Tokusatsu chair should add a one-use wait counter');
     assert(engineTokusatsu.status.some((status) => status.type === 'BKB' && status.duration === 2 && status.sourceId === 'tokusatsu_bujin_throne'), 'Tokusatsu chair should add 2-turn throne-sourced control armor');
     assert(engineTokusatsu.status.some((status) => status.type === 'SPELL_BLOCK' && status.duration === 2 && status.sourceId === 'tokusatsu_bujin_throne'), 'Tokusatsu chair should add 2-turn throne-sourced spell block');
     assert((engineTokusatsu.tokusatsuThroneResonance ?? -1) === 0, 'Tokusatsu chair should consume stored throne resonance');
@@ -531,6 +600,31 @@ export function runCharacterHookCases(): string[] {
 
   {
     const morphling = makeFighter('水人@A');
+    const ting = makeFighter('小汀@B');
+    const { engine, logs } = makeDeathEngine([morphling, ting]);
+    const engineMorphling = engine.fighters[0];
+    const engineTing = engine.fighters[1];
+    engineMorphling.mag = 1;
+    engineTing.maxHp = 4000;
+    localProject.setCurrentHp(engineTing, 700);
+    engineTing.status.push({ type: 'TING_DEFIANCE', duration: 3 });
+    engineTing.transformed = true;
+
+    const prison = localProject.skills.abyssal_prison;
+    assert(prison?.afterExecute, 'abyssal_prison afterExecute should exist for Ting execution guard tests');
+    const ctx = engine.createSkillContext(engineMorphling, engineTing, [engineTing], 0, '深渊水牢');
+    ctx.targetWasTransformedBeforeDamage = true;
+    prison.afterExecute(ctx, 1);
+
+    assert(engineTing.currentHp === 0, 'Abyssal prison execute should kill through active Ting defiance');
+    assert(engineTing.isDeadAnnounced, 'Abyssal prison execute should announce death through active Ting defiance');
+    assert(logs.some((entry) => entry.text.includes('溺毙处决') && entry.text.includes('彻底停止了呼吸')), 'Abyssal prison should log the waterman-only execution against Ting');
+    assert(!logs.some((entry) => entry.text.includes('溺毙处决') && entry.text.includes('保命机制')), 'Abyssal prison should not treat active Ting defiance as a blocker for waterman');
+    cases.push('Abyssal prison execute pierces active Ting defiance');
+  }
+
+  {
+    const morphling = makeFighter('水人@A');
     const tokusatsu = makeFighter('刺猬人@B');
     const { engine, logs } = makeDeathEngine([morphling, tokusatsu]);
     const engineMorphling = engine.fighters[0];
@@ -570,6 +664,28 @@ export function runCharacterHookCases(): string[] {
     assert(engineTarget.currentHp === 0 && engineTarget.isDeadAnnounced, 'Abyssal prison execute should still kill normal non-transform targets');
     assert(!logs.some((entry) => entry.text.includes('溺毙处决') && entry.text.includes('阶段锁血')), 'Abyssal prison should not report phase-lock protection for normal targets');
     cases.push('Abyssal prison execute does not overprotect normal low-health targets');
+  }
+
+  {
+    const morphling = makeFighter('水人@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const { engine, logs } = makeDeathEngine([morphling, tokusatsu]);
+    const engineMorphling = engine.fighters[0];
+    const engineTokusatsu = engine.fighters[1];
+    engineMorphling.mag = 100000;
+    engineMorphling.wis = 100000;
+    engineTokusatsu.res = 1;
+    engineTokusatsu.maxHp = 1000;
+    localProject.setCurrentHp(engineTokusatsu, 100);
+
+    engine.executeSkillAction('nullifier', engineMorphling, engineTokusatsu);
+
+    assert(engineTokusatsu.transformed, 'Nullifier lethal damage should still allow a fresh Tokusatsu phase-2 transformation');
+    assert(engineTokusatsu.job === 'MIRACLE_BUJIN', `Nullifier should leave fresh Tokusatsu in MIRACLE_BUJIN, got ${engineTokusatsu.job}`);
+    assert(engineTokusatsu.currentHp > 0 && !engineTokusatsu.isDead && !engineTokusatsu.isDeadAnnounced, 'Nullifier should not bypass a fresh phase-transition lock');
+    assert(logs.some((entry) => entry.text.includes('锁血保护')), 'Nullifier lethal damage should log fresh phase lock protection');
+    assert(logs.some((entry) => entry.text.includes('变身') && entry.text.includes('奇迹武刃')), 'Nullifier lethal damage should still complete the phase-2 transform log');
+    cases.push('Nullifier preserves fresh transform lock');
   }
 
   {
@@ -656,6 +772,33 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const morphling = makeFighter('水人@A');
+    const target = makeFighter('镜花水月测试靶@B');
+    morphling.status.push({ type: 'AIM', duration: 1 });
+    const { engine } = makeDeathEngine([morphling, target]);
+
+    engine.executeSkillAction('liquid_mirage', engine.fighters[0], engine.fighters[1]);
+
+    assert(engine.fighters[0].status.some((status) => status.type === 'INVUL' && status.sourceId === 'morphling_liquid_mirage'), 'Liquid Mirage should grant its liquid invulnerability to Morphling');
+    assert(!engine.fighters[1].status.some((status) => status.type === 'INVUL'), 'Liquid Mirage must not grant invulnerability to its enemy target');
+    cases.push('attack self-buff ownership keeps Liquid Mirage invulnerability on Morphling');
+  }
+
+  {
+    const sigua = makeFighter('丝瓜uli@A');
+    const target = makeFighter('瞬风测试靶@B');
+    sigua.status.push({ type: 'AIM', duration: 1 });
+    const { engine } = makeDeathEngine([sigua, target]);
+    engine.SKILLS.test_jett_tailwind = poolSkillByStatus('VALORANT_POOL', 'INVUL', '瞬风');
+
+    engine.executeSkillAction('test_jett_tailwind', engine.fighters[0], engine.fighters[1]);
+
+    assert(engine.fighters[0].status.some((status) => status.type === 'INVUL' && status.sourceId === 'valorant_jett_tailwind'), 'Jett Tailwind should grant invulnerability to the Valorant user');
+    assert(!engine.fighters[1].status.some((status) => status.type === 'INVUL'), 'Jett Tailwind must not protect the enemy it hits');
+    cases.push('attack self-buff ownership keeps Jett Tailwind invulnerability on its user');
+  }
+
+  {
     const gamer = makeFighter('玄凝@A');
     const { engine } = makeDeathEngine([gamer, makeFighter('APM旁观者@B')]);
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.65));
@@ -669,6 +812,22 @@ export function runCharacterHookCases(): string[] {
     assert(!engine.fighters[0].transformed, 'Gamer should not transform before the half-HP threshold');
     assert(engine.fighters[0].job === 'HIGH_END_GAMER', `Gamer should stay in phase one before half HP, got ${engine.fighters[0].job}`);
     cases.push('Gamer APM does not bypass half-HP transform rule');
+  }
+
+  {
+    const gamer = makeFighter('玄凝@A');
+    const target = makeFighter('闪现A测试靶@B');
+    gamer.agl = 0;
+    target.agl = 10000;
+    const { engine, logs } = makeDeathEngine([gamer, target]);
+
+    withRandomSequence([0.999, 0.5, 0.5], () => {
+      engine.executeSkillAction('flash_lol', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(logs.some((entry) => entry.text.includes('【闪现A】') && entry.text.includes('造成')), 'Flash A should be the guaranteed hit described by its skill text');
+    assert(!engine.fighters[1].status.some((status) => status.type === 'AIM'), 'Flash A must not donate an AIM buff to its enemy');
+    cases.push('Gamer Flash A is an immediate guaranteed hit without enemy AIM buff');
   }
 
   {
@@ -846,6 +1005,61 @@ export function runCharacterHookCases(): string[] {
     assert(!engine.fighters[0].status.some((status) => status.type === 'POISON'), 'Luck Emperor death save should cleanse common negative statuses');
     assert(logs.some((entry) => entry.text.includes('欧皇护符')), 'Luck Emperor death save should log the charm trigger');
     cases.push('Gacha death save prevents one lethal hit');
+  }
+
+  {
+    const gacha = makeFighter('牢鳄@A');
+    const gamer = makeFighter('玄凝@B');
+    const { engine } = makeDeathEngine([gacha, gamer]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    engine.fighters[1].mag = 10000;
+    engine.fighters[1].status.push({ type: 'AIM', duration: 1 });
+
+    engine.executeSkillAction('teemo_shroom', engine.fighters[1], engine.fighters[0]);
+
+    assert(engine.fighters[0].hasUsedGachaDeathSave, 'Lethal poison skill should trigger the Luck Emperor death save');
+    assert(!engine.fighters[0].status.some((status) => status.type === 'POISON'), 'Luck Emperor cleansing death save must suppress poison from the same lethal hit');
+    cases.push('Gacha cleansing death-save suppresses lethal hit poison');
+  }
+
+  {
+    const gacha = makeFighter('牢鳄@A');
+    const exodia = makeFighter('黑暗大法师测试体@B');
+    const { engine, logs } = makeDeathEngine([gacha, exodia]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    engine.fighters[1].mag = 10000;
+    engine.fighters[1].status.push({ type: 'AIM', duration: 1 });
+    const atkBefore = engine.fighters[0].atk;
+
+    engine.executeSkillAction('exodia_seal_chains', engine.fighters[1], engine.fighters[0]);
+
+    assert(engine.fighters[0].hasUsedGachaDeathSave && engine.fighters[0].currentHp > 0, 'Seal Chains should trigger and respect the Luck Emperor death save');
+    assert(engine.fighters[0].atk === atkBefore, 'A cleansing death-save must suppress direct post-hit stat reduction from the lethal skill');
+    assert(!logs.some((entry) => entry.text.includes('被封印锁链压制，攻击与魔力下降')), 'Suppressed direct stat reduction must not emit a false success log');
+    cases.push('cleansing death-save suppresses direct post-hit stat reductions');
+  }
+
+  {
+    const gacha = makeFighter('牢鳄@A');
+    const wt = makeFighter('M1A2_abrams_sep@B');
+    const { engine, logs } = makeDeathEngine([gacha, wt]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    localProject.setCurrentHp(engine.fighters[1], Math.floor(engine.fighters[1].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[1]);
+    engine.fighters[1].atk = 10000;
+    engine.fighters[1].status.push({ type: 'AIM', duration: 1 });
+
+    withRandomSequence([0.5, 0], () => {
+      engine.executeSkillAction('wt_t58_knockup', engine.fighters[1], engine.fighters[0]);
+    });
+
+    assert(engine.fighters[0].hasUsedGachaDeathSave && engine.fighters[0].currentHp > 0, 'T-58 lethal hit should trigger and respect the Luck Emperor death save');
+    assert(!engine.fighters[0].status.some((status) => ['WT_AIRBORNE', 'WT_AMMO_EXPOSED'].includes(status.type)), 'T-58 must not reapply airborne or ammo exposure after a cleansing death-save');
+    assert(!logs.some((entry) => entry.text.includes('弹药架殉爆')), 'T-58 must not immediately execute a target that just consumed a cleansing death-save');
+    cases.push('cleansing death-save suppresses War Thunder module and execution follow-ups');
   }
 
   {
@@ -1253,6 +1467,48 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const gacha = makeFighter('牢鳄@A');
+    const ra = makeFighter('翼神龙反扑中断测试体@A');
+    const joker = makeFighter('屑@B');
+    const bystander = makeFighter('神不死鸟中断旁观者@B');
+    const { engine, logs } = makeDeathEngine([gacha, ra, joker, bystander]);
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for interrupted Ra Phoenix tests');
+    bindAsGachaSummon(engine.fighters[0], engine.fighters[1], '翼神龙', true);
+    engine.fighters[1].maxHp = 1000;
+    localProject.setCurrentHp(engine.fighters[1], 10);
+    engine.fighters[1].atk = 1000;
+    engine.fighters[1].mag = 1000;
+    engine.fighters[1].status = [
+      { type: 'RA_PHOENIX', duration: 3 },
+      { type: 'BURN', duration: 3 },
+    ];
+    engine.fighters[2].job = 'GOD_OF_TROLLS';
+    engine.fighters[2].jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    engine.fighters[2].transformed = true;
+    engine.fighters[2].maxHp = 100000;
+    localProject.setCurrentHp(engine.fighters[2], 100000);
+    engine.fighters[3].maxHp = 100000;
+    localProject.setCurrentHp(engine.fighters[3], 100000);
+
+    withRandomSequence([0, 0.99], () => {
+      engine.processStatus(engine.fighters[1]);
+    });
+
+    const dotIndex = logs.findIndex((entry) => entry.text.includes('翼神龙反扑中断测试体') && entry.text.includes('受到持续伤害'));
+    const reviveIndex = logs.findIndex((entry) => entry.text.includes('【神不死鸟】') && entry.text.includes('致死瞬间'));
+    const redirectIndex = logs.findIndex((entry) => entry.text.includes('随机恶作剧') && entry.text.includes('翼神龙反扑中断测试体'));
+    const deathIndex = logs.findIndex((entry) => entry.type === 'death' && entry.text.includes('【伤害转移】翼神龙反扑中断测试体'));
+    const interruptedIndex = logs.findIndex((entry) => entry.text.includes('反扑途中被击倒') && entry.text.includes('余下的太阳火焰'));
+    assert(dotIndex >= 0 && reviveIndex > dotIndex, 'Lethal status damage should be logged before Ra Phoenix revival');
+    assert(redirectIndex > reviveIndex && deathIndex > redirectIndex, 'Ra Phoenix self-redirect death should follow revival and redirect cause');
+    assert(interruptedIndex > deathIndex, 'Ra Phoenix should explicitly stop the remaining retaliation after dying mid-chain');
+    assert(!logs.slice(deathIndex + 1).some((entry) => entry.text.includes('神不死鸟中断旁观者') && /(?:反扑|火焰扫过)/.test(entry.text)), 'A defeated Ra must not continue attacking later Phoenix targets');
+    assert(engine.fighters[1].isDeadAnnounced && engine.fighters[1].currentHp === 0, 'Ra should remain defeated after its Phoenix damage is redirected back mid-chain');
+    cases.push('Ra Phoenix status trigger logs cause first and stops after mid-chain death');
+  }
+
+  {
     const attacker = makeFighter('神不死鸟王座攻击者@B');
     const gacha = makeFighter('牢鳄@A');
     const ra = makeFighter('翼神龙王座测试体@A');
@@ -1426,8 +1682,10 @@ export function runCharacterHookCases(): string[] {
     assert(Number(claire.chimeraMilestoneLevel) === 2, `Chimera should reach 2-plugin milestone, got ${claire.chimeraMilestoneLevel}`);
     assert(claire.status.some((status) => status.type === 'REGEN'), '2-plugin milestone should grant regeneration');
     assert(logs.some((entry) => entry.text.includes('合成稳定')), '2-plugin milestone should be logged');
+    assert(!logs.some((entry) => entry.text.includes('合成稳定') && entry.text.includes('恢复 0 点生命')), 'Full-health chimera milestone should describe healing overflow instead of healing 0 HP');
     assert(logs.some((entry) => entry.text.includes('暴食之口启动')), 'Head plugin install should have an immediate combat side effect');
     assert(logs.some((entry) => entry.text.includes('纳米皮肤') && entry.text.includes('自适应硬化')), 'Skin plugin install should have an immediate defensive side effect');
+    assert(!logs.some((entry) => entry.text.includes('纳米皮肤') && entry.text.includes('恢复 0 点生命')), 'Full-health Nano Skin should describe healing overflow instead of healing 0 HP');
 
     engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_BACK'), claire, null, teamId);
     engine.executeSupportSkill(chimeraInstallSkillByStatus('PLUG_HEART'), claire, null, teamId);
@@ -1448,6 +1706,47 @@ export function runCharacterHookCases(): string[] {
     assert(claire.status.some((status) => status.type === 'SPELL_BLOCK' && status.sourceId === 'chimera_disaster_omen'), '6-plugin milestone should grant disaster omen spell block');
     assert(logs.some((entry) => entry.text.includes('灾厄预兆')), '6-plugin milestone should be logged');
     cases.push('Succubus chimera plugin milestones');
+  }
+
+  {
+    const succubus = makeFighter('克蕾儿丝菲尔@A');
+    const target = makeFighter('石化魔眼致死靶@B');
+    const { engine, logs } = makeDeathEngine([succubus, target]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    localProject.setCurrentHp(engine.fighters[1], 1);
+
+    engine.executeSupportSkill(
+      chimeraInstallSkillByStatus('PLUG_EYE'),
+      engine.fighters[0],
+      null,
+      engine.getTeamId(engine.fighters[0]),
+    );
+
+    assert(engine.fighters[1].isDead || engine.fighters[1].isDeadAnnounced, 'Lethal Stone Eye calibration should defeat its target');
+    assert(!engine.fighters[1].status.some((status) => status.type === 'WEAK'), 'Stone Eye must not attach Weak after its side damage already defeated the target');
+    assert(!logs.some((entry) => entry.text.includes('石化魔眼校准') && entry.text.includes('施加虚弱')), 'Lethal Stone Eye log must not claim a post-death Weak application');
+    cases.push('Chimera Stone Eye cannot apply or announce Weak after lethal side damage');
+  }
+
+  {
+    const succubus = makeFighter('克蕾儿丝菲尔@A');
+    const target = makeFighter('毒尾抵挡靶@B');
+    target.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'generic_spell_block' });
+    const { engine, logs } = makeDeathEngine([succubus, target]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+
+    engine.executeSupportSkill(
+      chimeraInstallSkillByStatus('PLUG_TAIL'),
+      engine.fighters[0],
+      null,
+      engine.getTeamId(engine.fighters[0]),
+    );
+
+    assert(!engine.fighters[1].status.some((status) => status.type === 'POISON'), 'Blocked Chimera tail strike must not inject poison through spell block');
+    assert(!logs.some((entry) => entry.text.includes('灾厄毒尾甩击') && entry.text.includes('被注入剧毒')), 'Blocked Chimera tail log must not claim poison success');
+    cases.push('Chimera tail status obeys the resolved damage and defense outcome');
   }
 
   {
@@ -1531,6 +1830,66 @@ export function runCharacterHookCases(): string[] {
 
   {
     const bunny = makeFighter('兔卷卷@A');
+    const ting = makeFighter('小汀@B');
+    const { engine, logs } = makeDeathEngine([bunny, ting]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    engine.fighters[0].mag = 1000;
+    localProject.setCurrentHp(engine.fighters[1], 20);
+
+    withRandomSequence([0.2, ...Array(20).fill(0.4)], () => {
+      engine.executeSkillAction('v_rabbit_calc_rng', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const transformIndex = logs.findIndex((entry) => entry.type === 'transform' && entry.text.includes(engine.fighters[1].name));
+    const totalIndex = logs.findIndex((entry) => entry.text.includes('【弹幕共鸣】') && entry.text.includes('总计造成'));
+    assert(transformIndex >= 0 && totalIndex > transformIndex, 'Rabbit multi-hit should settle a phase transformation before the remaining barrage and aggregate log');
+    assert(logs.filter((entry) => entry.text.includes('锁血保护')).length === 1, 'Rabbit multi-hit should not repeatedly hit an unflushed phase-one lock');
+    cases.push('Rabbit multi-hit flushes phase transitions between segments');
+  }
+
+  {
+    const bunny = makeFighter('兔卷卷@A');
+    const ting = makeFighter('小汀@B');
+    const { engine, logs } = makeDeathEngine([bunny, ting]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    localProject.setCurrentHp(engine.fighters[1], Math.floor(engine.fighters[1].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[1]);
+    engine.fighters[0].mag = 1200;
+    localProject.setCurrentHp(engine.fighters[1], 10);
+
+    withRandomSequence([0.99, 0.5, 0.5, 0.5], () => {
+      engine.executeSkillAction('v_rabbit_calc_rng', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const damageIndex = logs.findIndex((entry) => entry.text.includes('无休加班压垮') && entry.text.includes('实际造成'));
+    const defianceIndex = logs.findIndex((entry) => entry.text.includes('【不甘倒下】'));
+    const statusIndex = logs.findIndex((entry) => entry.text.includes('【无休加班】') && entry.type === 'debuff');
+    assert(damageIndex >= 0 && defianceIndex > damageIndex, 'Rabbit overtime hit should log its damage before Ting death-save resolution');
+    assert(statusIndex > defianceIndex, 'Rabbit overtime post-hit statuses should be logged after Ting death-save resolution');
+    cases.push('Rabbit calculator orders damage-save-status causally');
+  }
+
+  {
+    const bunny = makeFighter('兔卷卷@A');
+    const target = makeFighter('换装抵挡测试靶@B');
+    target.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'morphling_linken_sphere' });
+    const { engine, logs } = makeDeathEngine([bunny, target]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+
+    withRandomSequence([0.5, 0, 0], () => {
+      engine.executeSkillAction('v_rabbit_style_switch', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[0].status.some((status) => status.type.startsWith('STYLE_')), 'Enemy spell block should not prevent Rabbit from switching styles');
+    assert(!logs.some((entry) => entry.text.includes('挡下') && entry.text.includes('【切换人设】')), 'Rabbit self-style switch should never be described as blocked by an enemy defense');
+    cases.push('Rabbit style switch cannot be blocked by an enemy spell defense');
+  }
+
+  {
+    const bunny = makeFighter('兔卷卷@A');
     const target = makeFighter('归零测试靶@B');
     target.maxHp = 100000;
     localProject.setCurrentHp(target, 100000);
@@ -1545,6 +1904,71 @@ export function runCharacterHookCases(): string[] {
     assert(engine.fighters[0].status.some((status) => status.type === 'RABBIT_ZERO_HASTE' && status.duration === 2), 'Rabbit zero haste should add a temporary status');
     assert(engine.fighters[1].status.some((status) => status.type === 'ZEROED'), 'Rabbit zero should still zero the target');
     cases.push('Rabbit zero haste is temporary');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const emote = makeFighter('表情@B');
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for deferred event ordering tests');
+    tokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    tokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    tokusatsu.isTokusatsu = true;
+    tokusatsu.transformed = true;
+    tokusatsu.atk = 10000;
+    emote.maxHp = 100;
+    localProject.setCurrentHp(emote, 50);
+    emote.status.push({ type: 'EMOTE_ADAPT', duration: 2 });
+    const { engine, logs } = makeDeathEngine([tokusatsu, emote]);
+
+    engine.executeSkillAction('bujin_monster_combo', engine.fighters[0], engine.fighters[1]);
+
+    const hitIndex = logs.findIndex((entry) => entry.text.includes('第 1 斩命中'));
+    const adaptIndex = logs.findIndex((entry) => entry.text.includes('【适应转轮】') && entry.text.includes('记录'));
+    const deathIndex = logs.findIndex((entry) => entry.text.includes('【武神怪兽连斩】') && entry.type === 'death');
+    assert(hitIndex >= 0 && adaptIndex > hitIndex && deathIndex > adaptIndex, 'Per-target adaptation should be logged after its hit and before the resulting death');
+    cases.push('Tokusatsu multi-hit flushes target reactions before death');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const target = makeFighter('咆哮状态来源测试靶@B');
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for Monster Roar status-log tests');
+    tokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    tokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    tokusatsu.isTokusatsu = true;
+    tokusatsu.transformed = true;
+    target.maxHp = 10000;
+    localProject.setCurrentHp(target, 10000);
+    const { engine, logs } = makeDeathEngine([tokusatsu, target]);
+
+    withRandomSequence([0], () => {
+      engine.executeSkillAction('monster_roar', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[1].status.some((status) => status.type === 'AIRBORNE'), 'Monster Roar forced roll should apply airborne');
+    assert(logs.some((entry) => entry.text.includes('【怪兽咆哮】') && entry.text.includes(engine.fighters[1].name) && entry.text.includes('击飞 1 回合')), 'Monster Roar should log the concrete source and duration of airborne');
+    cases.push('Monster Roar logs every applied control source');
+  }
+
+  {
+    const bunny = makeFighter('兔卷卷@A');
+    const claire = makeFighter('克蕾儿丝菲尔@B');
+    const { engine, logs } = makeDeathEngine([bunny, claire]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    engine.fighters[0].mag = 1000;
+    localProject.setCurrentHp(engine.fighters[1], 200);
+
+    engine.executeSkillAction('v_rabbit_megaphone', engine.fighters[0], engine.fighters[1]);
+
+    const damageIndex = logs.findIndex((entry) => entry.text.includes('刺耳魔音贯耳') && entry.text.includes('实际承受'));
+    const transformIndex = logs.findIndex((entry) => entry.type === 'transform' && entry.text.includes(engine.fighters[1].name));
+    const immunityIndex = logs.findIndex((entry) => entry.text.includes('异变核心') && entry.text.includes('眩晕'));
+    assert(damageIndex >= 0 && transformIndex > damageIndex && immunityIndex > transformIndex, 'Megaphone should settle damage, phase transformation, then the transformed control immunity in order');
+    assert(!logs.some((entry) => entry.text.includes(engine.fighters[1].name) && entry.text.includes('被刺耳魔音震晕')), 'Megaphone must not claim stun success before a phase transformation grants immunity');
+    cases.push('Rabbit Megaphone logs transformation before final control result');
   }
 
   {
@@ -1650,6 +2074,30 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const wt = makeFighter('M1A2_abrams_sep@A');
+    const marked = makeFighter('激光标记目标@B');
+    const decoy = makeFighter('随机火控诱饵@C');
+    const { engine, logs } = makeDeathEngine([wt, marked, decoy]);
+    const engineWt = engine.fighters[0];
+    localProject.setCurrentHp(engineWt, Math.floor(engineWt.maxHp * 0.4));
+    engine.handleTransformations(engineWt);
+    engine.fighters.slice(1).forEach((target) => {
+      target.maxHp = 100000;
+      localProject.setCurrentHp(target, 100000);
+    });
+    engineWt.wtMarkedTargetId = engine.fighters[1].id;
+    engineWt.status.push({ type: 'AIM', duration: 2 });
+
+    engine.executeSkillAction('wt_t58_knockup', engineWt, null);
+
+    assert(engine.fighters[1].stats.dmgTaken > 0, 'War Thunder fire control should hit its live laser-marked target');
+    assert(engine.fighters[2].stats.dmgTaken === 0, 'War Thunder fire control must not choose a random decoy while a live laser mark exists');
+    assert(engineWt.wtMarkedTargetId === undefined, 'A non-CAS War Thunder attack should consume its one-use laser mark');
+    assert(logs.some((entry) => entry.text.includes('火控优先窗口关闭')), 'War Thunder should log that the one-use fire-control mark was consumed');
+    cases.push('War Thunder laser mark prioritizes exactly the next offensive action');
+  }
+
+  {
     const fighters = [
       makeFighter('M1A2_abrams_sep@A'),
       ...Array.from({ length: 6 }, (_, index) => makeFighter(`CAS低血靶${index + 1}@B`)),
@@ -1705,6 +2153,66 @@ export function runCharacterHookCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('大招充能完毕')), 'Valorant hook should keep the original ult-ready log');
     assert(!logs.some((entry) => /valo_ult_/.test(entry.text)), 'Valorant ult-ready log should not leak internal skill ids');
     cases.push('Valorant skill-selection hook');
+  }
+
+  {
+    const sigua = makeFighter('丝瓜uli@A');
+    const enemy = makeFighter('宇宙分裂抵挡测试靶@B');
+    enemy.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'morphling_linken_sphere' });
+    const { engine, logs } = makeDeathEngine([sigua, enemy]);
+
+    engine.executeSkillAction('valo_ult_cosmic_divide', engine.fighters[0], engine.fighters[1]);
+
+    assert(engine.fighters[0].status.some((status) => status.type === 'INVUL'), 'Enemy spell block should not prevent Valorant Cosmic Divide from protecting allies');
+    assert(engine.fighters[1].status.some((status) => status.type === 'SPELL_BLOCK'), 'Cosmic Divide should not consume an unrelated enemy spell block');
+    assert(!logs.some((entry) => entry.text.includes('挡下') && entry.text.includes('【宇宙分裂】')), 'Cosmic Divide should never be logged as blocked by an enemy defense');
+    cases.push('enemy spell defense cannot block Valorant Cosmic Divide');
+  }
+
+  {
+    const sigua = makeFighter('丝瓜uli@A');
+    const ally = makeFighter('复活队友@A');
+    const enemy = makeFighter('复活抵挡测试靶@B');
+    ally.currentHp = 0;
+    ally.hpPct = 0;
+    ally.isDead = true;
+    ally.isDeadAnnounced = true;
+    enemy.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'morphling_linken_sphere' });
+    const { engine, logs } = makeDeathEngine([sigua, ally, enemy]);
+
+    engine.executeSkillAction('valo_ult_resurrection', engine.fighters[0], engine.fighters[2]);
+
+    assert(!engine.fighters[1].isDead && engine.fighters[1].currentHp === engine.fighters[1].maxHp, 'Enemy spell block should not prevent Valorant Resurrection from restoring an ally');
+    assert(engine.fighters[2].status.some((status) => status.type === 'SPELL_BLOCK'), 'Resurrection should not consume an unrelated enemy spell block');
+    assert(!logs.some((entry) => entry.text.includes('挡下') && entry.text.includes('【复活】')), 'Resurrection should never be logged as blocked by an enemy defense');
+    cases.push('enemy spell defense cannot block Valorant Resurrection');
+  }
+
+  {
+    const areaStatusUlts = [
+      { id: 'valo_ult_lockdown', name: '全面封锁', status: 'STUN' },
+      { id: 'valo_ult_vipers_pit', name: '蝰蛇神殿', status: 'POISON' },
+      { id: 'valo_ult_null_cmd', name: '全面压制', status: 'SILENCE' },
+      { id: 'valo_ult_neural_theft', name: '神经取缔', status: 'NEURAL_THEFT_DEBUFF' },
+    ];
+
+    areaStatusUlts.forEach(({ id, name, status }) => {
+      const sigua = makeFighter('丝瓜uli@A');
+      const blocked = makeFighter(`${name}抵挡目标@B`);
+      const exposed = makeFighter(`${name}生效目标@C`);
+      blocked.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'morphling_linken_sphere' });
+      const { engine, logs } = makeDeathEngine([sigua, blocked, exposed]);
+
+      engine.executeSkillAction(id, engine.fighters[0], engine.fighters[1]);
+
+      assert(!engine.fighters[1].status.some((entry) => entry.type === status), `${name} should not affect the target whose spell block consumed its own pulse`);
+      assert(!engine.fighters[1].status.some((entry) => entry.type === 'SPELL_BLOCK'), `${name} should consume the protected target's spell block`);
+      assert(engine.fighters[2].status.some((entry) => entry.type === status), `${name} should still affect an unprotected second target`);
+      const outcomeLog = logs.find((entry) => entry.type === 'skill' && entry.text.includes(`【${name}】`));
+      assert(outcomeLog?.text.includes(engine.fighters[2].name), `${name} outcome should name the target that was actually affected`);
+      assert(!outcomeLog?.text.includes(engine.fighters[1].name), `${name} success summary must not claim the blocked target was affected`);
+    });
+    cases.push('Valorant area status ults settle spell blocks independently per target');
   }
 
   {
@@ -1853,6 +2361,7 @@ export function runCharacterHookCases(): string[] {
   {
     const morphling = makeFighter('水人@A');
     const tokusatsu = makeFighter('刺猬人@B');
+    morphling.status.push({ type: 'AIM', duration: 1 });
     const { engine, logs } = makeDeathEngine([morphling, tokusatsu]);
     engine.fighters[1].status.push(
       { type: 'BKB', duration: 1, sourceId: 'tokusatsu_defiance' },
@@ -1973,7 +2482,8 @@ export function runCharacterHookCases(): string[] {
     assert(engineEmote.maxHp === 101, `Emote should copy 100 max HP from killer, got ${engineEmote.maxHp}`);
     assert((engineEmote.emoteAdaptStats?.atk ?? 0) === 10, `Emote adapt atk should record 10, got ${engineEmote.emoteAdaptStats?.atk}`);
     assert((engineEmote.emoteAdaptStats?.maxHp ?? 0) === 100, `Emote adapt maxHp should record 100, got ${engineEmote.emoteAdaptStats?.maxHp}`);
-    assert(engineOwner.stats.kills === 0, `Temporary owner kills should be cleared, got ${engineOwner.stats.kills}`);
+    assert(engineOwner.stats.kills === 3, `Owner true kill statistics should remain authoritative, got ${engineOwner.stats.kills}`);
+    assert(engineOwner.emoteClaimedKills === 3, `Owner recognition ledger should consume all 3 claimable kills, got ${engineOwner.emoteClaimedKills}`);
     assert(engineOwner.atk === ownerAtkBefore + 10, `Owner should receive this death's atk bonus, got ${engineOwner.atk}`);
     assert(engineOwner.maxHp === ownerMaxHpBefore + 100, `Owner should receive this death's max HP bonus, got ${engineOwner.maxHp}`);
     assert(logs.some((entry) => entry.text.includes('属性和生命不会降低')), 'Emote death log should clarify copied stats and HP do not reduce source');
@@ -1989,7 +2499,6 @@ export function runCharacterHookCases(): string[] {
     assert(engineOwner.maxHp === ownerMaxHpBefore, `Owner temporary HP bonus should be removed after emote revive, got ${engineOwner.maxHp}`);
     assert(engineEmote.atk === 11, `Emote permanent adaptation should remain after revive, got ${engineEmote.atk}`);
     assert(engineEmote.currentHp === engineEmote.maxHp && engineEmote.maxHp === 101, `Emote should revive to copied max HP, got ${engineEmote.currentHp}/${engineEmote.maxHp}`);
-
     engine.fighters[0].atk = 200;
     engine.fighters[0].maxHp = 500;
     localProject.setCurrentHp(engine.fighters[0], 500);
@@ -1998,7 +2507,16 @@ export function runCharacterHookCases(): string[] {
     });
     assert(engineOwner.atk === ownerAtkBefore + 20, `Owner second bonus should use only the second killer slice, got ${engineOwner.atk}`);
     assert(engineOwner.maxHp === ownerMaxHpBefore + 50, `Owner second HP bonus should use only the second killer slice, got ${engineOwner.maxHp}`);
-    cases.push('Emote death adaptation owner bonus and revive');
+
+    for (let i = 0; i < 3; i += 1) {
+      engine.turnCount += 1;
+      engine.finishStep({ current: false });
+    }
+
+    assert(!engineEmote.isDead, 'Emote should be allowed to revive again from the same surviving zero-kill anchors');
+    assert(engineOwner.atk === ownerAtkBefore, `Owner second temporary bonus should be removed after emote revives again, got ${engineOwner.atk}`);
+    assert(engineOwner.maxHp === ownerMaxHpBefore, `Owner second temporary HP bonus should be removed after emote revives again, got ${engineOwner.maxHp}`);
+    cases.push('Emote death adaptation owner bonus and reusable zero-kill anchors');
   }
 
   {
@@ -2041,6 +2559,7 @@ export function runCharacterHookCases(): string[] {
     assert(engine.fighters[2].emoteFinalChallengeUsed, 'Emote final owner challenge should be marked as used');
     assert(logs.some((entry) => entry.text.includes('最终认主挑战')), 'Emote should log the final owner challenge');
 
+    const secondDeathLogStart = logs.length;
     withRandomSequence([0], () => {
       engine.markDefeated(engine.fighters[2], { message: '💀 【测试】表情终局第二次倒下。', killer: engine.fighters[0] });
     });
@@ -2048,7 +2567,57 @@ export function runCharacterHookCases(): string[] {
 
     assert(engine.fighters[2].emoteFinalDead, 'Emote should truly die in two-player endgame after final challenge is used');
     assert(logs.some((entry) => entry.text.includes('场上只剩 2 名玩家')), 'Emote true-death log should explain the low-player condition');
+    const secondDeathLogs = logs.slice(secondDeathLogStart);
+    assert(!secondDeathLogs.some((entry) => entry.text.includes('【认主倒计时】')), 'Emote must not announce a three-tick revival after its final challenge is already spent');
+    assert(!secondDeathLogs.some((entry) => entry.text.includes('【四处认主】')), 'Emote must not create a temporary owner immediately before unavoidable true death');
     cases.push('Emote final owner challenge then true death in two-player endgame');
+  }
+
+  {
+    const wt = makeFighter('M1A2_abrams_sep@A');
+    const anchor = makeFighter('最终认主零杀锚点@B');
+    const emote = makeFighter('表情@E');
+    const { engine, logs } = makeDeathEngine([wt, anchor, emote]);
+    const engineWt = engine.fighters[0];
+    localProject.setCurrentHp(engineWt, Math.floor(engineWt.maxHp * 0.4));
+    engine.handleTransformations(engineWt);
+    engineWt.atk = 10000;
+    engineWt.status.push({ type: 'AIM', duration: 1 });
+    engine.fighters[2].maxHp = 100;
+    localProject.setCurrentHp(engine.fighters[2], 100);
+
+    engine.executeSkillAction('wt_t58_knockup', engineWt, engine.fighters[2]);
+
+    const revivedEmote = engine.fighters[2];
+    assert(revivedEmote.emoteFinalChallengeUsed && !revivedEmote.isDead, 'Lethal T-58 hit should allow Emote to consume its final owner challenge');
+    assert(!revivedEmote.status.some((status) => ['WT_AIRBORNE', 'WT_AMMO_EXPOSED'].includes(status.type)), 'An old T-58 hit must not attach post-hit module effects to Emote after revival');
+    const challengeIndex = logs.findIndex((entry) => entry.text.includes('【最终认主挑战】'));
+    assert(challengeIndex >= 0, 'T-58 Emote regression should trigger the final owner challenge');
+    assert(!logs.slice(challengeIndex + 1).some((entry) => entry.text.includes('弹药架暴露') && entry.text.includes('表情')), 'T-58 must not expose the ammo rack of Emote\'s newly revived body');
+    cases.push('post-hit effects cannot follow Emote across a defeat-revive boundary');
+  }
+
+  {
+    const attacker = makeFighter('致死结算测试者@A');
+    const emote = makeFighter('表情@B');
+    attacker.atk = 10000;
+    attacker.status.push({ type: 'AIM', duration: 1 });
+    emote.maxHp = 100;
+    localProject.setCurrentHp(emote, 50);
+    emote.status.push({ type: 'EMOTE_ADAPT', duration: 2 });
+    const { engine, logs } = makeDeathEngine([attacker, emote]);
+
+    withRandomSequence([0.5, 0.5, 0.5], () => {
+      engine.executeSkillAction('rider_kick', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const settlementIndex = logs.findIndex((entry) => entry.text.includes('📌 实际结算：表情'));
+    const adaptIndex = logs.findIndex((entry) => entry.text.includes('【适应转轮】') && entry.text.includes('记录'));
+    const deathIndex = logs.findIndex((entry) => entry.type === 'death' && entry.text.includes('表情'));
+    assert(settlementIndex >= 0, 'A mitigated lethal hit should still report its actual HP settlement');
+    assert(adaptIndex > settlementIndex, 'Deferred adaptation detail should follow the lethal hit settlement');
+    assert(deathIndex > adaptIndex, 'Lethal hit death should be announced after mitigation detail');
+    cases.push('mitigated lethal hit logs settlement before reactions and death');
   }
 
   {
@@ -2088,6 +2657,176 @@ export function runCharacterHookCases(): string[] {
     assert((engine.fighters[1].yuzuShield ?? 0) > 0, 'Yuzu teammate should receive opening mirror shield');
     assert(logs.some((entry) => entry.text.includes('镜界开幕')), 'Yuzu opening shield should be logged');
     cases.push('Yuzu factory and opening shield');
+  }
+
+  {
+    const joker = makeFighter('屑@A');
+    const yuzu = makeFighter('柚子@B');
+    joker.status.push({ type: 'AIM', duration: 1 });
+    const { engine, logs } = makeDeathEngine([joker, yuzu]);
+
+    withRandomSequence([0.5, 0.5], () => {
+      engine.executeSkillAction('cheesy_charm', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[1].currentHp === engine.fighters[1].maxHp, 'Yuzu opening shield should absorb the low-damage charm hit without HP loss');
+    assert(!engine.fighters[1].status.some((status) => status.type === 'CHARMED'), 'A target status must not land when the shield absorbs all HP damage');
+    assert(logs.some((entry) => entry.text.includes('状态结算') && entry.text.includes('【魅惑】未生效')), 'Shielded target-status skills should explicitly log that the status did not land');
+    cases.push('fully shielded standard attacks explain failed target statuses');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for Yuzu death-save ordering tests');
+    tokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    tokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    tokusatsu.isTokusatsu = true;
+    tokusatsu.transformed = true;
+    tokusatsu.maxHp = 1000;
+    localProject.setCurrentHp(tokusatsu, 20);
+    yuzu.atk = 10000;
+    const { engine, logs } = makeDeathEngine([yuzu, tokusatsu]);
+
+    withRandomSequence([0.15, 0.5, 0, 0.5], () => {
+      engine.executeSkillAction('yuzu_hammer_crush', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const hitIndex = logs.findIndex((entry) => entry.text.includes('第 1/2 击抽到 刀'));
+    const bleedIndex = logs.findIndex((entry) => entry.text.includes('【刀】') && entry.text.includes('流血'));
+    const defianceIndex = logs.findIndex((entry) => entry.text.includes('【悲愿不倒】') && entry.text.includes('清除异常'));
+    assert(hitIndex >= 0 && defianceIndex > hitIndex, 'Tokusatsu death-save should resolve after the lethal Yuzu hit is reported');
+    assert(bleedIndex < 0, 'A lethal Yuzu hit must not report a bleed that its cleansing death-save suppresses');
+    assert(!engine.fighters[1].status.some((status) => status.type === 'BLEED'), 'Tokusatsu death-save cleanse should remove the lethal Yuzu hit bleed');
+    cases.push('cleansing death-save suppresses lethal hit on-hit debuffs');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const ting = makeFighter('小汀@B');
+    yuzu.atk = 10000;
+    ting.maxHp = 1000;
+    localProject.setCurrentHp(ting, 100);
+    const { engine, logs } = makeDeathEngine([yuzu, ting]);
+
+    withRandomSequence([0.15, 0.5, 0, 0.5], () => {
+      engine.executeSkillAction('yuzu_hammer_crush', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const firstHitIndex = logs.findIndex((entry) => entry.text.includes('第 1/2 击抽到 刀'));
+    const lockIndex = logs.findIndex((entry) => entry.text.includes('锁血保护'));
+    const transformIndex = logs.findIndex((entry) => entry.text.includes('怨气爆发') && entry.text.includes('怨念恶灵'));
+    const bleedIndex = logs.findIndex((entry) => entry.text.includes('【刀】') && entry.text.includes('流血'));
+    assert(firstHitIndex >= 0, 'Yuzu transform-order regression should log the first knife hit');
+    assert(lockIndex > firstHitIndex, 'Yuzu phase-lock reaction should follow the hit that caused it');
+    assert(transformIndex > lockIndex, 'Yuzu-triggered phase transformation should follow its lock-blood reaction');
+    assert(bleedIndex > transformIndex, 'Yuzu weapon debuff should only apply after the target completes its phase transformation');
+    cases.push('Yuzu hit logs phase lock and transform before weapon debuff');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const target = makeFighter('镜界致死测试目标@B');
+    yuzu.atk = 10000;
+    target.maxHp = 20;
+    target.def = 0;
+    localProject.setCurrentHp(target, 20);
+    const { engine, logs } = makeDeathEngine([yuzu, target]);
+
+    withRandomSequence([0.15, 0.5, 0, 0.5], () => {
+      engine.executeSkillAction('yuzu_hammer_crush', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const hitIndex = logs.findIndex((entry) => entry.text.includes('第 1/2 击抽到 刀'));
+    const deathIndex = logs.findIndex((entry) => entry.type === 'death' && entry.text.includes('镜界致死测试目标'));
+    assert(hitIndex >= 0 && deathIndex > hitIndex, 'Yuzu lethal weapon hit should be reported before its death settlement');
+    assert(!logs.some((entry) => entry.text.includes('【刀】镜界致死测试目标') && entry.text.includes('流血')), 'Yuzu lethal weapon hit must not apply a debuff to an already defeated target');
+    assert(!engine.fighters[1].status.some((status) => status.type === 'BLEED'), 'Yuzu lethal weapon hit must leave no bleed on the defeated target');
+    cases.push('Yuzu lethal weapon hit does not debuff defeated target');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const ting = makeFighter('小汀@B');
+    yuzu.atk = 10000;
+    ting.maxHp = 1000;
+    localProject.setCurrentHp(ting, 1);
+    const { engine, logs } = makeDeathEngine([yuzu, ting]);
+
+    withRandomSequence([0.15, 0.5, 0, 0.5], () => {
+      engine.executeSkillAction('yuzu_hammer_crush', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[1].transformed, 'A zero-HP-damage phase-lock hit should still complete Ting phase transformation');
+    const protectedHitIndex = logs.findIndex((entry) => entry.text.includes('第 1/2 击') && entry.text.includes('阶段锁血保护'));
+    const lockIndex = logs.findIndex((entry) => entry.text.includes('强制保留最后 1 点生命'));
+    const transformIndex = logs.findIndex((entry) => entry.text.includes('怨气爆发') && entry.text.includes('怨念恶灵'));
+    assert(protectedHitIndex >= 0 && lockIndex > protectedHitIndex && transformIndex > lockIndex, 'Zero-damage phase lock should log hit, protection, then transformation in order');
+    cases.push('Yuzu zero-damage phase lock still transforms target');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const enemy = makeFighter('拼好饭测试目标@B');
+    const { engine, logs } = makeDeathEngine([yuzu, enemy]);
+    const engineYuzu = engine.fighters[0];
+    const engineEnemy = engine.fighters[1];
+    engineYuzu.maxHp = 1000;
+    localProject.setCurrentHp(engineYuzu, 500);
+    engineEnemy.maxHp = 10000;
+    localProject.setCurrentHp(engineEnemy, 10000);
+    engineEnemy.def = 0;
+
+    withRandomSequence([0.88, 0.5, 0, 0.5], () => {
+      engine.executeSkillAction('yuzu_hammer_crush', engineYuzu, engineEnemy);
+    });
+
+    assert(engineYuzu.currentHp === 800, `Yuzu spoon meal should heal 30% max HP before attacking, got ${engineYuzu.currentHp}/1000`);
+    const mealIndex = logs.findIndex((entry) => entry.text.includes('【拼好饭】'));
+    const spoonHitIndex = logs.findIndex((entry) => entry.text.includes('第 1/2 击抽到 勺子'));
+    assert(mealIndex >= 0, 'Yuzu spoon draw should log the meal passive');
+    assert(spoonHitIndex > mealIndex, 'Yuzu spoon meal should resolve before the spoon attack log');
+    assert(logs[spoonHitIndex]?.text.includes('实际造成') && !logs[spoonHitIndex]?.text.includes('实际造成 0 点'), 'Yuzu spoon hit should still attack after healing');
+    cases.push('Yuzu spoon meal heals before the spoon hit still attacks');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const ally = makeFighter('柚子队友@A');
+    const claire = makeFighter('克蕾儿丝菲尔@B');
+    const { engine, logs } = makeDeathEngine([yuzu, ally, claire]);
+    const engineYuzu = engine.fighters[0];
+    const engineClaire = engine.fighters[2];
+    engineClaire.status.push({ type: 'CTR_DRAIN', duration: 2 });
+
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_hammer_crush', engineYuzu, engineClaire);
+    });
+
+    const triggerIndex = logs.findIndex((entry) => entry.text.includes('触发了【汲取反击】'));
+    assert(triggerIndex >= 0, 'Claire drain counter should trigger against Yuzu');
+    assert(logs[triggerIndex + 1]?.text.includes('【汲取反击】') && logs[triggerIndex + 1]?.text.includes('先结算对方防护与分摊'), 'Claire drain counter should immediately explain its damage settlement before Yuzu mirror logs');
+    cases.push('Claire drain counter logs immediate settlement against Yuzu');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const ally = makeFighter('柚子队友@A');
+    const claire = makeFighter('克蕾儿丝菲尔@B');
+    const { engine, logs } = makeDeathEngine([yuzu, ally, claire]);
+    const engineYuzu = engine.fighters[0];
+    const engineClaire = engine.fighters[2];
+    engineClaire.status.push({ type: 'CTR_VOID', duration: 2 });
+
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_hammer_crush', engineYuzu, engineClaire);
+    });
+
+    const triggerIndex = logs.findIndex((entry) => entry.text.includes('触发了【虚空反击】'));
+    assert(triggerIndex >= 0, 'Claire void counter should trigger against Yuzu');
+    assert(logs[triggerIndex + 1]?.text.includes('【虚空反击】') && logs[triggerIndex + 1]?.text.includes('开始结算防护与分摊'), 'Claire void counter should immediately explain its damage settlement before Yuzu mirror logs');
+    cases.push('Claire void counter logs immediate settlement against Yuzu');
   }
 
   {
@@ -2148,7 +2887,7 @@ export function runCharacterHookCases(): string[] {
     const yuzu = makeFighter('柚子@A');
     const ally = makeFighter('分摊队友@A');
     const enemy = makeFighter('分摊敌人@B');
-    const { engine } = makeDeathEngine([yuzu, ally, enemy]);
+    const { engine, logs } = makeDeathEngine([yuzu, ally, enemy]);
     const engineYuzu = engine.fighters[0];
     const engineAlly = engine.fighters[1];
     const attacker = engine.fighters[2];
@@ -2164,6 +2903,7 @@ export function runCharacterHookCases(): string[] {
     assert(actual === 0, `Yuzu phase-1 reduction plus 100% team share should leave no HP damage on Yuzu, got ${actual}`);
     assert(engineYuzu.currentHp === 1000, `Yuzu should take no HP damage after full sharing, got ${engineYuzu.currentHp}`);
     assert(engineAlly.currentHp === 915, `Yuzu ally should take 85 shared damage, got ${engineAlly.currentHp}`);
+    assert(logs.some((entry) => entry.text.includes('【镜界分摊结算】分摊队友 分得 85 点伤害') && entry.text.includes('生命实际损失 85 点')), 'Yuzu share should log allocated and actual HP damage for the teammate');
 
     engineYuzu.yuzuPhase = 2;
     engine.markDefeated(engineAlly, { message: '💀 【测试】分摊队友倒下。', awardKill: false });
@@ -2267,12 +3007,13 @@ export function runCharacterHookCases(): string[] {
     withRandomSequence([0.5], () => {
       engine.executeSkillAction('yuzu_daughter_reckoning', engineYuzu, engineTarget);
     });
-    assert(engineYuzu.yuzuMarkedHitCount === 1, `Yuzu should not count twice in the same global turn, got ${engineYuzu.yuzuMarkedHitCount}`);
+    assert(engineYuzu.yuzuMarkedHitCount === 1, `Yuzu should not count twice in the same large round, got ${engineYuzu.yuzuMarkedHitCount}`);
     engine.turnCount = 78;
+    engine.battleState.largeRound.number += 1;
     withRandomSequence([0.5], () => {
       engine.executeSkillAction('yuzu_daughter_reckoning', engineYuzu, engineTarget);
     });
-    assert(Number(engineYuzu.yuzuMarkedHitCount) === 2, `Yuzu should count again after the global turn advances, got ${engineYuzu.yuzuMarkedHitCount}`);
+    assert(Number(engineYuzu.yuzuMarkedHitCount) === 2, `Yuzu should count again after the large round advances, got ${engineYuzu.yuzuMarkedHitCount}`);
 
     engineTarget.maxHp = 10000;
     localProject.setCurrentHp(engineTarget, 10000);
@@ -2384,9 +3125,10 @@ export function runCharacterHookCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('屑 遭到表情的【万主归一】')), 'Emote all-masters test should trigger Joker redirect');
     assert(logs.some((entry) => entry.text.includes('账页被随机恶作剧带偏')), 'Emote all-masters should explain redirected ledger page');
     assert(engineJoker.stats.kills === 2, `Redirected Joker should not lose kills, got ${engineJoker.stats.kills}`);
-    assert(engineGamer.stats.kills === 1, `Directly hit gamer should lose one kill, got ${engineGamer.stats.kills}`);
-    assert(!logs.some((entry) => entry.text.includes('【击杀数回拨】屑')), 'Emote all-masters should not rewind a redirected Joker target');
-    cases.push('Emote all-masters ignores redirected Joker for kill rewind');
+    assert(engineGamer.stats.kills === 2, `Directly hit gamer should retain authoritative kills, got ${engineGamer.stats.kills}`);
+    assert(engineGamer.emoteClaimedKills === 1, `Directly hit gamer should lose one recognition-ledger kill, got ${engineGamer.emoteClaimedKills}`);
+    assert((engineJoker.emoteClaimedKills ?? 0) === 0, 'Emote all-masters should not consume a redirected Joker ledger entry');
+    cases.push('Emote all-masters isolates redirected targets and true kill stats');
   }
 
   return cases;

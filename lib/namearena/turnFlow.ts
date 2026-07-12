@@ -27,14 +27,24 @@ function hasWaitingCounterStatus(
 export function determineActor(
   alive: Fighter[],
   runtime?: Pick<TurnFlowRuntime, 'isPassiveCharmCounter'>,
+  priorityActorIds: readonly string[] = [],
 ): Fighter | null {
   if (alive.length === 0) return null;
-  const actionable = alive.filter(canActNormally);
+  const actionable = alive.filter((fighter) =>
+    canActNormally(fighter) &&
+    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+  );
   if (actionable.length === 0) return null;
+  const priorityIds = new Set(priorityActorIds);
+  const priorityCandidates = actionable.filter((fighter) => priorityIds.has(fighter.id));
   const candidates = runtime
     ? actionable.filter((fighter) => !hasWaitingCounterStatus(fighter, runtime))
     : actionable;
-  const actorPool = candidates.length > 0 ? candidates : actionable;
+  const actorPool = priorityCandidates.length > 0
+    ? priorityCandidates
+    : candidates.length > 0
+      ? candidates
+      : actionable;
   const actionWeight = (fighter: Fighter) => {
     let multiplier = 1;
     if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.13;
@@ -75,7 +85,7 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
   return false;
 }
 
-export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter): void {
+export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter, priorBlockingStatusType?: string): void {
   if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
     runtime.log('info', `⛺ ${actor.name} 正在场外OB摸鱼，暂时不参与战斗！`);
     return;
@@ -84,8 +94,9 @@ export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter): void {
   const blockingStatus = actor.status.find((status) =>
     isStatusType(status.type, CONTROL_STATUS_TYPES),
   );
-  if (blockingStatus) {
-    runtime.log('info', `💫 ${actor.name} 处于【${runtime.statusEffects[blockingStatus.type]?.name ?? blockingStatus.type}】状态，无法行动！`);
+  const blockingStatusType = blockingStatus?.type ?? priorBlockingStatusType;
+  if (blockingStatusType) {
+    runtime.log('info', `💫 ${actor.name} 处于【${runtime.statusEffects[blockingStatusType]?.name ?? blockingStatusType}】状态，无法行动！`);
   }
 }
 

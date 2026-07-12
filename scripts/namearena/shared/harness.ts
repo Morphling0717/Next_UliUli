@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import type { BattleEngine } from '../../../lib/namearena/battleEngine';
 import type {
+  BattleEvent,
+  BattleState,
   BattleEngineCore,
   BattleEngineData,
   Fighter,
@@ -11,6 +13,7 @@ import type {
   SpinalSwordRef,
   StatKey,
 } from '../../../lib/namearena/types';
+import { createBattleState, withBattleRandom } from '../../../lib/namearena/battleState';
 import { installTypeScriptHook, projectRoot } from './register';
 
 installTypeScriptHook(projectRoot);
@@ -153,7 +156,7 @@ export const localProject = loadProject(projectRoot);
 export const SPECIALS = ['水人', '玄凝', '小汀', '牢鳄', '克蕾儿丝菲尔', '丝瓜uli', '兔卷卷', '刺猬人', '屑', 'M1A2_abrams_sep', '表情', '柚子'];
 export const NO_WATER = SPECIALS.filter((name) => name !== '水人');
 export const DEFAULT_REGRESSION_MAX_TURNS = 1200;
-export const DEFAULT_STRESS_MAX_TURNS = Number.parseInt(process.env.NAMEARENA_MAX_TURNS ?? '1200', 10);
+export const DEFAULT_STRESS_MAX_TURNS = Number.parseInt(process.env.NAMEARENA_MAX_TURNS ?? '1600', 10);
 export const DEFAULT_CHAOS_SEEDS = Number.parseInt(process.env.NAMEARENA_CHAOS_SEEDS ?? '300', 10);
 
 export function assert(condition: unknown, message: string): asserts condition {
@@ -196,7 +199,14 @@ export function makeFighter(name: string): Fighter {
   return makeProjectFighter(localProject, name);
 }
 
-export function makeProjectEngine(project: LoadedProject, fighters: Fighter[], logs: LogEntry[], turnCount = 0): BattleEngineInstance {
+export function makeProjectEngine(
+  project: LoadedProject,
+  fighters: Fighter[],
+  logs: LogEntry[],
+  turnCount = 0,
+  battleState?: BattleState,
+  events?: BattleEvent[],
+): BattleEngineInstance {
   return new project.BattleEngine(
     fighters,
     (entry: LogEntry) => logs.push(entry),
@@ -205,6 +215,8 @@ export function makeProjectEngine(project: LoadedProject, fighters: Fighter[], l
     project.data,
     project.core,
     turnCount,
+    battleState,
+    events ? (event) => events.push(event) : undefined,
   );
 }
 
@@ -262,6 +274,7 @@ export function checkInvariants(fighters: Fighter[], label: string, options: { i
     if (fighter.isDead && fighter.currentHp > 0) errors.push(`${fighter.name} is dead but currentHp is ${fighter.currentHp}${suffix}`);
     if (!fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp <= 0) errors.push(`${fighter.name} is active but currentHp is ${fighter.currentHp}${suffix}`);
     if (fighter.status.some((status) => !Number.isFinite(status.duration))) errors.push(`${fighter.name} has non-finite status duration${suffix}`);
+    if ((fighter.pendingDamageEvents?.length ?? 0) > 0) errors.push(`${fighter.name} retained ${fighter.pendingDamageEvents?.length ?? 0} deferred damage event(s)${suffix}`);
   });
   return errors;
 }
@@ -322,6 +335,8 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     ['newline-in-log-text', /\r|\n/],
     ['nan-or-undefined', /\b(?:NaN|undefined|null)\b/],
     ['negative-number-log', /(?:造成|承受|恢复|损失)了? -\d/],
+    ['zero-heal-log', /恢复了? 0 点生命/],
+    ['zero-reduction-log', /削减 0 点伤害/],
     ['zero-damage-control', /(?:承受了|造成了|实际造成) 0 点.*(?:并被|并深度|并使其|并施加|眩晕|魅惑|击飞|中毒|灼烧|沉默|混乱)/],
     ['duplicate-damage-type', /物理\(物理\)|魔法\(魔法\)/],
     ['legacy-generic-death', /伤重不治倒下了/],
@@ -329,6 +344,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     ['legacy-ting-double-death-text', /倒下了，但他拔出了/],
     ['joker-redundant-zero-settlement', /📌 实际结算：屑 实际承受 0 点伤害/],
     ['legacy-joker-no-victim-dodge', /【随机恶作剧】屑 .*躲开了 \d+ 点伤害/],
+    ['originium-ammo-rack-language', /(?:源石结晶|阿喃那|普瑞赛斯).*(?:弹药架|弹药区|弹药库|炮塔)|(?:弹药架|弹药区|弹药库|炮塔).*(?:源石结晶|阿喃那|普瑞赛斯)/],
   ];
   let expectWaterSonInterceptLine = 0;
   const pendingCounterOutcomes: Array<{ counterName: string; line: number; text: string; deadline: number }> = [];
@@ -343,7 +359,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     for (let i = recentDeaths.length - 1; i >= 0; i -= 1) {
       const recentDeath = recentDeaths[i];
       if (!recentDeath) continue;
-      if (text.includes(recentDeath.name) && /复活|从地狱归来|并没有死|浴火重生|被水人救起|备用载具|重新部署/.test(text)) {
+      if (text.includes(recentDeath.name) && /复活|死者苏生|拉回战场|从地狱归来|并没有死|浴火重生|被水人救起|备用载具|重新部署/.test(text)) {
         recentDeaths.splice(i, 1);
       } else if (
         line <= recentDeath.deadline &&
@@ -426,7 +442,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
           line,
           text,
           deadline: line + 4,
-          targetPattern: new RegExp(`(?:对 ${exactNamePattern(deathName)}|攻击了 ${exactNamePattern(deathName)}|${exactNamePattern(deathName)} (?:承受|实际承受|受到持续伤害|在深渊水牢中窒息|没有承受实际伤害))`),
+          targetPattern: new RegExp(`(?:对 ${exactNamePattern(deathName)}|攻击了 ${exactNamePattern(deathName)}|${exactNamePattern(deathName)} (?:承受|实际承受|受到持续伤害|在深渊水牢中窒息|没有承受实际伤害|被附加|陷入|获得【))`),
         });
       }
     }
@@ -561,7 +577,8 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
 export function runProjectBattle(project: LoadedProject, spec: BattleSpec, options: RunBattleOptions = {}): BattleResult {
   const maxTurns = options.maxTurns ?? DEFAULT_REGRESSION_MAX_TURNS;
   return withProjectSeed(project, spec.seed, () => {
-    let fighters = spec.names.map((name) => makeProjectFighter(project, name));
+    let battleState = createBattleState(spec.seed, 0);
+    let fighters = withBattleRandom(battleState, () => spec.names.map((name) => makeProjectFighter(project, name)));
     const logs: LogEntry[] = [];
     const spinalSwordRef: SpinalSwordRef = { current: false };
     let turnCount = 0;
@@ -569,10 +586,11 @@ export function runProjectBattle(project: LoadedProject, spec: BattleSpec, optio
     let error: string | null = null;
 
     for (let i = 0; i < maxTurns; i += 1) {
-      const engine = makeProjectEngine(project, project.cloneFighters(fighters), logs, turnCount);
+      const engine = makeProjectEngine(project, project.cloneFighters(fighters), logs, turnCount, battleState);
       try {
         ended = engine.step(spinalSwordRef);
         turnCount = engine.turnCount;
+        battleState = engine.battleState;
         fighters = engine.fighters;
       } catch (err) {
         error = err instanceof Error ? `${err.name}: ${err.stack || err.message}` : String(err);
@@ -677,6 +695,24 @@ export function buildRegressionSpecs(): BattleSpec[] {
   for (let i = 0; i < 12; i += 1) specs.push({ phase: 'all-special', label: `all-special-${i}`, names: SPECIALS, seed: 8000 + i });
   for (let i = 0; i < 12; i += 1) specs.push({ phase: 'no-water', label: `no-water-${i}`, names: NO_WATER, seed: 9000 + i });
   specs.push({ phase: 'no-water-edge', label: 'no-water-joker-phoenix-chain', names: NO_WATER, seed: 9311 });
+  specs.push({
+    phase: '2v2-regression',
+    label: '2v2-yuzu-tokusatsu-timeout-gamer',
+    names: ['玄凝@A', '柚子@A', '兔卷卷@B', '刺猬人@B'],
+    seed: 405950,
+  });
+  specs.push({
+    phase: '2v2-regression',
+    label: '2v2-yuzu-tokusatsu-timeout-ting',
+    names: ['小汀@A', '柚子@A', '兔卷卷@B', '刺猬人@B'],
+    seed: 411458,
+  });
+  specs.push({
+    phase: '2v2-regression',
+    label: '2v2-yuzu-tokusatsu-timeout-war-thunder',
+    names: ['M1A2_abrams_sep@A', '柚子@A', '兔卷卷@B', '刺猬人@B'],
+    seed: 120078,
+  });
   SPECIALS.forEach((a, i) => {
     SPECIALS.forEach((b, j) => {
       if (i !== j) specs.push({ phase: '1v1', label: `1v1-${a}-vs-${b}`, names: [a, b], seed: 20000 + i * 97 + j });

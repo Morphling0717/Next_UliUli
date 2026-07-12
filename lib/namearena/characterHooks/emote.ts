@@ -3,12 +3,16 @@ import {
   EMOTE_DEATH_GAIN_KEYS,
   type EmoteStatMap,
   formatEmoteStats,
+  consumeEmoteClaimableKills,
   getEmoteAdaptTotal,
+  getEmoteClaimableKills,
   grantEmoteAdaptStats,
   removeStatsFromFighter,
 } from '../emoteMechanics';
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
+import { withTimedStatModifiersSuspended } from '../statModifiers';
+import { grantStatus } from '../defenseStatus';
 
 const EMOTE_DEATH_REVIVE_TICKS = 3;
 
@@ -71,7 +75,7 @@ function removeOwnerBonus(runtime: CharacterHookRuntime, emote: Fighter, reason 
 
   const owner = runtime.fighters.find((candidate) => candidate.id === ownerId);
   if (owner) {
-    removeStatsFromFighter(owner, bonus);
+    withTimedStatModifiersSuspended(owner, () => removeStatsFromFighter(owner, bonus));
     owner.status = owner.status.filter((status) =>
       !(status.type === 'EMOTE_OWNER_BONUS' && status.sourceId === emote.id),
     );
@@ -85,11 +89,11 @@ function removeOwnerBonus(runtime: CharacterHookRuntime, emote: Fighter, reason 
 
 function applyOwnerBonus(runtime: CharacterHookRuntime, emote: Fighter, owner: Fighter, bonus: EmoteStatMap): void {
   removeOwnerBonus(runtime, emote);
-  addStatsToFighter(owner, bonus);
+  withTimedStatModifiersSuspended(owner, () => addStatsToFighter(owner, bonus));
   owner.status = owner.status.filter((status) =>
     !(status.type === 'EMOTE_OWNER_BONUS' && status.sourceId === emote.id),
   );
-  owner.status.push({ type: 'EMOTE_OWNER_BONUS', duration: 999, sourceId: emote.id });
+  grantStatus(owner, 'EMOTE_OWNER_BONUS', 999, emote.id);
   emote.emoteOwnerId = owner.id;
   emote.emoteOwnerBonus = bonus;
   runtime.log('buff', `📜 【认主补偿】${owner.name} 临时获得本次击杀者 10% 生命与属性（${formatEmoteStats(bonus)}）；这是死亡认主补偿，${emote.name} 的累计适应值不会借出。`);
@@ -124,7 +128,7 @@ function reviveEmote(runtime: CharacterHookRuntime, emote: Fighter): void {
 
 function tryFinalOwnerChallenge(runtime: CharacterHookRuntime, emote: Fighter, alivePlayers: Fighter[]): boolean {
   if (emote.emoteFinalChallengeUsed || alivePlayers.length !== 2) return false;
-  const zeroKillAnchors = alivePlayers.filter((player) => player.stats.kills === 0);
+  const zeroKillAnchors = alivePlayers.filter((player) => getEmoteClaimableKills(player) === 0);
   if (zeroKillAnchors.length === 0) return false;
 
   emote.emoteFinalChallengeUsed = true;
@@ -156,7 +160,7 @@ function advanceEmoteGlobalReviveClock(runtime: CharacterHookRuntime, emote: Fig
   }
 
   const alivePlayers = activePlayerCandidates(runtime, emote);
-  const zeroKillAnchors = alivePlayers.filter((player) => player.stats.kills === 0);
+  const zeroKillAnchors = alivePlayers.filter((player) => getEmoteClaimableKills(player) === 0);
   if (zeroKillAnchors.length === 0) {
     finalizeEmoteTrueDeath(runtime, emote, '三次回合末结算后场上没有 0 击杀玩家作为复活锚点');
     return;
@@ -187,7 +191,7 @@ export const emoteHook: CharacterHook = {
     if (enemies.length === 0) return null;
 
     const adaptTotal = getEmoteAdaptTotal(actor);
-    const killTargets = enemies.filter((enemy) => enemy.stats.kills > 0);
+    const killTargets = enemies.filter((enemy) => getEmoteClaimableKills(enemy) > 0);
     const hasLiveFamiliar = !!actor.emoteFamiliarTargetId && enemies.some((enemy) => enemy.id === actor.emoteFamiliarTargetId);
     const canUlt = !hasStatus(actor, 'EMOTE_ULT_COOLDOWN') && ((actor.emoteDeathCount ?? 0) >= 2 || adaptTotal >= 80);
 
@@ -225,6 +229,9 @@ export const emoteHook: CharacterHook = {
       finalizeEmoteTrueDeath(runtime, fighter, '找不到任何还活着的玩家可以认主');
       return;
     }
+    if (candidates.length <= 2 && resolveEmoteEndgameCheck(runtime, fighter)) {
+      return;
+    }
 
     const preferredOwner = findPreferredOwner(runtime, fighter, candidates);
     const owner = preferredOwner ?? candidates[Math.floor(Math.random() * candidates.length)];
@@ -234,9 +241,9 @@ export const emoteHook: CharacterHook = {
     }
 
     clearFamiliarMarks(runtime, fighter);
-    const killsBefore = owner.stats.kills;
-    owner.stats.kills = 0;
-    runtime.log('debuff', `📜 【四处认主】${fighter.name} 死亡后认 ${owner.name} 为临时主人，${owner.name} 的击杀数 ${killsBefore} -> 0。`);
+    const killsBefore = getEmoteClaimableKills(owner);
+    consumeEmoteClaimableKills(owner, killsBefore);
+    runtime.log('debuff', `📜 【四处认主】${fighter.name} 死亡后认 ${owner.name} 为临时主人，将其认主账本余额 ${killsBefore} -> 0；${owner.name} 的真实击杀统计保持不变。`);
     if (deathGain) {
       applyOwnerBonus(runtime, fighter, owner, deathGain);
     } else {

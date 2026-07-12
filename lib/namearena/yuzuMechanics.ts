@@ -1,5 +1,8 @@
-import type { Fighter, StatusEntry } from './types';
+import type { Fighter, StatusApplicationOptions, StatusEntry } from './types';
 import { isSelectableTargetFor } from './targeting';
+import { withOriginiumStatShapeSuspended } from './puruisaishiMechanics';
+import { grantStatus } from './defenseStatus';
+import { withTimedStatModifiersSuspended } from './statModifiers';
 
 export type YuzuWeaponId =
   | 'sword'
@@ -18,6 +21,7 @@ export type YuzuWeapon = {
   name: string;
   weight: number;
   attackMultiplier: number;
+  selfHealMaxHpRatio?: number;
   bleedTurns?: number;
   evadeDownTurns?: number;
   defDownTurns?: number;
@@ -27,10 +31,12 @@ export type YuzuWeapon = {
 export interface YuzuRuntime {
   fighters: Fighter[];
   turnCount: number;
+  largeRound?: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;
   syncHpPct?: (fighter: Fighter) => void;
+  applyStatus?: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
 }
 
 export const YUZU_WEAPONS: Record<YuzuWeaponId, YuzuWeapon> = {
@@ -42,7 +48,7 @@ export const YUZU_WEAPONS: Record<YuzuWeaponId, YuzuWeapon> = {
   dagger: { id: 'dagger', name: '匕首', weight: 10, attackMultiplier: 1.1, bleedTurns: 2 },
   whip: { id: 'whip', name: '鞭', weight: 10, attackMultiplier: 1.3, bleedTurns: 5 },
   spear: { id: 'spear', name: '长矛', weight: 10, attackMultiplier: 1.3, evadeDownTurns: 3 },
-  spoon: { id: 'spoon', name: '勺子', weight: 1, attackMultiplier: 0.7 },
+  spoon: { id: 'spoon', name: '勺子', weight: 1, attackMultiplier: 0.7, selfHealMaxHpRatio: 0.3 },
   scythe: { id: 'scythe', name: '镰刀', weight: 9, attackMultiplier: 1.6, bleedTurns: 3, evadeDownTurns: 3, defDownTurns: 3 },
 };
 
@@ -85,16 +91,7 @@ function rebuildYuzuPhaseThreeStats(yuzu: Fighter): void {
 }
 
 function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  const existing = fighter.status.find((status) =>
-    status.type === type && (!sourceId || status.sourceId === sourceId),
-  );
-  if (existing) {
-    existing.duration = Math.max(existing.duration, duration);
-    if (sourceId) existing.sourceId = sourceId;
-    delete existing.appliedTurn;
-    return;
-  }
-  fighter.status.push({ type, duration, ...(sourceId ? { sourceId } : {}) });
+  grantStatus(fighter, type, duration, sourceId);
 }
 
 function removeStatus(fighter: Fighter, predicate: (status: StatusEntry) => boolean): void {
@@ -232,7 +229,9 @@ export function enterYuzuPhaseTwo(runtime: YuzuRuntime, yuzu: Fighter, reason: s
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) >= 2 || !runtime.isActiveCombatant(yuzu)) return false;
 
   yuzu.yuzuPhase = 2;
-  rebuildYuzuPhaseTwoStats(yuzu);
+  withTimedStatModifiersSuspended(yuzu, () => {
+    withOriginiumStatShapeSuspended(yuzu, () => rebuildYuzuPhaseTwoStats(yuzu));
+  });
   runtime.syncHpPct?.(yuzu);
   const teamMode = activeYuzuTeammates(runtime, yuzu).length > 0;
   const targets = teamMode ? activeYuzuFriendlyUnits(runtime, yuzu, true) : [yuzu];
@@ -257,7 +256,9 @@ export function enterYuzuPhaseThree(runtime: YuzuRuntime, yuzu: Fighter, reason:
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) >= 3 || !runtime.isActiveCombatant(yuzu)) return false;
 
   yuzu.yuzuPhase = 3;
-  rebuildYuzuPhaseThreeStats(yuzu);
+  withTimedStatModifiersSuspended(yuzu, () => {
+    withOriginiumStatShapeSuspended(yuzu, () => rebuildYuzuPhaseThreeStats(yuzu));
+  });
   yuzu.yuzuMarkedHitCount = 0;
   yuzu.yuzuFuriosoCountedTurn = undefined;
   yuzu.yuzuFuriosoReady = false;
@@ -320,8 +321,9 @@ export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fig
 
 export function registerYuzuMarkedSkill(runtime: YuzuRuntime, yuzu: Fighter, target: Fighter): void {
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) < 3 || yuzu.yuzuMarkedTargetId !== target.id) return;
-  if (yuzu.yuzuFuriosoCountedTurn === runtime.turnCount) return;
-  yuzu.yuzuFuriosoCountedTurn = runtime.turnCount;
+  const currentLargeRound = runtime.largeRound ?? runtime.turnCount;
+  if (yuzu.yuzuFuriosoCountedTurn === currentLargeRound) return;
+  yuzu.yuzuFuriosoCountedTurn = currentLargeRound;
   yuzu.yuzuMarkedHitCount = Math.min(YUZU_FURIOSO_COUNT, (yuzu.yuzuMarkedHitCount ?? 0) + 1);
   if ((yuzu.yuzuMarkedHitCount ?? 0) >= YUZU_FURIOSO_COUNT && !yuzu.yuzuFuriosoReady) {
     yuzu.yuzuFuriosoReady = true;
@@ -332,9 +334,16 @@ export function registerYuzuMarkedSkill(runtime: YuzuRuntime, yuzu: Fighter, tar
 export function applyYuzuWeaponEffects(runtime: YuzuRuntime, user: Fighter, target: Fighter, weapon: YuzuWeapon, actualDamage: number): void {
   if (actualDamage <= 0) return;
 
-  if (weapon.bleedTurns) refreshStatus(target, 'BLEED', weapon.bleedTurns, user.id);
-  if (weapon.evadeDownTurns) refreshStatus(target, 'YUZU_EVADE_DOWN', weapon.evadeDownTurns, user.id);
-  if (weapon.defDownTurns) refreshStatus(target, 'YUZU_DEF_DOWN', weapon.defDownTurns, user.id);
+  const applyHostileStatus = (type: string, duration: number) => {
+    if (!runtime.isActiveCombatant(target)) return false;
+    if (runtime.applyStatus) return runtime.applyStatus(target, type, duration, { sourceId: user.id });
+    refreshStatus(target, type, duration, user.id);
+    return true;
+  };
+  const appliedEffects: string[] = [];
+  if (weapon.bleedTurns && applyHostileStatus('BLEED', weapon.bleedTurns)) appliedEffects.push(`${weapon.bleedTurns} 回合流血`);
+  if (weapon.evadeDownTurns && applyHostileStatus('YUZU_EVADE_DOWN', weapon.evadeDownTurns)) appliedEffects.push(`${weapon.evadeDownTurns} 回合闪避破坏`);
+  if (weapon.defDownTurns && applyHostileStatus('YUZU_DEF_DOWN', weapon.defDownTurns)) appliedEffects.push(`${weapon.defDownTurns} 回合防御破坏`);
 
   if (weapon.shieldFromDamageRatio) {
     refreshStatus(user, 'YUZU_TAUNT', 2, user.id);
@@ -344,13 +353,8 @@ export function applyYuzuWeaponEffects(runtime: YuzuRuntime, user: Fighter, targ
     runtime.log('buff', `🛡️ 【盾牌】${user.name} 把 ${actualDamage} 点命中伤害折成镜界护盾，${targets.map((ally) => ally.name).join('、')} 获得 ${shieldAmount} 点护盾，并把嘲讽拉满。`);
   }
 
-  if (weapon.bleedTurns || weapon.evadeDownTurns || weapon.defDownTurns) {
-    const effects = [
-      weapon.bleedTurns ? `${weapon.bleedTurns} 回合流血` : '',
-      weapon.evadeDownTurns ? `${weapon.evadeDownTurns} 回合闪避破坏` : '',
-      weapon.defDownTurns ? `${weapon.defDownTurns} 回合防御破坏` : '',
-    ].filter(Boolean).join('、');
-    runtime.log('debuff', `🪞 【${weapon.name}】${target.name} 被附加${effects}。`);
+  if (appliedEffects.length > 0) {
+    runtime.log('debuff', `🪞 【${weapon.name}】${target.name} 被附加${appliedEffects.join('、')}。`);
   }
 }
 

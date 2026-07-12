@@ -1,5 +1,7 @@
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
+import { healFighter } from '../combatState';
+import { getFatigueDamageBonusForTurn } from '../damageResolution';
 import {
   activeYuzuTeammates,
   applyYuzuWeaponEffects,
@@ -8,8 +10,8 @@ import {
   registerYuzuMarkedSkill,
   YUZU_MARK_DAMAGE_BONUS,
   YUZU_UNMARKED_DAMAGE_PENALTY,
-  YUZU_WEAPONS,
   type YuzuRuntime,
+  type YuzuWeapon,
   type YuzuWeaponId,
   yuzuWeaponSummary,
 } from '../yuzuMechanics';
@@ -45,9 +47,11 @@ function yuzuRuntime(ctx: SkillContext): YuzuRuntime {
   return {
     fighters: ctx.fighters,
     turnCount: ctx.turnCount,
+    largeRound: ctx.largeRound,
     getTeamId: ctx.getTeamId,
     isActiveCombatant: isActive,
     log: ctx.log,
+    applyStatus: ctx.applyStatus,
   };
 }
 
@@ -55,19 +59,6 @@ function enemyTargets(ctx: SkillContext): Fighter[] {
   return ctx.fighters.filter((fighter) =>
     isSelectableTargetFor(yuzuRuntime(ctx), ctx.user, fighter),
   );
-}
-
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  const existing = fighter.status.find((status) =>
-    status.type === type && (!sourceId || status.sourceId === sourceId),
-  );
-  if (existing) {
-    existing.duration = Math.max(existing.duration, duration);
-    if (sourceId) existing.sourceId = sourceId;
-    delete existing.appliedTurn;
-    return;
-  }
-  fighter.status.push({ type, duration, ...(sourceId ? { sourceId } : {}) });
 }
 
 function chooseYuzuTarget(ctx: SkillContext, plan: YuzuAttackPlan): Fighter | undefined {
@@ -100,8 +91,9 @@ function applyRandomYuzuDebuff(ctx: SkillContext, target: Fighter): void {
     ['BLEED', 3, '一层流血'],
   ] as const;
   const [status, duration, label] = pool[Math.floor(Math.random() * pool.length)] ?? pool[0];
-  refreshStatus(target, status, duration, ctx.user.id);
-  ctx.log('debuff', `🪞 【地狱刑具】${target.name} 被追加 ${label}。`);
+  if (ctx.applyStatus(target, status, duration, { sourceId: ctx.user.id })) {
+    ctx.log('debuff', `🪞 【地狱刑具】${target.name} 被追加 ${label}。`);
+  }
 }
 
 function resolveYuzuAttackGuards(ctx: SkillContext, target: Fighter, actionName: string): boolean {
@@ -111,7 +103,7 @@ function resolveYuzuAttackGuards(ctx: SkillContext, target: Fighter, actionName:
   return !interruptedByCounter && isActive(ctx.user);
 }
 
-function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan, weaponId?: YuzuWeaponId): { amount: number; weaponName: string } {
+function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan, weaponId?: YuzuWeaponId): { amount: number; weapon: YuzuWeapon } {
   const runtime = yuzuRuntime(ctx);
   const hasTeammate = activeYuzuTeammates(runtime, ctx.user).length > 0;
   const weapon = drawYuzuWeapon(hasTeammate, weaponId);
@@ -147,8 +139,21 @@ function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAt
 
   return {
     amount,
-    weaponName: yuzuWeaponSummary(weapon),
+    weapon,
   };
+}
+
+function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon): void {
+  const healRatio = weapon.selfHealMaxHpRatio ?? 0;
+  if (healRatio <= 0) return;
+
+  const healAmount = Math.floor(ctx.user.maxHp * healRatio);
+  const healed = healFighter(ctx.user, healAmount);
+  if (healed > 0) {
+    ctx.log('heal', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，恢复 ${healed} 点生命（按最大生命的 ${Math.round(healRatio * 100)}% 计算），随后继续攻击！`);
+  } else {
+    ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但生命已满，随后继续攻击！`);
+  }
 }
 
 type YuzuHitResult = {
@@ -160,32 +165,56 @@ function isCurrentMarkedTarget(ctx: SkillContext, target: Fighter): boolean {
   return (ctx.user.yuzuPhase ?? 1) >= 3 && ctx.user.yuzuMarkedTargetId === target.id;
 }
 
-function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan, index: number, forcedWeapon?: YuzuWeaponId): YuzuHitResult {
+function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan, index: number, forcedWeapon?: YuzuWeaponId, fatigueBonus = 0): YuzuHitResult {
   if (!resolveYuzuAttackGuards(ctx, target, plan.actionName)) {
     return { canContinue: false, hitMarkedTarget: false };
   }
 
-  const { amount, weaponName } = calculateYuzuHitDamage(ctx, target, plan, forcedWeapon);
-  const weapon = forcedWeapon ? YUZU_WEAPONS[forcedWeapon] : Object.values(YUZU_WEAPONS).find((candidate) => weaponName.startsWith(candidate.name)) ?? YUZU_WEAPONS.sword;
+  const { amount, weapon } = calculateYuzuHitDamage(ctx, target, plan, forcedWeapon);
+  const weaponName = yuzuWeaponSummary(weapon);
+  applyYuzuPreAttackWeaponEffects(ctx, weapon);
   const options: DamageApplicationOptions = {
     actionName: plan.actionName,
     respectDefenses: true,
   };
-  const actual = ctx.applyDamage(target, amount, 'skill', false, ctx.user, options);
-  const redirected = !!options.redirectedByJoker;
-  if (actual > 0) ctx.user.stats.dmgDealt += actual;
+  const actual = ctx.applyDamage(target, amount + fatigueBonus, 'skill', false, ctx.user, options);
+  const redirectedByJoker = !!options.redirectedByJoker;
+  const redirectedByOriginiumCore = !!options.redirectedByOriginiumCore;
+  const redirected = redirectedByJoker || redirectedByOriginiumCore;
+  const resolvedActual = redirectedByJoker
+    ? options.redirectedJokerDamage ?? actual
+    : redirectedByOriginiumCore
+      ? options.redirectedOriginiumDamage ?? actual
+      : actual;
 
   const hitLabel = `${index + 1}/${plan.hits}`;
-  if (redirected) {
-    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，原目标实际造成 ${actual} 点伤害。`);
+  if (redirectedByJoker) {
+    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移目标实际承受 ${resolvedActual} 点伤害。`);
+  } else if (redirectedByOriginiumCore) {
+    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤。`);
+  } else if (resolvedActual <= 0) {
+    const outcome = options.resolution?.outcome;
+    const outcomeText = outcome === 'spell_blocked'
+      ? `${target.name} 的法术抵挡完全拦下了本击`
+      : outcome === 'invulnerable'
+        ? `${target.name} 以无敌状态完整避开了本击`
+        : outcome === 'shielded'
+          ? `${target.name} 的护盾吸收了本击${options.resolution?.shieldDamage ? `（护盾承受 ${options.resolution.shieldDamage} 点）` : ''}`
+          : outcome === 'redistributed'
+            ? `${target.name} 将本击伤害全部分摊给了队友，本体未损失生命`
+            : outcome === 'lockblood'
+              ? `${target.name} 的阶段锁血保护化解了本次致命冲击`
+              : `${target.name} 化解了本击，没有损失生命`;
+    ctx.log('info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${outcomeText}。`);
   } else {
-    ctx.log(actual > 0 ? 'skill' : 'info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，命中 ${target.name}，实际造成 ${actual} 点伤害。`);
+    ctx.log(resolvedActual > 0 ? 'skill' : 'info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，命中 ${target.name}，实际造成 ${resolvedActual} 点伤害。`);
   }
-  if (actual > 0) ctx.flushDeferredDamageEvents?.();
-
-  if (actual > 0 && !redirected) {
-    applyYuzuWeaponEffects(yuzuRuntime(ctx), ctx.user, target, weapon, actual);
-    if (plan.applyRandomDebuff) applyRandomYuzuDebuff(ctx, target);
+  if (resolvedActual > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) {
+    ctx.flushDeferredDamageEvents?.();
+  }
+  if (resolvedActual > 0 && !redirected) {
+    applyYuzuWeaponEffects(yuzuRuntime(ctx), ctx.user, target, weapon, resolvedActual);
+    if (plan.applyRandomDebuff && isActive(target)) applyRandomYuzuDebuff(ctx, target);
   }
 
   if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
@@ -196,13 +225,14 @@ function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan
   }
   return {
     canContinue: isActive(ctx.user),
-    hitMarkedTarget: actual > 0 && !redirected && isCurrentMarkedTarget(ctx, target),
+    hitMarkedTarget: resolvedActual > 0 && !redirected && isCurrentMarkedTarget(ctx, target),
   };
 }
 
 function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean {
   ctx.log('skill', `🪞 【${plan.actionName}】${ctx.user.name}：${plan.quote}`);
   let markedTargetHitThisSkill: Fighter | undefined;
+  const fatigueBonus = getFatigueDamageBonusForTurn(ctx.turnCount);
 
   const registerMarkedSkillIfNeeded = () => {
     if (plan.furioso || !markedTargetHitThisSkill) return;
@@ -217,7 +247,7 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
       return true;
     }
     const forcedWeapon = plan.furioso && i === plan.hits - 1 ? 'scythe' : undefined;
-    const hitResult = executeYuzuHit(ctx, target, plan, i, forcedWeapon);
+    const hitResult = executeYuzuHit(ctx, target, plan, i, forcedWeapon, fatigueBonus);
     if (hitResult.hitMarkedTarget) markedTargetHitThisSkill = target;
     if (!hitResult.canContinue) {
       registerMarkedSkillIfNeeded();
@@ -239,6 +269,7 @@ function makeYuzuSkill(plan: YuzuAttackPlan, rate: number): SkillDefinition {
   return {
     name: plan.actionName,
     tag: SKILL_TAGS.SPECIAL,
+    spellBlockMode: 'perHit',
     rate,
     onExecute: (ctx) => executeYuzuAttackPlan(ctx, plan),
   };

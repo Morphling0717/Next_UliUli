@@ -35,6 +35,10 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   PUPPET_MASTER: { name: '提线者', icon: '🎭', desc: '拥有小汀作为傀儡护卫' },
   TING_DEFIANCE: { name: '不甘倒下', icon: '🩸', desc: '怨念锁住最后 1 点生命，持续期间再次受到致命伤也不会立刻倒下' },
   TOKUSATSU_DEFIANCE: { name: '悲愿不倒', icon: '🔥', desc: '奇迹怪兽武刃受到致死伤害时强行续命，并立刻反扑一次' },
+  TOKUSATSU_REHEARSAL: { name: '变身预演', icon: '🧪', desc: '腰带校准带来的限时攻击、魔力与速度强化' },
+  TOKUSATSU_ALCHEMY_RES: { name: '炼金抗性', icon: '✨', desc: '奇迹炼金带来的限时魔抗强化' },
+  TOKUSATSU_ALCHEMY_ARMOR: { name: '炼成护甲强化', icon: '🛡️', desc: '炼成护甲带来的限时双抗强化' },
+  TOKUSATSU_MIRACLE_ARMOR: { name: '奇迹装甲强化', icon: '🌈', desc: '奇迹炼成装甲带来的限时双抗强化' },
 
   VALO_ULT_EMPRESS: { name: '女皇神威', icon: '👑', desc: '攻击/速度翻倍，100%吸血' },
   VALO_ULT_RUN_IT_BACK: { name: '再火一回', icon: '🔥', desc: '受到致命伤可满血复活' },
@@ -46,6 +50,7 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   VALO_HARBOR_WALL: { name: '海港水墙', icon: '🌊', desc: 'Harbor 水墙阻挡火力，短暂提升防御与魔抗' },
   VALO_CYPHER_REVEALED: { name: '情报暴露', icon: '📷', desc: '被 Cypher 读取位置，防御下降' },
   NEURAL_THEFT_DEBUFF: { name: '被窃取情报', icon: '📷', desc: '闪避归零，受到伤害必暴击' },
+  VALO_VIPER_DECAY: { name: '毒幕衰变', icon: '🐍', desc: '蝰蛇毒幕使防御与魔抗暂时减半' },
 
   CTR_CHARM: { name: '魅惑反击', icon: '💕', desc: '受击时魅惑对手' },
   CTR_STUN:  { name: '震慑反击', icon: '😵', desc: '受击时眩晕对手' },
@@ -74,7 +79,11 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   BABY_LOVE_BOTTLE: { name: '爱心奶瓶', icon: '🍼', desc: '丝瓜 baby 递上的专属支援，全属性提升' },
   BABY_WEAKNESS_MARK: { name: '弱点标记', icon: '👀', desc: '被指出破绽，防御与魔抗下降' },
   Q_BUNNY_IDOL_AGL: { name: '爱豆闪避加成', icon: '✨', desc: '偶像打歌加护：闪避提升20%' },
+  TEMP_STAT_BUFF: { name: '限时强化', icon: '⬆️', desc: '限时属性强化，结束后属性会恢复' },
   GAMER_WORLD_STAGE: { name: '世界赛模式', icon: '🏆', desc: 'APM 爆表后进入高压竞技状态，解锁终局连段' },
+  GAMER_PARRY_GUARD: { name: '弹反抗性', icon: '🛡️', desc: '完美弹反带来的限时防御与魔抗强化' },
+  GAMER_ROUTE_BOOST: { name: '速通身位', icon: '🏃', desc: '路线优化带来的限时速度与闪避强化' },
+  GAMER_READ_INPUTS: { name: '输入被读取', icon: '👁️', desc: '闪避与魔抗被玄凝暂时看穿' },
 
   LIQUID_BODY: { name: '水之幻影', icon: '💧', desc: '物理伤害强制减半，免疫暴击与物理截停' },
   WATER_PRISON: { name: '深渊水牢', icon: '🌊', desc: '丧失闪避与转移能力，持续窒息溺水' },
@@ -108,6 +117,7 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   WT_BREECH_DAMAGED: { name: '炮闩损坏', icon: '🔩', desc: '主武器受损，造成伤害下降' },
   WT_TRACK_DAMAGED:  { name: '履带断裂', icon: '🛞', desc: '机动受损，闪避归零' },
   WT_AMMO_EXPOSED:   { name: '弹药架暴露', icon: '💥', desc: '被命中模块弱点，低血时容易殉爆' },
+  WT_RADIO_MORALE: { name: 'D点火力动员', icon: '📻', desc: '无线电动员使物理火力短暂提升' },
   SYNERGY_SLACKING: { name: '场外OB', icon: '⛺', desc: '手牵手摸鱼中，绝对无敌且无法行动' },
   WEAK: { name: '虚弱', icon: '📉', desc: '攻击力大幅下降' },
   EMOTE_ADAPT: { name: '适应转轮', icon: '🧿', desc: '下一次受到玩家伤害时减免并复制攻击者属性' },

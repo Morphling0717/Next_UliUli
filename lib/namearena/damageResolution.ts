@@ -16,6 +16,14 @@ export interface DamageResult {
   sexyTrueDamage: boolean;
 }
 
+export function getFatigueDamageBonusForTurn(turnCount: number): number {
+  if (turnCount <= 500) return 0;
+  const steadyFatigue = Math.min(80, Math.floor((turnCount - 500) / 25));
+  if (turnCount <= 900) return steadyFatigue;
+  const collapseFatigue = Math.floor((turnCount - 900) / 3) * 6;
+  return Math.min(900, steadyFatigue + collapseFatigue);
+}
+
 export function calculateDamage(
   runtime: DamageResolutionRuntime,
   user: Fighter,
@@ -33,12 +41,17 @@ export function calculateDamage(
   if (user.status.some((status) => status.type === 'WT_BREECH_DAMAGED')) weakOutputMultiplier *= 0.62;
 
   if (skill.tag === runtime.skillTags.PHYS || skill.tag === runtime.skillTags.SPECIAL) {
-    const atk = user.atk * weakOutputMultiplier * (user.status.some((status) => status.type === 'RAGE') ? 1.5 : 1) * (user.hasSpinalSword ? 2.5 : 1);
+    const atk = user.atk *
+      weakOutputMultiplier *
+      (user.status.some((status) => status.type === 'RAGE') ? 1.5 : 1) *
+      (user.status.some((status) => status.type === 'WT_RADIO_MORALE') ? 1.3 : 1) *
+      (user.hasSpinalSword ? 2.5 : 1);
     let def = (target.status.some((status) => status.type === 'FREEZE') || ignoreDefOverride || sexyTrueDamage)
       ? 0
       : (user.jobData?.name === '欧皇' ? Math.floor(target.def * 0.5) : target.def);
     if (target.status.some((status) => status.type === 'VALO_CYPHER_REVEALED')) def = Math.floor(def * 0.68);
     if (target.status.some((status) => status.type === 'BABY_WEAKNESS_MARK')) def = Math.floor(def * 0.62);
+    if (target.status.some((status) => status.type === 'VALO_VIPER_DECAY')) def = Math.floor(def * 0.5);
     if (target.status.some((status) => status.type === 'YUZU_DEF_DOWN')) def = Math.floor(def * 0.7);
     if (target.status.some((status) => status.type === 'WT_ERA')) def = Math.floor(def * 2.0);
     dmg = Math.max(1, Math.floor((atk * (1 + Math.random() * 0.2) - def * 0.5) * (skill.mult ?? 1)));
@@ -48,7 +61,9 @@ export function calculateDamage(
   if (skill.tag === runtime.skillTags.MAG || skill.tag === runtime.skillTags.DEBUFF) {
     let res = (ignoreDefOverride || sexyTrueDamage) ? 0 : (user.jobData?.name === '欧皇' ? Math.floor(target.res * 0.5) : target.res);
     if (target.status.some((status) => status.type === 'BABY_WEAKNESS_MARK')) res = Math.floor(res * 0.62);
+    if (target.status.some((status) => status.type === 'VALO_VIPER_DECAY')) res = Math.floor(res * 0.5);
     if (target.status.some((status) => status.type === 'YUZU_RES_DOWN')) res = Math.floor(res * 0.7);
+    if (target.status.some((status) => status.type === 'GAMER_READ_INPUTS')) res = Math.floor(res * 0.9);
     dmg = Math.max(1, Math.floor((user.mag * weakOutputMultiplier * (1 + Math.random() * 0.2) - res * 0.5) * (skill.mult ?? 1)));
     if (skill.tag === runtime.skillTags.DEBUFF) dmg = Math.max(1, Math.floor(dmg * 0.5));
     if (target.status.some((status) => status.type === 'ETHEREAL')) {

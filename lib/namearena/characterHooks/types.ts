@@ -1,4 +1,4 @@
-import type { DamageApplicationOptions, Fighter, JobDefinition, SpinalSwordRef } from '../types';
+import type { DamageApplicationOptions, Fighter, JobDefinition, SpinalSwordRef, StatusApplicationOptions } from '../types';
 
 export interface CharacterHookRuntime {
   fighters: Fighter[];
@@ -16,6 +16,7 @@ export interface CharacterHookRuntime {
     attacker?: Fighter,
     options?: DamageApplicationOptions,
   ) => number;
+  applyStatus: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
   handleTransformations: (fighter: Fighter) => void;
   flushDeferredDamageEvents: (fighter: Fighter) => void;
   executeSkillAction: (id: string | null, user: Fighter, target: Fighter | null, depth: number) => void;

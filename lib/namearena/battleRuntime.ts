@@ -7,6 +7,7 @@ import type {
   JobDefinition,
   SkillDefinition,
   SpinalSwordRef,
+  StatusApplicationOptions,
   StatusEffectsMap,
 } from './types';
 import type { ActionResolutionRuntime } from './actionResolution';
@@ -27,6 +28,7 @@ export interface BattleRuntimeHost {
   STATUS_EFFECTS: StatusEffectsMap;
   SKILL_TAGS: Record<string, string>;
   turnCount: number;
+  battleState: import('./types').BattleState;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   getFatigueDamageBonus: () => number;
@@ -41,6 +43,7 @@ export interface BattleRuntimeHost {
     options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
+  applyStatus: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
   calculateDamage: (
     user: Fighter,
     target: Fighter,
@@ -77,6 +80,7 @@ export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHoo
     log: (type, text) => host.log(type, text),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+    applyStatus: (target, type, duration, options) => host.applyStatus(target, type, duration, options),
     handleTransformations: (fighter) => host.handleTransformations(fighter),
     flushDeferredDamageEvents: (fighter) => host.flushDeferredDamageEvents(fighter),
     executeSkillAction: (id, user, target, depth) => host.executeSkillAction(id, user, target, depth),
@@ -113,6 +117,7 @@ export function buildStatusProcessingRuntime(host: BattleRuntimeHost): StatusPro
     log: (type, text) => host.log(type, text),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     markDefeated: (target, options) => host.markDefeated(target, options),
+    flushDeferredDamageEvents: (fighter) => host.flushDeferredDamageEvents(fighter),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
   };
@@ -143,6 +148,7 @@ export function buildSupportResolutionRuntime(host: BattleRuntimeHost): SupportR
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+    applyStatus: (target, type, duration, options) => host.applyStatus(target, type, duration, options),
     markDefeated: (target, options) => host.markDefeated(target, options),
     formatSkillText: (skill, text) => host.formatSkillText(skill, text),
     log: (type, text) => host.log(type, text),
@@ -157,12 +163,14 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     data: host.Data,
     statusEffects: host.STATUS_EFFECTS,
     turnCount: host.turnCount,
+    largeRound: host.battleState.largeRound.number,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text) => host.log(type, text),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     markDefeated: (target, options) => host.markDefeated(target, options),
+    applyStatus: (target, type, duration, options) => host.applyStatus(target, type, duration, options),
     calculateDamage: (user, target, skill, userTeamId, usedSkillId) =>
       host.calculateDamage(user, target, skill, userTeamId, usedSkillId),
     handleTransformations: (fighter) => host.handleTransformations(fighter),

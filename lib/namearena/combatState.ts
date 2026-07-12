@@ -56,6 +56,12 @@ export function cloneFighter(fighter: Fighter): Fighter {
     stats: { ...fighter.stats },
     exodiaPieces: fighter.exodiaPieces ? [...fighter.exodiaPieces] : fighter.exodiaPieces,
     originiumGrowthRoundActorIds: fighter.originiumGrowthRoundActorIds ? [...fighter.originiumGrowthRoundActorIds] : fighter.originiumGrowthRoundActorIds,
+    originiumStatMultipliers: fighter.originiumStatMultipliers ? { ...fighter.originiumStatMultipliers } : fighter.originiumStatMultipliers,
+    timedStatBase: fighter.timedStatBase ? { ...fighter.timedStatBase } : fighter.timedStatBase,
+    timedStatModifiers: fighter.timedStatModifiers?.map((modifier) => ({
+      ...modifier,
+      multipliers: { ...modifier.multipliers },
+    })),
     emoteAdaptStats: fighter.emoteAdaptStats ? { ...fighter.emoteAdaptStats } : fighter.emoteAdaptStats,
     emoteOwnerBonus: fighter.emoteOwnerBonus ? { ...fighter.emoteOwnerBonus } : fighter.emoteOwnerBonus,
   };

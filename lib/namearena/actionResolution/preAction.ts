@@ -1,4 +1,5 @@
 import type { Fighter } from '../types';
+import { consumeStatusCharge } from '../statusLifecycle';
 import type { ActionResolutionRuntime } from './types';
 
 export function handleValorantPreFire(
@@ -18,15 +19,16 @@ export function handleValorantPreFire(
       fighter.status.some((status) => status.type === 'VALO_HOLDING_ANGLE'),
   );
   if (!preFirer) return false;
+  const holdingAngle = preFirer.status.find((status) => status.type === 'VALO_HOLDING_ANGLE');
 
   if (user.status.some((status) => status.type === 'LIQUID_BODY')) {
     runtime.log('skill', `💧 瓦学妹的提前枪精准命中了 ${user.name}，但子弹仅仅是穿过了水流！攻击并未被截停！`);
-    preFirer.status = preFirer.status.filter((status) => status.type !== 'VALO_HOLDING_ANGLE');
+    if (holdingAngle) consumeStatusCharge(preFirer, holdingAngle);
     return false;
   }
 
   runtime.log('skill', `🔭 【受击截停】${preFirer.name} 提前预瞄了 ${user.name} 的位置，强制先手开火拦截！`);
-  preFirer.status = preFirer.status.filter((status) => status.type !== 'VALO_HOLDING_ANGLE');
+  if (holdingAngle) consumeStatusCharge(preFirer, holdingAngle);
   runtime.executeSkillAction('valo_pre_fire', preFirer, user, triggerDepth + 1);
   if (user.isDead || user.isDeadAnnounced || user.currentHp <= 0) {
     return true;

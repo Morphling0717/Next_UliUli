@@ -26,6 +26,7 @@ export function runDeathAccountingCases(): string[] {
     const target = makeFighter('死亡结算靶子@B');
     attacker.atk = 10000;
     attacker.agl = 10000;
+    attacker.status.push({ type: 'AIM', duration: 1 });
     target.maxHp = 100;
     localProject.setCurrentHp(target, 100);
 
@@ -47,6 +48,7 @@ export function runDeathAccountingCases(): string[] {
     localProject.setCurrentHp(attacker, 100);
     attacker.atk = 80;
     attacker.agl = 10000;
+    attacker.status.push({ type: 'AIM', duration: 1 });
     target.maxHp = 10000;
     localProject.setCurrentHp(target, 10000);
     target.status.push({ type: 'COUNTER', duration: 3 });

@@ -19,7 +19,8 @@ export function missesSkill(
   const effectiveTargetAgl = target.status.some((status) =>
     status.type === 'WT_SUPPRESS' ||
     status.type === 'WT_TRACK_DAMAGED' ||
-    status.type === 'NEURAL_THEFT_DEBUFF',
+    status.type === 'NEURAL_THEFT_DEBUFF' ||
+    status.type === 'GAMER_READ_INPUTS',
   ) ? 0 : target.agl;
   let targetAgl = target.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(effectiveTargetAgl * 1.2) : effectiveTargetAgl;
   if (target.status.some((status) => status.type === 'YUZU_EVADE_DOWN')) targetAgl = Math.floor(targetAgl * 0.55);
@@ -40,7 +41,7 @@ export function missesSkill(
     hitChance = Math.max(0.05, Math.min(0.98, hitChance));
   }
 
-  return Math.random() > hitChance && !skill.ignoreDef;
+  return Math.random() > hitChance;
 }
 
 export function breakAbsoluteDefense(
@@ -65,14 +66,15 @@ export function dodgesWithPassiveSkill(
   runtime: ActionResolutionRuntime,
   user: Fighter,
   target: Fighter,
+  actionName = '攻击',
 ): boolean {
   const targetSkills = target.jobData.skills ?? [];
   if (targetSkills.includes('flash_lol') && Math.random() < 0.2) {
-    runtime.log('skill', `✨ ${target.name} 极限反应！交出闪现（D键），规避了 ${user.name} 的伤害！`);
+    runtime.log('skill', `✨ ${target.name} 极限反应！交出闪现（D键），规避了 ${user.name} 的【${actionName}】！`);
     return true;
   }
   if (targetSkills.includes('roll_dodge') && Math.random() < 0.25) {
-    runtime.log('skill', `🔄 ${target.name} 战术翻滚！利用无敌帧躲过了 ${user.name} 的攻击！`);
+    runtime.log('skill', `🔄 ${target.name} 战术翻滚！利用无敌帧躲过了 ${user.name} 的【${actionName}】！`);
     return true;
   }
   return false;

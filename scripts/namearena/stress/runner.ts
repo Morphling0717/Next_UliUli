@@ -15,6 +15,7 @@ import {
 
 const OUT_DIR = process.env.NAMEARENA_STRESS_OUT_DIR ?? path.join(os.tmpdir(), 'namearena-mega-stress');
 const LOG_DIR = path.join(OUT_DIR, 'logs');
+const LOG_MODE = process.env.NAMEARENA_STRESS_LOG_MODE ?? 'all';
 
 type PhaseStats = Record<string, {
   battles: number;
@@ -63,6 +64,7 @@ type StressSummary = {
   phaseStats: PhaseStats;
   issueTypeCounts: Record<string, number>;
   issueContextCount: number;
+  logMode: string;
   outDir: string;
 };
 
@@ -126,13 +128,14 @@ export function main(): void {
       maxTurns: DEFAULT_STRESS_MAX_TURNS,
       scanRosterNames: true,
     });
-    const logPath = writeLogFile(result, index);
     const allIssues: LogIssue[] = [
       ...result.logIssues,
       ...result.invariantErrors.map((text) => ({ label: spec.label, line: 0, type: 'invariant-error', text })),
     ];
     if (result.error) allIssues.push({ label: spec.label, line: 0, type: 'runtime-error', text: result.error });
     if (result.timedOut) allIssues.push({ label: spec.label, line: 0, type: 'timeout', text: `Battle did not end within ${DEFAULT_STRESS_MAX_TURNS} turns` });
+    const shouldWriteLog = LOG_MODE === 'all' || (LOG_MODE === 'failures' && allIssues.length > 0);
+    const logPath = shouldWriteLog ? writeLogFile(result, index) : '';
 
     appendPhaseStats(phaseStats, spec, result, allIssues.length);
 
@@ -181,6 +184,7 @@ export function main(): void {
     phaseStats,
     issueTypeCounts,
     issueContextCount: issueContexts.length,
+    logMode: LOG_MODE,
     outDir: OUT_DIR,
   };
 

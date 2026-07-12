@@ -4,7 +4,6 @@ import {
   BKB_BLOCKED_STATUS_TYPES,
   CONTROL_STATUS_TYPES,
   DOT_STATUS_TYPES,
-  getStatusTickMode,
   isStatusType,
 } from './statusRules';
 import {
@@ -18,6 +17,12 @@ import {
   getTokusatsuControlThroneChance,
   TOKUSATSU_THRONE_RESONANCE_MAX,
 } from './tokusatsuMechanics';
+import {
+  createLifecycleStatus,
+  normalizeStatusEntry,
+  tickStatusTurn,
+} from './statusLifecycle';
+import { cleanupOrphanedTimedStatModifiers, withTimedStatModifiersSuspended } from './statModifiers';
 
 export interface StatusProcessingRuntime {
   fighters: Fighter[];
@@ -33,6 +38,7 @@ export interface StatusProcessingRuntime {
     options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
+  flushDeferredDamageEvents: (fighter: Fighter) => void;
   syncHpPct: (fighter: Fighter) => void;
   isActiveCombatant: (fighter: Fighter) => boolean;
 }
@@ -42,11 +48,15 @@ export function handleSelfTimedStatusExpiry(
   actor: Fighter,
   type: string,
 ): void {
-  if (type !== 'ZEROED' || !actor.baseStatsForZero) return;
-
-  actor.atk = actor.baseStatsForZero.atk;
-  actor.def = actor.baseStatsForZero.def;
-  actor.res = actor.baseStatsForZero.res;
+  if (type !== 'ZEROED') return;
+  if (actor.baseStatsForZero) {
+    const legacyBase = actor.baseStatsForZero;
+    withTimedStatModifiersSuspended(actor, () => {
+      actor.atk = legacyBase.atk;
+      actor.def = legacyBase.def;
+      actor.res = legacyBase.res;
+    });
+  }
   delete actor.baseStatsForZero;
   actor.wasZeroed = false;
   runtime.log('info', `🧮 ${actor.name} 的【归零】状态结束，被降维的属性恢复了！`);
@@ -74,7 +84,8 @@ export function advanceGlobalTimedStatuses(
     if (fighter.isDead) return;
 
     fighter.status = fighter.status.flatMap((status) => {
-      if (getStatusTickMode(status.type) !== 'global' || status.duration >= 999) {
+      normalizeStatusEntry(status);
+      if (status.expiresOn !== 'global_action_end' || status.duration >= 999) {
         return [status];
       }
 
@@ -83,12 +94,11 @@ export function advanceGlobalTimedStatuses(
         return [{ ...status, appliedTurn }];
       }
 
-      if (status.duration > 1) {
-        return [{ ...status, duration: status.duration - 1, appliedTurn }];
-      }
+      if (!tickStatusTurn(status)) return [{ ...status, appliedTurn }];
       handleGlobalTimedStatusExpiry(log, fighter, status.type);
       return [];
     });
+    cleanupOrphanedTimedStatModifiers(fighter);
   });
 }
 
@@ -126,8 +136,19 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
         : status.type === 'BLEED'
           ? '血流不止'
           : '受到持续伤害';
-      runtime.log('poison', `${statusInfo?.icon ?? ''} ${actor.name} ${actionText}，损失 ${dmgAmt} 点生命`);
-      const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true);
+      const damageOptions: DamageApplicationOptions = {
+        deferTransform: true,
+        actionName: statusCause,
+      };
+      const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true, undefined, damageOptions);
+      if (actualDmg > 0) {
+        runtime.log('poison', `${statusInfo?.icon ?? ''} ${actor.name} ${actionText}，实际损失 ${actualDmg} 点生命！`);
+      } else {
+        runtime.log('info', `${statusInfo?.icon ?? ''} ${actor.name} 的【${statusInfo?.name ?? status.type}】本次没有穿透防护，生命未减少。`);
+      }
+      if (actualDmg > 0 || (actor.pendingDamageEvents?.length ?? 0) > 0) {
+        runtime.flushDeferredDamageEvents(actor);
+      }
       if (actor.currentHp <= 0) {
         runtime.markDefeated(actor, {
           message: `💀 ${actor.name} 因${statusCause}（${actualDmg}点）倒下了！`,
@@ -152,16 +173,16 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
         }
       }
     }
-    const tickMode = getStatusTickMode(status.type);
+    normalizeStatusEntry(status);
     const statusStillPresent = actor.status.includes(status);
     if (!statusStillPresent) {
       continue;
     }
-    if (tickMode !== 'self') {
+    if (status.expiresOn !== 'self_turn_end') {
       nextStatusEntries.push({ original: status, next: status });
-    } else if (status.duration > 1) {
-      nextStatusEntries.push({ original: status, next: { ...status, duration: status.duration - 1 } });
-    } else if (status.duration <= 1) {
+    } else if (!tickStatusTurn(status)) {
+      nextStatusEntries.push({ original: status, next: { ...status } });
+    } else {
       handleSelfTimedStatusExpiry(runtime, actor, status.type);
     }
   }
@@ -172,6 +193,7 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
       .map(({ next }) => next),
     ...statusesAddedDuringProcessing,
   ];
+  cleanupOrphanedTimedStatModifiers(actor);
   syncSpinalSwordState(runtime, actor, true);
 
   if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
@@ -224,7 +246,7 @@ export function handleSpinalSwordDrop(
     if (Math.random() < (actor.isGacha ? 0.8 : 0.2)) {
       actor.hasSpinalSword = true;
       actor.spinalSwordTurns = Math.floor(Math.random() * 3) + 3;
-      actor.status.push({ type: 'SPINAL_SWORD', duration: actor.spinalSwordTurns });
+      actor.status.push(createLifecycleStatus('SPINAL_SWORD', actor.spinalSwordTurns));
       spinalSwordRef.current = false;
       runtime.log('buff', `🦴 ${actor.name} 捡起了小汀留下的脊髓剑！攻击力暴增！`);
       if (!actor.jobData?.skills?.includes('summon_puppet_ting')) {
@@ -274,7 +296,7 @@ export function syncPuppetMasterStatus(runtime: StatusProcessingRuntime, actor: 
   );
   const hasStatus = actor.status.some((status) => status.type === 'PUPPET_MASTER');
   if (hasPuppet && !hasStatus) {
-    actor.status.push({ type: 'PUPPET_MASTER', duration: 999 });
+    actor.status.push(createLifecycleStatus('PUPPET_MASTER', 999));
   } else if (!hasPuppet && hasStatus) {
     actor.status = actor.status.filter((status) => status.type !== 'PUPPET_MASTER');
   }

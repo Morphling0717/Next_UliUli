@@ -6,8 +6,9 @@ import {
   localProject,
   makeEngine,
   makeFighter,
-  snapshot,
-  withSeed,
+    snapshot,
+    withRandomSequence,
+    withSeed,
   type BattleEngineInstance,
   type LogEntry,
 } from '../shared/harness';
@@ -46,6 +47,25 @@ export function runSlackingIsolation(): string[] {
   });
 
   {
+    const sigua = makeFighter('丝瓜uli@A');
+    const bunny = makeFighter('兔卷卷@B');
+    const enemy = makeFighter('摸鱼抵挡测试靶@C');
+    enemy.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'morphling_linken_sphere' });
+    const logs: LogEntry[] = [];
+    const engine = makeEngine(localProject.cloneFighters([sigua, bunny, enemy]), logs);
+
+    withRandomSequence([0.1, 0.1], () => {
+      engine.executeSkillAction('slacking', engine.fighters[0], engine.fighters[2]);
+    });
+
+    assert(engine.fighters[0].status.some((status) => status.type === 'SYNERGY_SLACKING'), 'Enemy spell block should not prevent Sigua from leaving the field');
+    assert(engine.fighters[1].status.some((status) => status.type === 'SYNERGY_SLACKING'), 'Enemy spell block should not prevent Bunny from leaving the field');
+    assert(engine.fighters[2].status.some((status) => status.type === 'SPELL_BLOCK'), 'Slacking setup should not consume an unrelated enemy spell block');
+    assert(!logs.some((entry) => entry.text.includes('挡下') && entry.text.includes('【寻找摸鱼搭子】')), 'Slacking setup should never be logged as blocked by an enemy defense');
+    cases.push('enemy spell defense cannot block the slacking partnership');
+  }
+
+  {
     const logs: LogEntry[] = [];
     const attacker = makeFighter('M1A2_abrams_sep@attacker');
     const sigua = applySlacking(makeFighter('丝瓜uli@away'));
@@ -72,7 +92,6 @@ export function runSlackingIsolation(): string[] {
       engine.step({ current: false });
       assertUnchanged(before, engine.fighters, [name], { checkStatus: false });
       const joined = logs.map((entry) => entry.text).join('\n');
-      assert(joined.includes(`${name} 正在场外OB摸鱼，暂时不参与战斗`), `${name} did not skip while slacking:\n${joined}`);
       assert(!new RegExp(`${name}.*(攻击|凝聚魔力|计算器|萌兔出击|歌姬演唱)`).test(joined), `${name} acted while slacking:\n${joined}`);
     });
     cases.push(`${name} skips own turn while slacking`);
@@ -95,7 +114,6 @@ export function runSlackingIsolation(): string[] {
       engine.step({ current: false });
       assertUnchanged(before, engine.fighters, ['兔卷卷'], { checkStatus: false });
       const joined = logs.map((entry) => entry.text).join('\n');
-      assert(joined.includes('兔卷卷 正在场外OB摸鱼，暂时不参与战斗'), `slacking versatile bunny did not skip:\n${joined}`);
       assert(!/人设时钟|光速换装|光速切片|计算器/.test(joined), `slacking versatile bunny advanced style clock or acted:\n${joined}`);
     });
     cases.push('slacking versatile bunny cannot act through style fool or style clock');

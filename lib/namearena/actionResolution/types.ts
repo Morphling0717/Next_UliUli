@@ -4,6 +4,7 @@ import type {
   DefeatOptions,
   Fighter,
   SkillDefinition,
+  StatusApplicationOptions,
   StatusEffectsMap,
 } from '../types';
 import type { CharacterHookRuntime } from '../characterHooks';
@@ -16,6 +17,7 @@ export interface ActionResolutionRuntime {
   data: BattleEngineData;
   statusEffects: StatusEffectsMap;
   turnCount: number;
+  largeRound: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string) => void;
@@ -29,6 +31,7 @@ export interface ActionResolutionRuntime {
     options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
+  applyStatus: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
   calculateDamage: (
     user: Fighter,
     target: Fighter,

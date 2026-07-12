@@ -10,6 +10,12 @@ import type {
   BattleEngineData,
   BattleEngineCore,
   StatusEffectsMap,
+  BattleEvent,
+  BattleLogEntry,
+  BattleState,
+  DamageResolutionRecord,
+  DamageResolutionOutcome,
+  StatusApplicationOptions,
 } from './types';
 import type { PuruisaishiRuntime } from './puruisaishiMechanics';
 import { cloneJobDefinition, healFighter, isActiveCombatant, setCurrentHp, syncHpPct } from './combatState';
@@ -33,6 +39,7 @@ import {
   handleValorantWeaponDrop as handleValorantWeaponDropAction,
   handleWaitCounter as handleWaitCounterAction,
   missesSkill as missesSkillAction,
+  tryApplyHostileStatus as tryApplyHostileStatusAction,
   triggerSuccubusBabyFollowup as triggerSuccubusBabyFollowupAction,
 } from './actionResolution';
 import {
@@ -64,6 +71,7 @@ import {
 import {
   calculateDamage,
   DamageResolutionRuntime,
+  getFatigueDamageBonusForTurn,
 } from './damageResolution';
 import {
   advanceGlobalTimedStatuses,
@@ -115,7 +123,7 @@ import {
   isLuckEmperor,
   triggerGachaDeathSave,
 } from './gachaMechanics';
-import { REVIVE_CLEAN_STATUS_TYPES } from './statusRules';
+import { CONTROL_STATUS_TYPES, REVIVE_CLEAN_STATUS_TYPES, isStatusType } from './statusRules';
 import {
   consumeSpellBlock,
   findDefenseStatus,
@@ -146,13 +154,31 @@ import {
 } from './yuzuMechanics';
 import {
   consumePuruisaishiShield,
+  grantOriginiumCrystalBreakReward,
   notePuruisaishiRoundActor,
   noteOriginiumDamageLanded,
+  processPuruisaishiLargeRoundEnd,
   processPuruisaishiRoundEnd,
   redirectOriginiumCoreDamage,
   spawnCrystalFromInfectedDeath,
   trySpawnPuruisaishiEvent,
+  withOriginiumStatShapeSuspended,
 } from './puruisaishiMechanics';
+import {
+  consumeCompletedLargeRound,
+  createBattleState,
+  getLargeRoundPriorityActorIds,
+  noteLargeRoundActor,
+  syncLargeRoundState,
+  withBattleRandom,
+} from './battleState';
+import {
+  applyPermanentStatBuff,
+  clearZeroedStatPenalty,
+  cleanupOrphanedTimedStatModifiers,
+  withTimedStatModifiersSuspended,
+} from './statModifiers';
+import { recordDamageSettlement } from './combatLedger';
 
 const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   skill: '技能伤害',
@@ -245,12 +271,7 @@ function grantWarThunderSpawnPoints(fighter: Fighter, amount: number): number {
 }
 
 function restoreZeroedStatsIfNeeded(fighter: Fighter): void {
-  if (!fighter.baseStatsForZero) return;
-  fighter.atk = fighter.baseStatsForZero.atk;
-  fighter.def = fighter.baseStatsForZero.def;
-  fighter.res = fighter.baseStatsForZero.res;
-  delete fighter.baseStatsForZero;
-  fighter.wasZeroed = false;
+  clearZeroedStatPenalty(fighter);
 }
 
 function hasStatus(fighter: Fighter, type: string): boolean {
@@ -261,9 +282,20 @@ function isOriginalGamer(fighter?: Fighter): fighter is Fighter {
   return Boolean(fighter?.isGamer && !fighter.isSon && (fighter.job === 'HIGH_END_GAMER' || fighter.job === 'ALL_PLATFORM_CHAMPION'));
 }
 
+type ActiveActionContext = {
+  id: string;
+  actorId: string;
+  actorName: string;
+  skillId: string | null;
+  skillName: string;
+  triggerDepth: number;
+  forcedTargetId?: string;
+};
+
 export class BattleEngine {
   fighters: Fighter[];
-  addLogCallback: (e: { type: string; text: string }) => void;
+  addLogCallback: (e: BattleLogEntry) => void;
+  addEventCallback?: (event: BattleEvent) => void;
   JOBS: Partial<Record<string, JobDefinition>>;
   SKILLS: Record<string, SkillDefinition>;
   Data: BattleEngineData;
@@ -272,6 +304,12 @@ export class BattleEngine {
   SKILL_TAGS: Record<string, string>;
   turnCount: number;
   activeSpinalSwordRef?: SpinalSwordRef;
+  battleState: BattleState;
+  events: BattleEvent[] = [];
+  private deterministicRandom: boolean;
+  private randomDepth = 0;
+  private actionStack: ActiveActionContext[] = [];
+  private deferredDamageActions = new Map<string, Array<() => void>>();
 
   constructor(
     fighters: Fighter[],
@@ -281,6 +319,8 @@ export class BattleEngine {
     Data: BattleEngineData,
     Core: BattleEngineCore,
     turnCount = 0,
+    battleState?: BattleState,
+    addEventCallback?: (event: BattleEvent) => void,
   ) {
     this.fighters = fighters;
     this.addLogCallback = addLogCallback;
@@ -288,14 +328,93 @@ export class BattleEngine {
     this.SKILLS = SKILLS;
     this.Data = Data;
     this.Core = Core;
+    this.addEventCallback = addEventCallback;
     this.STATUS_EFFECTS = Data.STATUS_EFFECTS ?? {};
     this.SKILL_TAGS = Data.SKILL_TAGS ?? {};
     this.turnCount = turnCount;
+    this.deterministicRandom = !!battleState;
+    this.battleState = battleState ?? createBattleState(Math.floor(Math.random() * 2147483646) + 1, turnCount);
+    this.battleState.turnCount = turnCount;
+    syncLargeRoundState(this.battleState, this.fighters);
     this.initializeYuzuOpeningShields();
   }
 
   log(type: string, text: string): void {
-    this.addLogCallback({ type, text: text.replace(/\s*\r?\n\s*/g, ' ') });
+    const event = this.createEvent('log', type, text.replace(/\s*\r?\n\s*/g, ' '), true);
+    this.addLogCallback(event as BattleLogEntry);
+  }
+
+  createEvent(
+    kind: BattleEvent['kind'],
+    type: string,
+    text: string,
+    visible: boolean,
+    extra: Partial<BattleEvent> = {},
+  ): BattleEvent {
+    const action = this.actionStack[this.actionStack.length - 1];
+    const sequence = ++this.battleState.eventSequence;
+    const event: BattleEvent = {
+      id: `event-${sequence}`,
+      sequence,
+      kind,
+      visible,
+      type,
+      text,
+      turn: this.turnCount,
+      largeRound: this.battleState.largeRound.number,
+      seed: this.battleState.seed,
+      ...(action ? {
+        actionId: action.id,
+        actorId: action.actorId,
+        actorName: action.actorName,
+        skillId: action.skillId,
+        skillName: action.skillName,
+        triggerDepth: action.triggerDepth,
+      } : {}),
+      ...extra,
+    };
+    this.events.push(event);
+    this.addEventCallback?.(event);
+    return event;
+  }
+
+  recordEvent(kind: BattleEvent['kind'], type: string, text: string, extra: Partial<BattleEvent> = {}): void {
+    this.createEvent(kind, type, text, false, extra);
+  }
+
+  runWithBattleRandom<T>(callback: () => T): T {
+    if (!this.deterministicRandom || this.randomDepth > 0) return callback();
+    this.randomDepth += 1;
+    try {
+      return withBattleRandom(this.battleState, callback);
+    } finally {
+      this.randomDepth -= 1;
+    }
+  }
+
+  beginAction(skillId: string | null, actor: Fighter, forcedTarget: Fighter | null, triggerDepth: number): ActiveActionContext {
+    const actionNumber = ++this.battleState.actionSequence;
+    const skillName = skillId ? (this.SKILLS[skillId]?.name ?? skillId) : '普通攻击';
+    const action: ActiveActionContext = {
+      id: `action-${actionNumber}`,
+      actorId: actor.id,
+      actorName: actor.name,
+      skillId,
+      skillName,
+      triggerDepth,
+      forcedTargetId: forcedTarget?.id,
+    };
+    this.actionStack.push(action);
+    this.recordEvent('action_start', 'action', `${actor.name} 开始执行【${skillName}】。`, {
+      targetIds: forcedTarget ? [forcedTarget.id] : undefined,
+    });
+    return action;
+  }
+
+  endAction(action: ActiveActionContext): void {
+    this.recordEvent('action_end', 'action', `${action.actorName} 的【${action.skillName}】结算结束。`);
+    const index = this.actionStack.lastIndexOf(action);
+    if (index >= 0) this.actionStack.splice(index, 1);
   }
 
   queueOrLogDamageEvent(target: Fighter, options: DamageApplicationOptions, type: string, text: string): void {
@@ -307,11 +426,29 @@ export class BattleEngine {
     this.log(type, text);
   }
 
+  queueOrRunDamageAction(target: Fighter, options: DamageApplicationOptions, action: () => void): void {
+    if (!options.deferTransform) {
+      action();
+      return;
+    }
+    const queued = this.deferredDamageActions.get(target.id) ?? [];
+    queued.push(action);
+    this.deferredDamageActions.set(target.id, queued);
+  }
+
   flushDeferredDamageEvents(fighter: Fighter): void {
-    const pendingEvents = fighter.pendingDamageEvents ?? [];
-    delete fighter.pendingDamageEvents;
-    pendingEvents.forEach((event) => this.log(event.type, event.text));
-    this.handleTransformations(fighter);
+    let needsTransformCheck = true;
+    while (needsTransformCheck || (fighter.pendingDamageEvents?.length ?? 0) > 0 || this.deferredDamageActions.has(fighter.id)) {
+      const pendingEvents = fighter.pendingDamageEvents ?? [];
+      delete fighter.pendingDamageEvents;
+      pendingEvents.forEach((event) => this.log(event.type, event.text));
+      if (needsTransformCheck || pendingEvents.length > 0) this.handleTransformations(fighter);
+      needsTransformCheck = false;
+
+      const pendingActions = this.deferredDamageActions.get(fighter.id) ?? [];
+      this.deferredDamageActions.delete(fighter.id);
+      pendingActions.forEach((action) => action());
+    }
   }
 
   syncHpPct(f: Fighter): void {
@@ -323,11 +460,26 @@ export class BattleEngine {
   }
 
   getFatigueDamageBonus(): number {
-    if (this.turnCount <= 500) return 0;
-    const steadyFatigue = Math.min(80, Math.floor((this.turnCount - 500) / 25));
-    if (this.turnCount <= 900) return steadyFatigue;
-    const collapseFatigue = Math.floor((this.turnCount - 900) / 3) * 6;
-    return Math.min(900, steadyFatigue + collapseFatigue);
+    return getFatigueDamageBonusForTurn(this.turnCount);
+  }
+
+  applyStatus(
+    target: Fighter,
+    type: string,
+    duration: number,
+    options: StatusApplicationOptions = {},
+  ): boolean {
+    const applied = tryApplyHostileStatusAction(
+      this.createActionResolutionRuntime(),
+      target,
+      type,
+      duration,
+      options,
+    );
+    this.recordEvent('status', applied ? 'status_applied' : 'status_blocked', `${target.name}:${type}`, {
+      targetIds: [target.id],
+    });
+    return applied;
   }
 
   initializeYuzuOpeningShields(): void {
@@ -361,25 +513,35 @@ export class BattleEngine {
     this.syncHpPct(target);
     this.queueOrLogDamageEvent(target, options, 'heal', `🔥 【神不死鸟】${target.name} 在致死瞬间化为太阳火焰复燃，恢复到 ${target.currentHp} 点生命！`);
 
-    const enemies = this.fighters.filter((fighter) =>
-      isSelectableTargetFor(this.createTargetingRuntime(), target, fighter),
-    );
-    const phoenixDmg = Math.floor(target.mag * 2.8 + target.atk * 1.4);
-    enemies.forEach((enemy) => {
-      const actualDmg = this.applyDamage(enemy, phoenixDmg, 'skill', true, target, {
-        deferTransform: true,
-        actionName: '神不死鸟',
-        respectDefenses: true,
-        canTriggerWaitCounter: false,
-      });
-      if (actualDmg > 0) {
-        this.log('crit', `🔥 【神不死鸟】太阳火焰反扑 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
-        this.flushDeferredDamageEvents(enemy);
-      } else {
-        this.log('info', `🔥 【神不死鸟】火焰扫过 ${enemy.name}，但没有造成实际伤害！`);
-      }
-      if (enemy.currentHp <= 0) {
-        this.markDefeated(enemy, { message: `💀 【神不死鸟】${enemy.name} 被翼神龙的复燃火焰吞没！`, killer: target });
+    this.queueOrRunDamageAction(target, options, () => {
+      const enemies = this.fighters.filter((fighter) =>
+        isSelectableTargetFor(this.createTargetingRuntime(), target, fighter),
+      );
+      const phoenixDmg = Math.floor(target.mag * 2.8 + target.atk * 1.4);
+      for (const enemy of enemies) {
+        if (!this.isActiveCombatant(target)) {
+          this.log('info', `🔥 【神不死鸟】${target.name} 在反扑途中被击倒，余下的太阳火焰随之熄灭！`);
+          break;
+        }
+        if (!isSelectableTargetFor(this.createTargetingRuntime(), target, enemy)) continue;
+        const damageOptions: DamageApplicationOptions = {
+          deferTransform: true,
+          actionName: '神不死鸟',
+          respectDefenses: true,
+          canTriggerWaitCounter: false,
+        };
+        const actualDmg = this.applyDamage(enemy, phoenixDmg, 'skill', true, target, damageOptions);
+        if (actualDmg > 0) {
+          this.log('crit', `🔥 【神不死鸟】太阳火焰反扑 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
+        } else if (this.isActiveCombatant(target)) {
+          this.log('info', `🔥 【神不死鸟】火焰扫过 ${enemy.name}，但没有造成实际伤害！`);
+        }
+        if (actualDmg > 0 || (enemy.pendingDamageEvents?.length ?? 0) > 0) {
+          this.flushDeferredDamageEvents(enemy);
+        }
+        if (enemy.currentHp <= 0 && !enemy.isDead && !enemy.isDeadAnnounced) {
+          this.markDefeated(enemy, { message: `💀 【神不死鸟】${enemy.name} 被翼神龙的复燃火焰吞没！`, killer: target });
+        }
       }
     });
 
@@ -440,10 +602,9 @@ export class BattleEngine {
     refreshStatus(target, 'BKB', 1, 'tokusatsu_defiance');
     refreshStatus(target, 'REGEN', 2);
     target.currentHp = Math.max(1, Math.floor(target.maxHp * 0.13));
-    target.atk = Math.floor(target.atk * 1.02);
-    target.mag = Math.floor(target.mag * 1.02);
-    target.spd = Math.floor(target.spd * 1.01);
+    applyPermanentStatBuff(target, { atk: 1.02, mag: 1.02, spd: 1.01 });
     this.syncHpPct(target);
+    options.suppressOnHitStatuses = true;
     this.queueOrLogDamageEvent(target, options, 'buff', `🔥 【悲愿不倒】${target.name} 的奇迹怪兽武刃拒绝退场！强行恢复到 ${target.currentHp}/${target.maxHp}，清除异常并准备立刻反扑！`);
     return true;
   }
@@ -499,11 +660,16 @@ export class BattleEngine {
       fighters: this.fighters,
       core: this.Core,
       turnCount: this.turnCount,
+      largeRound: this.battleState.largeRound.number,
+      completedLargeRound: this.battleState.completedLargeRound,
+      largeRoundParticipantIds: [...this.battleState.largeRound.participantIds],
+      largeRoundActedIds: [...this.battleState.largeRound.actedIds],
       log: (type, text) => this.log(type, text),
       isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
       syncHpPct: (fighter) => this.syncHpPct(fighter),
       applyDamage: (target, amount, source, isTrueDamage, attacker, options) =>
         this.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+      flushDeferredDamageEvents: (fighter) => this.flushDeferredDamageEvents(fighter),
       markDefeated: (target, options) => this.markDefeated(target, options),
     };
   }
@@ -565,6 +731,38 @@ export class BattleEngine {
     this.log('buff', `🎮 【击杀滚动】${killer.name} 击败 ${target.name} 后进入残局处理，APM +1，输入缓存 +1！（当前 ${killer.apm ?? 0}/${GAMER_APM_MAX}）`);
   }
 
+  settleDamageRecord(
+    target: Fighter,
+    attacker: Fighter | undefined,
+    source: string,
+    attempted: number,
+    hpDamage: number,
+    shieldDamage: number,
+    overkillDamage: number,
+    options: DamageApplicationOptions,
+    outcome: DamageResolutionOutcome = hpDamage > 0 ? 'hp_damage' : shieldDamage > 0 ? 'shielded' : 'prevented',
+  ): DamageResolutionRecord {
+    const resolution: DamageResolutionRecord = {
+      attempted: Math.max(0, Math.floor(attempted)),
+      hpDamage: Math.max(0, Math.floor(hpDamage)),
+      shieldDamage: Math.max(0, Math.floor(shieldDamage)),
+      overkillDamage: Math.max(0, Math.floor(overkillDamage)),
+      outcome,
+      source,
+      attackerId: attacker?.id,
+      targetId: target.id,
+    };
+    options.resolution = resolution;
+    recordDamageSettlement(target, attacker, resolution, options.creditAttacker ?? true);
+    this.recordEvent('damage', 'damage', `${attacker?.name ?? '环境'} -> ${target.name}`, {
+      actorId: attacker?.id,
+      actorName: attacker?.name,
+      targetIds: [target.id],
+      damage: resolution,
+    });
+    return resolution;
+  }
+
   applyDamage(
     target: Fighter,
     amount: number,
@@ -573,8 +771,11 @@ export class BattleEngine {
     attacker?: Fighter,
     options: DamageApplicationOptions = {},
   ): number {
+    amount = Math.max(0, Math.floor(amount));
     if (amount <= 0 || target.isDead || target.currentHp <= 0) return 0;
     if (target.status.some((s) => s.type === 'SYNERGY_SLACKING')) return 0;
+    const attemptedDamage = amount;
+    let shieldDamage = 0;
 
     const originiumRedirect = redirectOriginiumCoreDamage(
       this.createPuruisaishiRuntime(),
@@ -583,8 +784,12 @@ export class BattleEngine {
       source,
       isTrueDamage,
       attacker,
+      options,
     );
-    if (originiumRedirect.handled) return originiumRedirect.actualDamage;
+    if (originiumRedirect.handled) {
+      this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'redirected');
+      return 0;
+    }
 
     if (
       target.isYuzu &&
@@ -609,6 +814,7 @@ export class BattleEngine {
       if (invul) {
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
         this.log('info', formatInvul(invul, target.name, incomingSource));
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'invulnerable');
         return 0;
       }
 
@@ -619,6 +825,7 @@ export class BattleEngine {
         const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
         this.log('info', formatSpellBlock(spellBlock, target.name, incomingSource, healText));
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'spell_blocked');
         return 0;
       }
     }
@@ -646,11 +853,15 @@ export class BattleEngine {
       amount = Math.max(1, Math.floor(amount * 0.7));
       target.status = target.status.filter((status) => status.type !== 'EMOTE_ADAPT');
       const gain = grantEmoteAdaptStats(target, attacker, 0.03);
+      const reducedDamage = beforeAdapt - amount;
+      const reductionText = reducedDamage > 0
+        ? `削减 ${reducedDamage} 点伤害`
+        : '这次伤害已处于最低值，无法继续削减';
       this.queueOrLogDamageEvent(
         target,
         options,
         'buff',
-        `🧿 【适应转轮】${target.name} 记录 ${attacker.name} 的攻击模式，削减 ${beforeAdapt - amount} 点伤害，并复制 3% 属性（${formatEmoteStats(gain)}）；${attacker.name} 属性不降低。`,
+        `🧿 【适应转轮】${target.name} 记录 ${attacker.name} 的攻击模式，${reductionText}，并复制 3% 属性（${formatEmoteStats(gain)}）；${attacker.name} 属性不降低。`,
       );
     }
 
@@ -660,12 +871,16 @@ export class BattleEngine {
       if (reduction > 0) {
         const beforeYuzuReduction = amount;
         amount = Math.max(1, Math.floor(amount * (1 - reduction)));
-        this.log('info', `🪞 【镜界减伤】${target.name} 处于第 ${phase} 阶段，削减 ${beforeYuzuReduction - amount} 点伤害。`);
+        const reducedDamage = beforeYuzuReduction - amount;
+        if (reducedDamage > 0) {
+          this.log('info', `🪞 【镜界减伤】${target.name} 处于第 ${phase} 阶段，削减 ${reducedDamage} 点伤害。`);
+        }
       }
     }
 
     const shieldResult = consumeYuzuShield(target, amount);
     if (shieldResult.absorbed > 0) {
+      shieldDamage += shieldResult.absorbed;
       this.log('info', `🛡️ 【镜界护盾】${target.name} 的护盾吸收 ${shieldResult.absorbed} 点伤害，剩余 ${target.yuzuShield ?? 0}。`);
       amount = shieldResult.remaining;
       if (
@@ -683,10 +898,12 @@ export class BattleEngine {
           syncHpPct: (fighter) => this.syncHpPct(fighter),
         }, target, '个人战护盾被击碎，溢出伤害被镜界无效化');
         this.syncHpPct(target);
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'shielded');
         return 0;
       }
       if (amount <= 0) {
         this.syncHpPct(target);
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'shielded');
         return 0;
       }
     }
@@ -702,25 +919,36 @@ export class BattleEngine {
         allies.forEach((ally, index) => {
           const share = shares[index] ?? 0;
           if (share <= 0) return;
-          const shared = this.applyDamage(ally, share, 'yuzu_share', true, target, {
+          const shareOptions: DamageApplicationOptions = {
             deferTransform: true,
             actionName: '镜界分摊',
             respectDefenses: false,
-          });
-          if (shared > 0) this.flushDeferredDamageEvents(ally);
+          };
+          const shared = this.applyDamage(ally, share, 'yuzu_share', true, attacker, shareOptions);
+          const settlement = shareOptions.resolution;
+          if (settlement) {
+            const shieldText = settlement.shieldDamage > 0 ? `，护盾吸收 ${settlement.shieldDamage} 点` : '';
+            const hpText = settlement.hpDamage > 0 ? `，生命实际损失 ${settlement.hpDamage} 点` : '，生命没有损失';
+            const overkillText = settlement.overkillDamage > 0 ? `，${settlement.overkillDamage} 点为溢出伤害` : '';
+            this.log('info', `📌 【镜界分摊结算】${ally.name} 分得 ${share} 点伤害${shieldText}${hpText}${overkillText}。`);
+          }
+          if (shared > 0 || (ally.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(ally);
         });
         if (amount <= 0) {
           this.syncHpPct(target);
+          this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'redistributed');
           return 0;
         }
       }
     }
 
     const puruisaishiShield = consumePuruisaishiShield(this.createPuruisaishiRuntime(), target, amount);
-    if (puruisaishiShield.absorbed > 0) {
+    if (puruisaishiShield.handled) {
+      shieldDamage += puruisaishiShield.absorbed;
       amount = puruisaishiShield.remaining;
       if (puruisaishiShield.retreated || amount <= 0) {
         this.syncHpPct(target);
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'shielded');
         return 0;
       }
     }
@@ -731,11 +959,12 @@ export class BattleEngine {
       (target.isYuzu && (target.yuzuPhase ?? 1) === 1);
     if (isProtected && !target.transformed && amount >= target.currentHp) {
       amount = Math.max(0, target.currentHp - 1);
+      this.queueOrLogDamageEvent(target, options, 'info', `🛡️ ${target.name} 触发了锁血保护，强制保留最后 1 点生命！`);
       if (amount === 0) {
         this.syncHpPct(target);
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'lockblood');
         return 0;
       }
-      this.queueOrLogDamageEvent(target, options, 'info', `🛡️ ${target.name} 触发了锁血保护，强制保留最后 1 点生命！`);
     }
 
     if (source === 'skill' && target.job === 'GOD_OF_TROLLS' && amount > 0 && Math.random() < 0.40) {
@@ -756,12 +985,13 @@ export class BattleEngine {
             actionName: options.actionName,
             respectDefenses: true,
           });
+          options.redirectedJokerDamage = transferredDmg;
           if (transferredDmg > 0) {
             this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，实际承受 ${transferredDmg} 点伤害！`);
           } else {
             this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，但没有造成实际伤害！`);
           }
-          if (transferredDmg > 0) this.flushDeferredDamageEvents(victim);
+          if (transferredDmg > 0 || (victim.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(victim);
           if (victim.currentHp <= 0 && !victim.isDead && !victim.isDeadAnnounced) {
             const transferKiller = attacker && attacker.id !== victim.id ? attacker : target;
             this.markDefeated(victim, {
@@ -770,10 +1000,12 @@ export class BattleEngine {
             });
           }
         } else {
+          options.redirectedJokerDamage = 0;
           const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
           this.log('info', `🎭 【随机恶作剧】${target.name} 遭到${incomingSource}时施展魔术，${originalAmount} 点伤害凭空消失！`);
         }
         options.redirectedByJoker = true;
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'redirected');
       }
     }
 
@@ -782,6 +1014,7 @@ export class BattleEngine {
       if (amount <= 0) {
         target.gachaTingGuardTrapReady = false;
         this.syncHpPct(target);
+        if (!options.resolution) this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options);
         return 0;
       }
     }
@@ -789,12 +1022,26 @@ export class BattleEngine {
     amount = this.triggerTokusatsuThroneFromDamage(target, amount, source, attacker, options);
     if (amount <= 0) {
       this.syncHpPct(target);
+      if (!options.resolution) this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options);
       return 0;
     }
 
     const hpBeforeDamage = target.currentHp;
-    target.currentHp -= amount;
-    target.stats.dmgTaken += amount;
+    const resolvedIncomingDamage = amount;
+    const hpDamage = Math.min(hpBeforeDamage, resolvedIncomingDamage);
+    const overkillDamage = Math.max(0, resolvedIncomingDamage - hpBeforeDamage);
+    target.currentHp = Math.max(0, hpBeforeDamage - hpDamage);
+    amount = hpDamage;
+    this.settleDamageRecord(
+      target,
+      attacker,
+      source,
+      attemptedDamage,
+      hpDamage,
+      shieldDamage,
+      overkillDamage,
+      options,
+    );
     noteOriginiumDamageLanded(this.createPuruisaishiRuntime(), target, source, attacker);
     if (amount > 0) {
       target.lastDamage = {
@@ -830,6 +1077,7 @@ export class BattleEngine {
       return amount;
     }
     if (target.currentHp <= 0 && triggerGachaDeathSave(target, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), (fighter) => this.syncHpPct(fighter))) {
+      options.suppressOnHitStatuses = true;
       return amount;
     }
     if (target.currentHp <= 0 && this.rewriteActiveDeathSaveDamage(target, options)) {
@@ -843,13 +1091,11 @@ export class BattleEngine {
       if (hasActiveDefiance || !target.hasTriggeredTingDefiance) {
         target.currentHp = 1;
         if (!hasActiveDefiance) {
-          target.status.push({ type: 'TING_DEFIANCE', duration: TING_DEFIANCE_DURATION });
+          refreshStatus(target, 'TING_DEFIANCE', TING_DEFIANCE_DURATION);
         }
         if (!target.hasTriggeredTingDefiance) {
           target.hasTriggeredTingDefiance = true;
-          target.atk = Math.floor(target.atk * 1.2);
-          target.mag = Math.floor(target.mag * 1.2);
-          target.spd = Math.floor(target.spd * 1.15);
+          applyPermanentStatBuff(target, { atk: 1.2, mag: 1.2, spd: 1.15 });
           this.queueOrLogDamageEvent(target, options, 'buff', `🩸 【不甘倒下】${target.name} 被怨念强行钉在 1 点生命，拒绝退场！`);
         } else {
           this.queueOrLogDamageEvent(target, options, 'info', `🩸 ${target.name} 仍处于【不甘倒下】，硬是撑住了致命伤！`);
@@ -907,8 +1153,8 @@ export class BattleEngine {
     });
     if (actual > 0) {
       this.log('info', `🛡️ 【${actionName}】${guardian.name} 为护主承受 ${actual} 点反冲伤害！`);
-      this.flushDeferredDamageEvents(guardian);
     }
+    if (actual > 0 || (guardian.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(guardian);
     if (guardian.currentHp <= 0 && !guardian.isDead && !guardian.isDeadAnnounced) {
       this.markDefeated(guardian, { message: `💀 【${actionName}】${guardian.name} 为护住召唤师承受伤害，被 ${attacker.name} 击溃！`, killer: attacker });
     }
@@ -950,8 +1196,8 @@ export class BattleEngine {
         actionName: '太阳神护主',
         respectDefenses: true,
       });
-      if (actualRetaliation > 0) this.flushDeferredDamageEvents(attacker);
-      if (!hasStatus(attacker, 'BURN')) attacker.status.push({ type: 'BURN', duration: 2 });
+      if (actualRetaliation > 0 || (attacker.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(attacker);
+      if (!hasStatus(attacker, 'BURN')) refreshStatus(attacker, 'BURN', 2);
       emit('crit', `☀️ 【护主神炎】翼神龙 反灼 ${attacker.name}，实际造成 ${actualRetaliation} 点真实伤害！`);
       if (attacker.currentHp <= 0 && !attacker.isDead && !attacker.isDeadAnnounced) {
         this.markDefeated(attacker, { message: `💀 【太阳神护主】${attacker.name} 被翼神龙的护主神炎反噬击倒！`, killer: ra });
@@ -1024,6 +1270,11 @@ export class BattleEngine {
     if (options.setHpZero ?? true) setCurrentHp(target, 0);
     if (options.message) this.log(options.logType ?? 'death', options.message);
     target.isDeadAnnounced = true;
+    this.recordEvent('defeat', 'defeat', `${target.name} 被判定击败。`, {
+      actorId: options.killer?.id,
+      actorName: options.killer?.name,
+      targetIds: [target.id],
+    });
     this.runDefeatHooksOnce(target);
 
     const shouldAwardKill = options.awardKill ?? !target.isNpc;
@@ -1034,6 +1285,7 @@ export class BattleEngine {
       this.grantTingCrocKillMomentum(options.killer, target);
       this.grantGachaSummonRevenge(target, options.killer);
     }
+    grantOriginiumCrystalBreakReward(this.createPuruisaishiRuntime(), target, options.killer);
     runCharacterDefeatSettledHooks({
       fighter: target,
       runtime: this.createCharacterHookRuntime(),
@@ -1094,8 +1346,7 @@ export class BattleEngine {
     if (advancedSummons.length === 0) return;
 
     for (const summon of advancedSummons) {
-      summon.atk = Math.floor(summon.atk * 1.08);
-      summon.mag = Math.floor(summon.mag * 1.08);
+      applyPermanentStatBuff(summon, { atk: 1.08, mag: 1.08 });
       refreshStatus(summon, 'BKB', 1, 'summon_revenge_order');
       refreshStatus(summon, 'REGEN', 2);
     }
@@ -1118,12 +1369,14 @@ export class BattleEngine {
     fighter.resurrected = true;
     fighter.isSon = true;
     fighter.jobData = cloneJobDefinition(MORPHLING_SON);
-    fighter.maxHp = Math.floor(fighter.maxHp * 6);
-    fighter.currentHp = fighter.maxHp;
-    fighter.atk *= 6;
-    fighter.mag *= 6;
-    fighter.wis = Math.floor(fighter.wis * 4.0);
-    fighter.spd = 100;
+    withTimedStatModifiersSuspended(fighter, () => {
+      fighter.maxHp = Math.floor(fighter.maxHp * 6);
+      fighter.currentHp = fighter.maxHp;
+      fighter.atk *= 6;
+      fighter.mag *= 6;
+      fighter.wis = Math.floor(fighter.wis * 4.0);
+      fighter.spd = 100;
+    });
     this.syncHpPct(fighter);
     fighter.status = [];
     fighter.isDeadAnnounced = false;
@@ -1173,8 +1426,8 @@ export class BattleEngine {
     return checkWinCondition(this.createTurnFlowRuntime(), alive);
   }
 
-  determineActor(alive: Fighter[]): Fighter | null {
-    return determineActor(alive, this.createTurnFlowRuntime());
+  determineActor(alive: Fighter[], priorityActorIds: readonly string[] = []): Fighter | null {
+    return determineActor(alive, this.createTurnFlowRuntime(), priorityActorIds);
   }
 
   handleSelfTimedStatusExpiry(actor: Fighter, type: string): void {
@@ -1195,8 +1448,19 @@ export class BattleEngine {
     this.advanceGlobalTimedStatuses();
     runCharacterGlobalTickHooks({ runtime: this.createCharacterHookRuntime() });
     runCharacterReentryHooks({ runtime: this.createCharacterHookRuntime() });
+    const completedBeforePuruisaishi = syncLargeRoundState(this.battleState, this.fighters);
+    if (completedBeforePuruisaishi !== undefined) {
+      this.recordEvent('round', 'round_complete', `第 ${completedBeforePuruisaishi} 个大回合因参与者退场而结束。`);
+    }
     processPuruisaishiRoundEnd(this.createPuruisaishiRuntime());
     this.handleDeathsAndRevives(spinalSwordRef);
+    const completedAfterPuruisaishi = syncLargeRoundState(this.battleState, this.fighters);
+    if (completedAfterPuruisaishi !== undefined) {
+      this.recordEvent('round', 'round_complete', `第 ${completedAfterPuruisaishi} 个大回合因参与者退场而结束。`);
+      processPuruisaishiLargeRoundEnd(this.createPuruisaishiRuntime());
+    }
+    this.fighters.forEach((fighter) => cleanupOrphanedTimedStatModifiers(fighter));
+    consumeCompletedLargeRound(this.battleState, this.fighters);
   }
 
   resolveGachaInstantActions(spinalSwordRef: SpinalSwordRef): void {
@@ -1371,7 +1635,7 @@ export class BattleEngine {
     actor.styleTurnCounter = (actor.styleTurnCounter ?? 0) + 1;
     if (actor.styleTurnCounter >= 4) {
       actor.styleTurnCounter = 0;
-      this.log('skill', `⏰ 【人设时钟】第 4 回合已到！${actor.name} 准时开启了新一轮的【光速换装】！`);
+      this.log('skill', `⏰ 【人设时钟】第 4 次自身行动已到！${actor.name} 准时开启了新一轮的【光速换装】！`);
       this.executeSkillAction('v_rabbit_style_switch', actor, null, 1);
     }
   }
@@ -1384,7 +1648,7 @@ export class BattleEngine {
       const jobData = this.JOBS[jobKey];
       if (jobData) tgt.jobData = cloneJobDefinition(jobData);
       tgt.job = jobKey;
-      buffFn();
+      withTimedStatModifiersSuspended(tgt, () => withOriginiumStatShapeSuspended(tgt, buffFn));
       this.syncHpPct(tgt);
       this.log('transform', msg);
     };
@@ -1603,8 +1867,8 @@ export class BattleEngine {
     applyAttackerStyleEffectsAction(this.createActionResolutionRuntime(), user, target);
   }
 
-  applySkillStatusEffect(skill: SkillDefinition, target: Fighter): void {
-    applySkillStatusEffectAction(this.createActionResolutionRuntime(), skill, target);
+  applySkillStatusEffect(skill: SkillDefinition, target: Fighter, user: Fighter = target): void {
+    applySkillStatusEffectAction(this.createActionResolutionRuntime(), skill, user, target);
   }
 
   handleValorantWeaponDrop(target: Fighter, actualDmg: number): void {
@@ -1619,8 +1883,8 @@ export class BattleEngine {
     grantValorantKillRewardsAction(this.createActionResolutionRuntime(), user);
   }
 
-  handlePrimaryTargetDefeat(user: Fighter, target: Fighter): void {
-    handlePrimaryTargetDefeatAction(this.createActionResolutionRuntime(), user, target);
+  handlePrimaryTargetDefeat(user: Fighter, target: Fighter): boolean {
+    return handlePrimaryTargetDefeatAction(this.createActionResolutionRuntime(), user, target);
   }
 
   applyLifestealEffects(
@@ -1648,7 +1912,14 @@ export class BattleEngine {
   }
 
   executeSkillAction(skId: string | null, usr: Fighter, forcedTarget: Fighter | null = null, triggerDepth = 0): void {
-    executeSkillActionFlow(this.createActionResolutionRuntime(), skId, usr, forcedTarget, triggerDepth);
+    this.runWithBattleRandom(() => {
+      const action = this.beginAction(skId, usr, forcedTarget, triggerDepth);
+      try {
+        executeSkillActionFlow(this.createActionResolutionRuntime(), skId, usr, forcedTarget, triggerDepth);
+      } finally {
+        this.endAction(action);
+      }
+    });
   }
 
   handleDeathsAndRevives(spinalSwordRef: SpinalSwordRef): void {
@@ -1672,6 +1943,10 @@ export class BattleEngine {
   }
 
   step(spinalSwordRef: SpinalSwordRef): boolean {
+    return this.runWithBattleRandom(() => this.stepInternal(spinalSwordRef));
+  }
+
+  private stepInternal(spinalSwordRef: SpinalSwordRef): boolean {
     this.activeSpinalSwordRef = spinalSwordRef;
     this.fighters.forEach((f) => { f.isActing = false; f.isHit = false; });
 
@@ -1679,6 +1954,8 @@ export class BattleEngine {
     if (this.checkWinCondition(alive)) return true;
 
     this.turnCount += 1;
+    this.battleState.turnCount = this.turnCount;
+    syncLargeRoundState(this.battleState, this.fighters);
     if (this.turnCount === 501) {
       this.log('info', '⏳ 久战不决，战场进入疲劳阶段！所有伤害会随回合推进逐步提高，防止战斗无限拖延。');
     }
@@ -1687,13 +1964,24 @@ export class BattleEngine {
     }
     trySpawnPuruisaishiEvent(this.createPuruisaishiRuntime());
 
-    const actor = this.determineActor(alive);
+    const priorityActorIds = getLargeRoundPriorityActorIds(this.battleState, this.fighters);
+    const actor = this.determineActor(alive, priorityActorIds);
     if (!actor) { this.finishStep(spinalSwordRef); return false; }
 
     actor.isActing = true;
+    const completedLargeRound = noteLargeRoundActor(this.battleState, this.fighters, actor);
+    if (completedLargeRound !== undefined) {
+      this.recordEvent('round', 'round_complete', `第 ${completedLargeRound} 个大回合结束。`, {
+        actorId: actor.id,
+        actorName: actor.name,
+      });
+    }
     notePuruisaishiRoundActor(this.createPuruisaishiRuntime(), actor);
     this.handleSpinalSwordDrop(actor, spinalSwordRef);
 
+    const blockingStatusTypeAtTurnStart = actor.status.find((status) =>
+      isStatusType(status.type, CONTROL_STATUS_TYPES),
+    )?.type;
     const canAct = this.processStatus(actor);
     this.handleTransformations(actor);
 
@@ -1702,7 +1990,7 @@ export class BattleEngine {
       return false;
     }
     if (!canAct) {
-      logUnableToAct(this.createTurnFlowRuntime(), actor);
+      logUnableToAct(this.createTurnFlowRuntime(), actor, blockingStatusTypeAtTurnStart);
       this.finishStep(spinalSwordRef);
       return false;
     }

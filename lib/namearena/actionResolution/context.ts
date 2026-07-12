@@ -19,17 +19,21 @@ export function createSkillContext(
   flushDeferredDamageEvents?: () => void,
   queuePreResolutionLog?: (type: string, text: string) => void,
 ): SkillContext {
-  return {
+  const context: SkillContext = {
     user,
     target,
     currentTargets,
     fighters: runtime.fighters,
     turnCount: runtime.turnCount,
+    largeRound: runtime.largeRound,
     setLogs: () => {},
     log: (type, text) => runtime.log(type, text),
     getTeamId: (fighter) => runtime.getTeamId(fighter),
     applyDamage: (damageTarget, amount, source, trueDamage, attacker, options) => {
+      context.suppressOnHitStatuses = false;
+      context.suppressOnHitStatusTargetId = damageTarget.id;
       const damageAttacker = attacker ?? user;
+      const pendingEventCountBefore = damageTarget.pendingDamageEvents?.length ?? 0;
       const damageOptions = {
         ...options,
         deferTransform: true,
@@ -39,12 +43,34 @@ export function createSkillContext(
       const actualDmg = runtime.applyDamage(damageTarget, amount, source, trueDamage, attacker ?? user, damageOptions);
       if (options) {
         if (damageOptions.redirectedByJoker) options.redirectedByJoker = true;
+        if (damageOptions.redirectedJokerDamage !== undefined) options.redirectedJokerDamage = damageOptions.redirectedJokerDamage;
+        if (damageOptions.redirectedByOriginiumCore) {
+          options.redirectedByOriginiumCore = true;
+          options.redirectedOriginiumDamage = damageOptions.redirectedOriginiumDamage ?? actualDmg;
+        }
         if (damageOptions.targetDefeatedDuringDamage) options.targetDefeatedDuringDamage = true;
+        if (damageOptions.suppressOnHitStatuses) options.suppressOnHitStatuses = true;
+        if (damageOptions.resolution) options.resolution = damageOptions.resolution;
       }
-      if (actualDmg > 0) trackDeferredDamageTarget?.(damageTarget);
+      context.suppressOnHitStatuses = !!damageOptions.suppressOnHitStatuses;
+      if (damageOptions.redirectedByOriginiumCore) {
+        return 0;
+      }
+      if (actualDmg > 0 || (damageTarget.pendingDamageEvents?.length ?? 0) > pendingEventCountBefore) {
+        trackDeferredDamageTarget?.(damageTarget);
+      }
       return actualDmg;
     },
     markDefeated: (defeatTarget, options) => runtime.markDefeated(defeatTarget, options),
+    applyStatus: (statusTarget, type, duration, options) => {
+      if (
+        context.suppressOnHitStatuses &&
+        context.suppressOnHitStatusTargetId === statusTarget.id
+      ) {
+        return false;
+      }
+      return runtime.applyStatus(statusTarget, type, duration, options);
+    },
     handleWaitCounter: (counterTarget, counterUser, counterActionName) =>
       handleWaitCounter(runtime, counterTarget, counterUser, triggerDepth, counterActionName ?? actionName),
     handleCounterStatus: (counterTarget, counterUser) =>
@@ -56,4 +82,5 @@ export function createSkillContext(
     executeSummonSkill: (skill, skillUser, userTeamId) => runtime.executeSummonSkill(skill, skillUser, userTeamId),
     STATUS_EFFECTS: runtime.statusEffects,
   };
+  return context;
 }

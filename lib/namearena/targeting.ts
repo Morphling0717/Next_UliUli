@@ -12,6 +12,16 @@ export interface TargetSelectionResult {
   isIntercepted: boolean;
 }
 
+type OriginiumTargetingState = {
+  phaseTwo: boolean;
+  activeCrystalCount: number;
+  coreActive: boolean;
+};
+
+export function isCompetitiveTarget(target: Fighter): boolean {
+  return !target.isNpc && !target.cannotWin;
+}
+
 export function isSelectableTargetFor(
   runtime: TargetingRuntime,
   user: Fighter,
@@ -29,23 +39,58 @@ export function getSelectableTargets(runtime: TargetingRuntime, user: Fighter): 
   return runtime.fighters.filter((fighter) => isSelectableTargetFor(runtime, user, fighter));
 }
 
-function getTargetWeight(target: Fighter): number {
-  if (target.isOriginiumCrystal) return 0.18;
-  if (target.isOriginiumCore) return 0.28;
-  if (target.isPuruisaishi) return 0.5;
+function getOriginiumTargetingState(runtime: TargetingRuntime): OriginiumTargetingState {
+  return {
+    phaseTwo: runtime.fighters.some((fighter) =>
+      fighter.isPuruisaishi &&
+      (fighter.puruisaishiPhase ?? 1) >= 2 &&
+      runtime.isActiveCombatant(fighter),
+    ),
+    activeCrystalCount: runtime.fighters.filter((fighter) =>
+      fighter.isOriginiumCrystal && runtime.isActiveCombatant(fighter),
+    ).length,
+    coreActive: runtime.fighters.some((fighter) =>
+      fighter.isOriginiumCore && runtime.isActiveCombatant(fighter),
+    ),
+  };
+}
+
+function targetWeight(target: Fighter, originium: OriginiumTargetingState): number {
+  if (target.isOriginiumCrystal) {
+    if (!originium.phaseTwo) return 0.18;
+    if (originium.activeCrystalCount > 10) return 2.8;
+    if (originium.activeCrystalCount >= 8) return 1.6;
+    if (originium.activeCrystalCount >= 4) return 0.95;
+    return 0.6;
+  }
+  if (target.isOriginiumCore) {
+    if (!originium.phaseTwo) return 0.28;
+    if (originium.activeCrystalCount === 0) return 2.2;
+    return originium.activeCrystalCount >= 8 ? 1.2 : 0.75;
+  }
+  if (target.isPuruisaishi) {
+    if (!originium.phaseTwo) return 0.5;
+    if (originium.activeCrystalCount > 0) return 0.35;
+    return originium.coreActive ? 2.4 : 4;
+  }
   const waitingOnTokusatsuThrone = target.isTokusatsu &&
     target.job === 'MIRACLE_BUJIN' &&
     target.status.some((status) => status.type === 'WAIT_COUNTER');
   return waitingOnTokusatsuThrone ? 3 : 1;
 }
 
-function pickWeightedTarget(targets: Fighter[]): Fighter {
-  const totalWeight = targets.reduce((sum, target) => sum + getTargetWeight(target), 0);
+export function getTargetSelectionWeight(runtime: TargetingRuntime, target: Fighter): number {
+  return targetWeight(target, getOriginiumTargetingState(runtime));
+}
+
+function pickWeightedTarget(runtime: TargetingRuntime, targets: Fighter[]): Fighter {
+  const originium = getOriginiumTargetingState(runtime);
+  const totalWeight = targets.reduce((sum, target) => sum + targetWeight(target, originium), 0);
   if (totalWeight <= 0) return targets[Math.floor(Math.random() * targets.length)]!;
 
   let roll = Math.random() * totalWeight;
   for (const target of targets) {
-    roll -= getTargetWeight(target);
+    roll -= targetWeight(target, originium);
     if (roll <= 0) return target;
   }
   return targets[targets.length - 1]!;
@@ -63,11 +108,14 @@ export function resolveTarget(
   const tauntingTargets = currentTargets.filter((candidate) =>
     candidate.isYuzu && candidate.status.some((status) => status.type === 'YUZU_TAUNT'),
   );
-  let target = forcedTargetValid
-    ? forcedTarget!
-    : tauntingTargets.length > 0
-      ? pickWeightedTarget(tauntingTargets)
-      : pickWeightedTarget(currentTargets);
+  const markedWarThunderTarget = user.isWT && user.wtMarkedTargetId
+    ? currentTargets.find((candidate) => candidate.id === user.wtMarkedTargetId)
+    : undefined;
+  let target: Fighter;
+  if (forcedTargetValid) target = forcedTarget!;
+  else if (tauntingTargets.length > 0) target = pickWeightedTarget(runtime, tauntingTargets);
+  else if (markedWarThunderTarget) target = markedWarThunderTarget;
+  else target = pickWeightedTarget(runtime, currentTargets);
   let isIntercepted = false;
   const protector = runtime.fighters.find((fighter) =>
     fighter.isSummon &&

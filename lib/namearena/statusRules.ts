@@ -1,3 +1,5 @@
+import type { StatusTickMode } from './types';
+
 export const CONTROL_STATUS_TYPES: string[] = [
   'STUN',
   'FREEZE',
@@ -35,6 +37,8 @@ export const COMMON_NEGATIVE_STATUS_TYPES: string[] = [
   'YUZU_RES_DOWN',
   'YUZU_ATK_DOWN',
   'YUZU_SLOW',
+  'VALO_VIPER_DECAY',
+  'GAMER_READ_INPUTS',
 ];
 
 export const DOT_STATUS_TYPES: string[] = [
@@ -134,8 +138,6 @@ export const REVIVE_CLEAN_STATUS_TYPES: string[] = [
 export function isStatusType(type: string, statusTypes: readonly string[]): boolean {
   return statusTypes.includes(type);
 }
-
-export type StatusTickMode = 'self' | 'global' | 'trigger' | 'permanent';
 
 export function getStatusTickMode(type: string): StatusTickMode {
   if (PERMANENT_STATUS_PREFIXES.some((prefix) => type.startsWith(prefix))) return 'permanent';

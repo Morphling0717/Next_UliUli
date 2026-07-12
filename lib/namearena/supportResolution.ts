@@ -5,6 +5,7 @@ import type {
   Fighter,
   SkillDefinition,
   StatKey,
+  StatusApplicationOptions,
 } from './types';
 import { healFighter } from './combatState';
 import {
@@ -17,6 +18,11 @@ import {
   statusSourceFromSkill,
 } from './defenseStatus';
 import { isSelectableTargetFor } from './targeting';
+import {
+  applyPermanentStatBuff,
+  applyTimedStatModifier,
+  makeTimedStatModifier,
+} from './statModifiers';
 
 export interface SupportResolutionRuntime {
   fighters: Fighter[];
@@ -34,6 +40,7 @@ export interface SupportResolutionRuntime {
     attacker?: Fighter,
     options?: DamageApplicationOptions,
   ) => number;
+  applyStatus: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   formatSkillText: (skill: SkillDefinition, text: string) => string;
   log: (type: string, text: string) => void;
@@ -48,6 +55,31 @@ function isSpreadableDivaStatus(statusType: string): boolean {
   if (statusType.startsWith('VALO_')) return false;
   if (statusType.startsWith('BABY_')) return false;
   return true;
+}
+
+function grantTemporaryStatBuff(
+  target: Fighter,
+  skill: SkillDefinition,
+  duration: number,
+): void {
+  if (!skill.statBuff) return;
+  const statusType = skill.status ?? 'TEMP_STAT_BUFF';
+  const statusSourceId = statusSourceFromSkill(skill) ?? `skill:${skill.name}`;
+  grantStatus(target, statusType, duration, statusSourceId);
+  const status = target.status.find((entry) => entry.type === statusType && entry.sourceId === statusSourceId);
+  const modifierId = `stat:${statusType}:${statusSourceId}`;
+  if (status) {
+    status.modifierId = modifierId;
+    if (statusType === 'TEMP_STAT_BUFF') {
+      status.displayName = skill.name;
+      status.displayIcon = '⬆️';
+      status.displayDesc = '限时属性强化；状态结束后属性会准确还原';
+    }
+  }
+  applyTimedStatModifier(
+    target,
+    makeTimedStatModifier(modifierId, statusType, skill.statBuff, statusSourceId),
+  );
 }
 
 export function spreadDivaSupport(
@@ -67,13 +99,11 @@ export function spreadDivaSupport(
     }
     if (skill.tag === runtime.skillTags.BUFF) {
       if (skill.status && isSpreadableDivaStatus(skill.status)) {
-        grantStatus(mate, skill.status, skill.status === 'INVUL' ? 1 : 3, statusSourceFromSkill(skill));
+        const sourceId = statusSourceFromSkill(skill) ?? (skill.statBuff ? `skill:${skill.name}` : undefined);
+        grantStatus(mate, skill.status, skill.status === 'INVUL' ? 1 : 3, sourceId);
       }
       if (skill.statBuff) {
-        const buff = skill.statBuff;
-        (Object.keys(buff) as (StatKey | 'crit')[]).forEach((key) => {
-          if (key !== 'crit' && mate[key] !== undefined) mate[key] = Math.floor(mate[key] * (buff[key] ?? 1));
-        });
+        grantTemporaryStatBuff(mate, skill, skill.status === 'INVUL' ? 1 : 3);
       }
     }
     if (skill.cleanStatus) cleanseCommonNegativeStatuses(mate);
@@ -86,13 +116,7 @@ export function cleanseCommonNegativeStatuses(target: Fighter): void {
 }
 
 export function applyStatBuff(target: Fighter, buff: Partial<Record<StatKey | 'crit', number>>): void {
-  (Object.keys(buff) as (StatKey | 'crit')[]).forEach((key) => {
-    if (key !== 'crit' && target[key] !== undefined) {
-      target[key] = Math.floor(target[key] * (buff[key] ?? 1));
-    } else if (key === 'crit') {
-      target.critRate += buff.crit ?? 0;
-    }
-  });
+  applyPermanentStatBuff(target, buff);
 }
 
 function getChimeraPluginSkillSet(runtime: SupportResolutionRuntime): Set<string> {
@@ -137,6 +161,11 @@ function cleanseOneCommonNegativeStatus(target: Fighter): string | null {
   return removed?.type ?? null;
 }
 
+interface ChimeraSideDamageResult {
+  actual: number;
+  landedOnTarget: boolean;
+}
+
 function applyChimeraSideDamage(
   runtime: SupportResolutionRuntime,
   user: Fighter,
@@ -144,21 +173,27 @@ function applyChimeraSideDamage(
   amount: number,
   actionName: string,
   logText: (actual: number) => string,
-): number {
-  const actual = runtime.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, user, {
+): ChimeraSideDamageResult {
+  const damageOptions: DamageApplicationOptions = {
     actionName,
     respectDefenses: true,
     canTriggerWaitCounter: false,
-  });
-  user.stats.dmgDealt += actual;
-  runtime.log(actual > 0 ? 'skill' : 'info', logText(actual));
-  if (target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
+  };
+  const actual = runtime.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, user, damageOptions);
+  const resolvedActual = damageOptions.redirectedOriginiumDamage ?? actual;
+  if (damageOptions.redirectedByOriginiumCore) {
+    runtime.log('skill', `🜚 【${actionName}】${user.name} 对 ${target.name} 的攻击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤！`);
+  } else {
+    runtime.log(actual > 0 ? 'skill' : 'info', logText(actual));
+  }
+  const landedOnTarget = !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && actual > 0;
+  if (landedOnTarget && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     runtime.markDefeated(target, {
       message: `💀 【${actionName}】${target.name} 被 ${user.name} 安装插件时爆发的异变余波击倒！`,
       killer: user,
     });
   }
-  return actual;
+  return { actual: resolvedActual, landedOnTarget };
 }
 
 function applyChimeraInstallSideEffect(
@@ -174,7 +209,8 @@ function applyChimeraInstallSideEffect(
     grantStatus(user, 'REGEN', 3);
     runtime.syncHpPct(user);
     const cleanText = cleaned ? `，排出了【${runtime.data.STATUS_EFFECTS[cleaned]?.name ?? cleaned}】` : '';
-    runtime.log('heal', `☢️ 【永动炉心】${user.name} 的新心脏开始泵动，恢复 ${healed} 点生命${cleanText}，并获得再生！`);
+    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    runtime.log('heal', `☢️ 【永动炉心】${user.name} 的新心脏开始泵动，${healText}${cleanText}，并获得再生！`);
     return;
   }
 
@@ -183,7 +219,8 @@ function applyChimeraInstallSideEffect(
     grantStatus(user, 'BKB', 1, 'chimera_adaptive_skin');
     grantStatus(user, 'SPELL_BLOCK', 1, 'chimera_adaptive_skin');
     runtime.syncHpPct(user);
-    runtime.log('buff', `🛡️ 【纳米皮肤】${user.name} 的外壳完成自适应硬化，恢复 ${healed} 点生命，并获得短暂抗控制与法术抵挡！`);
+    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    runtime.log('buff', `🛡️ 【纳米皮肤】${user.name} 的外壳完成自适应硬化，${healText}，并获得短暂抗控制与法术抵挡！`);
     return;
   }
 
@@ -197,7 +234,7 @@ function applyChimeraInstallSideEffect(
   if (!enemy) return;
 
   if (skill.status === 'PLUG_HEAD') {
-    const actual = applyChimeraSideDamage(
+    const result = applyChimeraSideDamage(
       runtime,
       user,
       enemy,
@@ -205,7 +242,7 @@ function applyChimeraInstallSideEffect(
       '暴食之口启动',
       (damage) => `🦷 【暴食之口启动】${user.name} 的新口器咬向 ${enemy.name}，实际造成 ${damage} 点伤害！`,
     );
-    const healed = healFighter(user, Math.floor(actual * 0.45));
+    const healed = healFighter(user, Math.floor(result.actual * 0.45));
     runtime.syncHpPct(user);
     if (healed > 0) runtime.log('heal', `🦷 【暴食回流】${user.name} 吞下生命力，恢复 ${healed} 点生命！`);
     return;
@@ -239,30 +276,36 @@ function applyChimeraInstallSideEffect(
   }
 
   if (skill.status === 'PLUG_EYE') {
-    const actual = applyChimeraSideDamage(
+    const result = applyChimeraSideDamage(
       runtime,
       user,
       enemy,
       user.mag * 0.35,
       '石化魔眼校准',
       (damage) => damage > 0
-        ? `👁️ 【石化魔眼校准】${user.name} 看穿 ${enemy.name} 的破绽，实际造成 ${damage} 点魔法伤害并施加虚弱！`
+        ? `👁️ 【石化魔眼校准】${user.name} 看穿 ${enemy.name} 的破绽，实际造成 ${damage} 点魔法伤害！`
         : `👁️ 【石化魔眼校准】${user.name} 试图看穿 ${enemy.name} 的破绽，但没有造成实际伤害，虚弱没有生效！`,
     );
-    if (actual > 0) grantStatus(enemy, 'WEAK', 2);
+    if (result.landedOnTarget && runtime.isActiveCombatant(enemy) && runtime.applyStatus(enemy, 'WEAK', 2, { effectName: '石化魔眼校准的虚弱效果' })) {
+      runtime.log('debuff', `👁️ 【石化魔眼校准】${enemy.name} 被施加虚弱 2 回合！`);
+    }
     return;
   }
 
   if (skill.status === 'PLUG_TAIL') {
-    grantStatus(enemy, 'POISON', 2);
-    applyChimeraSideDamage(
+    const result = applyChimeraSideDamage(
       runtime,
       user,
       enemy,
       user.mag * 0.45 + user.atk * 0.25,
       '灾厄毒尾甩击',
-      (damage) => `🦂 【灾厄毒尾甩击】${user.name} 的毒尾扫中 ${enemy.name}，实际造成 ${damage} 点伤害并注入剧毒！`,
+      (damage) => damage > 0
+        ? `🦂 【灾厄毒尾甩击】${user.name} 的毒尾扫中 ${enemy.name}，实际造成 ${damage} 点伤害！`
+        : `🦂 【灾厄毒尾甩击】${user.name} 的毒尾扫过 ${enemy.name}，但没有造成实际伤害！`,
     );
+    if (result.landedOnTarget && runtime.isActiveCombatant(enemy) && runtime.applyStatus(enemy, 'POISON', 2, { effectName: '灾厄毒尾甩击的剧毒效果' })) {
+      runtime.log('debuff', `🦂 【灾厄毒尾甩击】${enemy.name} 被注入剧毒 2 回合！`);
+    }
   }
 }
 
@@ -281,15 +324,14 @@ function applyChimeraMilestoneRewards(
     grantStatus(target, 'REGEN', 3);
     runtime.syncHpPct(target);
     const cleanText = cleaned ? `，排出了【${runtime.data.STATUS_EFFECTS[cleaned]?.name ?? cleaned}】` : '';
-    runtime.log('heal', `🧬 【合成稳定】${target.name} 的第 2 个插件接入完成，恢复 ${healed} 点生命${cleanText}，身体开始稳定再生！`);
+    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    runtime.log('heal', `🧬 【合成稳定】${target.name} 的第 2 个插件接入完成，${healText}${cleanText}，身体开始稳定再生！`);
   }
 
   if (currentMilestone < 4 && plugCount >= 4) {
     target.chimeraMilestoneLevel = 4;
     target.chimeraInstantActionQueued = true;
-    target.atk = Math.floor(target.atk * 1.068);
-    target.mag = Math.floor(target.mag * 1.068);
-    target.spd = Math.floor(target.spd * 1.05);
+    applyPermanentStatBuff(target, { atk: 1.068, mag: 1.068, spd: 1.05 });
     grantStatus(target, 'AIM', 1);
     grantStatus(target, 'BKB', 1, 'chimera_startup_core');
     runtime.log('buff', `🧬 【兽性苏醒】${target.name} 的第 4 个插件接入完成，攻击、魔力与速度小幅裂变，锁定猎物并准备立刻追加一次插件行动！`);
@@ -297,10 +339,7 @@ function applyChimeraMilestoneRewards(
 
   if (currentMilestone < 6 && plugCount >= 6) {
     target.chimeraMilestoneLevel = 6;
-    target.atk = Math.floor(target.atk * 1.14);
-    target.mag = Math.floor(target.mag * 1.14);
-    target.def = Math.floor(target.def * 1.105);
-    target.res = Math.floor(target.res * 1.105);
+    applyPermanentStatBuff(target, { atk: 1.14, mag: 1.14, def: 1.105, res: 1.105 });
     target.maxHp = Math.floor(target.maxHp * 1.14);
     target.currentHp = Math.min(target.maxHp, target.currentHp + Math.floor(target.maxHp * 0.235));
     runtime.syncHpPct(target);
@@ -320,11 +359,7 @@ export function handleChimeraUltimateEvolution(
 
   target.hasUltimateEvolved = true;
   target.jobData.skills = target.jobData.skills.filter((skillId) => skillId !== 'chimera_install' && skillId !== 'chimera_strike');
-  target.atk = Math.floor(target.atk * 2.26);
-  target.mag = Math.floor(target.mag * 2.26);
-  target.def = Math.floor(target.def * 1.62);
-  target.res = Math.floor(target.res * 1.62);
-  target.spd = Math.floor(target.spd * 1.23);
+  applyPermanentStatBuff(target, { atk: 2.26, mag: 2.26, def: 1.62, res: 1.62, spd: 1.23 });
   target.maxHp = Math.floor(target.maxHp * 1.53);
   target.currentHp = target.maxHp;
   runtime.syncHpPct(target);
@@ -380,7 +415,7 @@ export function executeSupportSkill(
     let duration = skill.status === 'INVUL' ? 1 : (isCounterStance ? 5 : 3);
     if (isCounterStance) targetForBuff.status = targetForBuff.status.filter((status) => !isStatusType(status.type, COUNTER_STANCE_STATUS_TYPES));
     if (isValidChimeraPlug) {
-      if (skill.statBuff) applyStatBuff(targetForBuff, skill.statBuff);
+      if (skill.statBuff) applyPermanentStatBuff(targetForBuff, skill.statBuff);
       if (skill.newSkill && !targetForBuff.jobData.skills.includes(skill.newSkill)) {
         targetForBuff.jobData.skills.push(skill.newSkill);
         installedChimeraPlug = !!targetForBuff.isSuccubus && !!targetForBuff.transformed;
@@ -392,10 +427,12 @@ export function executeSupportSkill(
     if (isValidChimeraPlug) {
       targetForBuff.status = targetForBuff.status.filter((status) => status.type !== skill.status);
     }
-    grantStatus(targetForBuff, skill.status, duration, statusSourceFromSkill(skill));
+    const statusSourceId = statusSourceFromSkill(skill) ?? (skill.statBuff ? `skill:${skill.name}` : undefined);
+    grantStatus(targetForBuff, skill.status, duration, statusSourceId);
   }
   if (skill.statBuff && !skill.status?.startsWith('PLUG_')) {
-    applyStatBuff(targetForBuff, skill.statBuff);
+    const duration = skill.status === 'INVUL' ? 1 : (skill.status && isStatusType(skill.status, COUNTER_STANCE_STATUS_TYPES) ? 5 : 3);
+    grantTemporaryStatBuff(targetForBuff, skill, duration);
   }
   if (skill.cleanStatus) cleanseCommonNegativeStatuses(targetForBuff);
   runtime.log('buff', runtime.formatSkillText(skill, skill.text ?? '').replace(/{USER}/g, user.name).replace(/{TARGET}/g, targetForBuff.name));

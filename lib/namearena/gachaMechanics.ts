@@ -13,11 +13,10 @@ import type {
   SkillContext,
 } from './types';
 import {
-  findDefenseStatus,
-  formatControlBlocked,
   grantStatus,
 } from './defenseStatus';
 import { isSelectableTargetFor } from './targeting';
+import { clearZeroedStatPenalty } from './statModifiers';
 
 export const GACHA_LUCK_MAX = 5;
 export const GACHA_SUMMON_LIFESTEAL_STATUS = 'GACHA_SUMMON_LIFESTEAL';
@@ -178,12 +177,7 @@ function getPityPower(user: Fighter, fallback: number): number {
 }
 
 function restoreZeroedStats(user: Fighter): void {
-  if (!user.baseStatsForZero) return;
-  user.atk = user.baseStatsForZero.atk;
-  user.def = user.baseStatsForZero.def;
-  user.res = user.baseStatsForZero.res;
-  delete user.baseStatsForZero;
-  user.wasZeroed = false;
+  clearZeroedStatPenalty(user);
 }
 
 function cleanseLuckEmperor(user: Fighter): void {
@@ -366,7 +360,7 @@ function damageFromSummon(
 ): number {
   const damageOptions: DamageApplicationOptions = { actionName };
   const actualDmg = ctx.applyDamage(target, amount, 'skill', trueDamage, summon, damageOptions);
-  if (damageOptions.redirectedByJoker) return 0;
+  if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) return 0;
   if (options.deferOutcome) return actualDmg;
   finalizeSummonDamage(ctx, summon, target, actionName);
   return actualDmg;
@@ -523,7 +517,7 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
       const dmg = Math.max(1, Math.floor((summon.atk + summon.mag) * 1.05));
       const damageOptions: DamageApplicationOptions = { actionName: '全军进击' };
       const actualDmg = ctx.applyDamage(target, dmg, 'skill', false, summon, damageOptions);
-      if (damageOptions.redirectedByJoker) {
+      if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) {
         ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 用随机恶作剧转移，原目标没有受伤；转移伤害已单独结算！`);
         continue;
       }
@@ -604,13 +598,9 @@ export const GACHA_ASH_BLOSSOM_CARD: GachaEntry = {
   text: '🌸 {USER} 抽到「灰流丽」，打断敌方关键行动！',
   tag: 'debuff',
   onExecute: (ctx) => {
-    const controlImmune = findDefenseStatus(ctx.target, 'BKB');
-    if (controlImmune) {
-      ctx.log('info', `🌸 【灰流丽】试图打断 ${ctx.target.name}，但${formatControlBlocked(controlImmune, ctx.target.name, '打断效果').replace(/^🟡\s*/, '')}`);
-      return true;
+    if (ctx.applyStatus(ctx.target, 'STUN', 2, { effectName: '灰流丽的打断效果' })) {
+      ctx.log('skill', `🌸 【灰流丽】${ctx.user.name} 无效了 ${ctx.target.name} 的下一次关键行动，使其眩晕！`);
     }
-    ctx.target.status.push({ type: 'STUN', duration: 2 });
-    ctx.log('skill', `🌸 【灰流丽】${ctx.user.name} 无效了 ${ctx.target.name} 的下一次关键行动，使其眩晕！`);
     return true;
   },
 };

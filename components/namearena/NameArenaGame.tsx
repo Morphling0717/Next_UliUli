@@ -11,13 +11,28 @@ import { namerenaJobs } from "@/lib/namearena/jobs";
 import { hasPuruisaishiAppeared, spawnPuruisaishiEvent } from "@/lib/namearena/puruisaishiMechanics";
 import { parseNameArenaSetupInput } from "@/lib/namearena/setupInput";
 import { namerenaSkills } from "@/lib/namearena/skills";
-import { getStatusTickMode } from "@/lib/namearena/statusRules";
-import type { Fighter, StatusEffectInfo, StatusEntry } from "@/lib/namearena/types";
+import { statusDurationText } from "@/lib/namearena/statusLifecycle";
+import {
+  cloneBattleState,
+  createBattleState,
+  getLargeRoundProgress,
+  withBattleRandom,
+} from "@/lib/namearena/battleState";
+import type {
+  BattleEvent,
+  BattleLogEntry as EngineBattleLogEntry,
+  BattleState,
+  Fighter,
+  StatusEffectInfo,
+  StatusEntry,
+} from "@/lib/namearena/types";
 
-type BattleLogEntry = { type: string; text: string };
+type BattleLogEntry = Pick<EngineBattleLogEntry, 'type' | 'text'> & Partial<Omit<EngineBattleLogEntry, 'type' | 'text'>>;
 type BattlePlaybackItem = {
   log: BattleLogEntry;
   fighters: Fighter[];
+  turnCount: number;
+  battleState: BattleState;
 };
 type SettlementStats = {
   dmgDealt: number;
@@ -452,13 +467,15 @@ const getStatusPriority = (type: string, category: StatusCategory) => {
 };
 
 const getStatusDurationLabel = (status: StatusEntry) => {
-  if (status.duration >= 999 || getStatusTickMode(status.type) === 'permanent') return undefined;
-  if (status.duration <= 0) return undefined;
-  return String(status.duration);
+  return statusDurationText({ ...status });
 };
 
 const getStatusDisplayInfo = (status: StatusEntry): StatusDisplayInfo => {
-  const effect = namerenaData.STATUS_EFFECTS?.[status.type] ?? STATUS_DISPLAY_FALLBACKS[status.type];
+  const effect = namerenaData.STATUS_EFFECTS?.[status.type] ?? STATUS_DISPLAY_FALLBACKS[status.type] ?? (
+    status.displayName
+      ? { name: status.displayName, icon: status.displayIcon ?? '⬆️', desc: status.displayDesc ?? '限时状态' }
+      : undefined
+  );
   const sourceName = getDefenseStatusDisplayName(status);
   const isUnknown = !effect;
   const category = getStatusCategory(status.type, isUnknown);
@@ -513,7 +530,7 @@ const formatStatusTitle = (item: StatusDisplayItem) => {
     `${item.info.name}${item.count > 1 ? ` x${item.count}` : ''}`,
     item.info.desc,
   ];
-  if (item.info.durationLabel) lines.push(`剩余：${item.info.durationLabel} 回合`);
+  if (item.info.durationLabel) lines.push(`剩余：${item.info.durationLabel}`);
   if (item.info.sourceName && item.info.sourceName !== item.info.name) {
     lines.push(`来源：${item.info.sourceName}`);
   }
@@ -574,7 +591,7 @@ function StatusStrip({ statuses }: { statuses: StatusEntry[] }) {
 const getResourceTitle = (label: string, value: string, detail?: string) =>
   detail ? `${label}：${value}\n${detail}` : `${label}：${value}`;
 
-const buildResourceChips = (fighter: Fighter, fighters: Fighter[]): ResourceChip[] => {
+const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: number, battleState: BattleState): ResourceChip[] => {
   const chips: ResourceChip[] = [];
   const activeSummons = fighters.filter((candidate) =>
     candidate.isSummon &&
@@ -619,14 +636,30 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[]): ResourceChip
 
   if (fighter.isOriginiumCore || fighter.isOriginiumCrystal) {
     const protectedUntil = fighter.untargetableUntilTurn ?? -1;
+    const isProtected = protectedUntil >= turnCount;
     chips.push({
       icon: fighter.isOriginiumCore ? '🜚' : '◆',
       label: fighter.isOriginiumCore ? '阿喃那' : '结晶',
-      value: protectedUntil >= 0 ? `保护至${protectedUntil}` : '活性',
-      title: getResourceTitle(fighter.isOriginiumCore ? '阿喃那' : '源石结晶', protectedUntil >= 0 ? `保护至第 ${protectedUntil} 回合` : '可被攻击'),
+      value: isProtected ? `保护至${protectedUntil}` : '活性',
+      title: getResourceTitle(fighter.isOriginiumCore ? '阿喃那' : '源石结晶', isProtected ? `保护至第 ${protectedUntil} 回合` : '可被攻击'),
       tone: 'neutral',
       priority: 8,
     });
+    if (fighter.isOriginiumCrystal) {
+      const round = getLargeRoundProgress(battleState);
+      chips.push({
+        icon: '⏱️',
+        label: '增殖轮',
+        value: `${round.number} · ${round.acted}/${round.total}`,
+        title: getResourceTitle(
+          '源石结晶增殖大回合',
+          `第 ${round.number} 轮（${round.acted}/${round.total} 名玩家已行动）`,
+          fighter.originiumWasAttackedThisGrowthRound ? '本大回合已被攻击，不会增殖' : '若完整大回合内未被攻击，回合结束时增殖',
+        ),
+        tone: fighter.originiumWasAttackedThisGrowthRound ? 'neutral' : 'tech',
+        priority: 9,
+      });
+    }
   }
 
   if (fighter.isYuzu) {
@@ -846,8 +879,8 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[]): ResourceChip
   return chips.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label, 'zh-Hans-CN'));
 };
 
-function ResourceStrip({ fighter, fighters }: { fighter: Fighter; fighters: Fighter[] }) {
-  const chips = buildResourceChips(fighter, fighters);
+function ResourceStrip({ fighter, fighters, turnCount, battleState }: { fighter: Fighter; fighters: Fighter[]; turnCount: number; battleState: BattleState }) {
+  const chips = buildResourceChips(fighter, fighters, turnCount, battleState);
   if (chips.length === 0) return null;
 
   const visibleChips = chips.slice(0, RESOURCE_CHIP_LIMIT);
@@ -923,16 +956,16 @@ function HealthBar({ fighter }: { fighter: Fighter }) {
 
 function StatGrid({ fighter }: { fighter: Fighter }) {
   return (
-    <div className="mt-2 grid grid-cols-4 gap-1 rounded-lg bg-slate-900 p-1.5 text-[10px] font-bold leading-tight text-slate-300 shadow-inner">
+    <div className="mt-2 grid grid-cols-4 gap-1 rounded-lg bg-slate-900 p-1.5 text-[10px] font-bold leading-tight text-slate-300 shadow-inner md:grid-cols-2 2xl:grid-cols-4">
       {STAT_CHIPS.map((stat) => (
         <span
           key={stat.key}
           title={stat.label}
-          className={`flex h-7 min-w-0 items-center justify-center gap-1 rounded-md border px-1 shadow-sm ${STAT_TONE_STYLES[stat.tone]}`}
+          className={`flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 shadow-sm ${STAT_TONE_STYLES[stat.tone]}`}
         >
           <span className="shrink-0 text-[12px] leading-none">{stat.icon}</span>
           <span className="hidden shrink-0 text-slate-400 md:inline">{stat.label}</span>
-          <span className="min-w-0 truncate font-mono text-white">{stat.value(fighter)}</span>
+          <span className="ml-auto shrink-0 font-mono text-white">{stat.value(fighter)}</span>
         </span>
       ))}
     </div>
@@ -942,10 +975,13 @@ function StatGrid({ fighter }: { fighter: Fighter }) {
 export function NameArenaGame() {
     const [inputNames, setInputNames] = useState('水人\n玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep');
     const [fighters, setFighters] = useState<Fighter[]>([]);
+    const [battleTurn, setBattleTurn] = useState(0);
+    const [battleState, setBattleState] = useState<BattleState>(() => createBattleState(1, 0));
     const [gameState, setGameState] = useState<'SETUP' | 'FIGHTING' | 'END'>('SETUP');
     const [showMvp, setShowMvp] = useState(false);
 
     const fullLogsRef = useRef<BattleLogEntry[]>([]);
+    const fullEventsRef = useRef<BattleEvent[]>([]);
 	    const [displayLogs, setDisplayLogs] = useState<BattleLogEntry[]>([]);
 	    const [fullLogSnapshot, setFullLogSnapshot] = useState<BattleLogEntry[]>([]);
 	    const [isFullLogModalOpen, setIsFullLogModalOpen] = useState(false);
@@ -959,9 +995,11 @@ export function NameArenaGame() {
     const timerRef = useRef<number | null>(null);
     const battleSpeedRef = useRef(1500);
     const battleTurnRef = useRef(0);
+    const battleStateRef = useRef<BattleState>(battleState);
     const logPlaybackQueueRef = useRef<BattlePlaybackItem[]>([]);
     const pendingFinalFightersRef = useRef<Fighter[] | null>(null);
     const pendingEndRef = useRef(false);
+    const lastBattleSetupRef = useRef<{ names: string[]; forcePuruisaishi: boolean; seed: number } | null>(null);
     const battlePumpRef = useRef<() => void>(() => {});
     const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1);
     const [isAutoScroll, setIsAutoScroll] = useState(true);
@@ -977,18 +1015,23 @@ export function NameArenaGame() {
 
     const resetGame = () => {
         setGameState('SETUP');
-	        setDisplayLogs([]);
+		        setDisplayLogs([]);
         fullLogsRef.current = [];
+        fullEventsRef.current = [];
 	        setFullLogSnapshot([]);
         fightersRef.current = [];
         logPlaybackQueueRef.current = [];
         pendingFinalFightersRef.current = null;
         pendingEndRef.current = false;
         setFighters([]);
+        setBattleTurn(0);
         setIsFullLogModalOpen(false);
         setShowMvp(false);
         spinalSwordRef.current = false;
         battleTurnRef.current = 0;
+        const resetBattleState = createBattleState(1, 0);
+        battleStateRef.current = resetBattleState;
+        setBattleState(resetBattleState);
         if (timerRef.current !== null) {
             clearTimeout(timerRef.current);
             timerRef.current = null;
@@ -998,6 +1041,76 @@ export function NameArenaGame() {
     const addLog = (logEntry: BattleLogEntry) => {
         fullLogsRef.current.push(logEntry);
         appendDisplayLog(logEntry);
+    };
+
+    const launchBattle = (list: string[], forcePuruisaishi: boolean, seed: number) => {
+        const nextBattleState = createBattleState(seed, 0);
+        const nextFighters = withBattleRandom(nextBattleState, () =>
+            list.map(generateNameArenaFighter).filter((fighter): fighter is Fighter => fighter !== null),
+        );
+        if (nextFighters.length < list.length) {
+            alert("存在空名字或角色生成失败，请检查输入");
+            return;
+        }
+
+        if (timerRef.current !== null) {
+            clearTimeout(timerRef.current);
+            timerRef.current = null;
+        }
+        fullLogsRef.current = [];
+        fullEventsRef.current = [];
+        setFullLogSnapshot([]);
+        setDisplayLogs([]);
+        logPlaybackQueueRef.current = [];
+        pendingFinalFightersRef.current = null;
+        pendingEndRef.current = false;
+        battleTurnRef.current = 0;
+        battleStateRef.current = nextBattleState;
+        spinalSwordRef.current = false;
+
+        const addSetupEvent = (type: string, text: string) => {
+            const sequence = ++nextBattleState.eventSequence;
+            const event: EngineBattleLogEntry = {
+                id: `event-${sequence}`,
+                sequence,
+                kind: 'log',
+                visible: true,
+                type,
+                text,
+                turn: 0,
+                largeRound: 1,
+                seed: nextBattleState.seed,
+            };
+            fullEventsRef.current.push(event);
+            addLog(event);
+        };
+
+        addSetupEvent('system', `⚔️ 战斗开始！本局种子：${nextBattleState.seed}`);
+        if (forcePuruisaishi) {
+            withBattleRandom(nextBattleState, () => spawnPuruisaishiEvent({
+                fighters: nextFighters,
+                core: namerenaCore,
+                turnCount: 0,
+                largeRound: 1,
+                log: addSetupEvent,
+            }, '隐藏调试指令启动'));
+        }
+
+        lastBattleSetupRef.current = { names: [...list], forcePuruisaishi, seed: nextBattleState.seed };
+        fightersRef.current = nextFighters;
+        setFighters(nextFighters);
+        setBattleTurn(0);
+        setBattleState(cloneBattleState(nextBattleState));
+        setShowMvp(false);
+        setIsFullLogModalOpen(false);
+        setGameState('FIGHTING');
+        changeSpeed(1500);
+    };
+
+    const replayLastBattle = () => {
+        const setup = lastBattleSetupRef.current;
+        if (!setup) return;
+        launchBattle(setup.names, setup.forcePuruisaishi, setup.seed);
     };
 
     // Synchronous log collector used inside battleStep so every displayed log carries its matching fighter state.
@@ -1012,13 +1125,43 @@ export function NameArenaGame() {
     }, []);
 
     const downloadLogs = () => {
-        const textContent = fullLogsRef.current.map(l => l.text).join('\n');
+        const header = [
+            `NameWar seed=${battleStateRef.current.seed}`,
+            `globalTurn=${battleTurnRef.current}`,
+            `largeRound=${battleStateRef.current.largeRound.number}`,
+            '',
+        ];
+        const textContent = [
+            ...header,
+            ...fullLogsRef.current.map((log) => {
+                const turn = log.turn ?? '?';
+                const largeRound = log.largeRound ?? '?';
+                const action = log.actionId ? ` ${log.actionId}` : '';
+                return `[T${turn} R${largeRound}${action}] ${log.text}`;
+            }),
+        ].join('\n');
         const blob = new Blob([textContent], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = `NameWar_BattleLog_${new Date().getTime()}.txt`;
         a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const downloadReplayData = () => {
+        const payload = {
+            schemaVersion: 1,
+            setup: lastBattleSetupRef.current,
+            state: battleStateRef.current,
+            events: fullEventsRef.current,
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `NameWar_Replay_${battleStateRef.current.seed}.json`;
+        anchor.click();
         URL.revokeObjectURL(url);
     };
 
@@ -1033,6 +1176,8 @@ export function NameArenaGame() {
             pendingPlaybackItemsRef.current.push({
                 log: logEntry,
                 fighters: cloneFighters(engine?.fighters ?? fightersRef.current),
+                turnCount: engine?.turnCount ?? battleTurnRef.current,
+                battleState: cloneBattleState(engine?.battleState ?? battleStateRef.current),
             });
         };
 
@@ -1040,7 +1185,9 @@ export function NameArenaGame() {
 
         engine = new BattleEngine(
             clonedFighters, batchedLog,
-            namerenaJobs, namerenaSkills, namerenaData, namerenaCore, battleTurnRef.current
+            namerenaJobs, namerenaSkills, namerenaData, namerenaCore, battleTurnRef.current,
+            battleStateRef.current,
+            (event) => fullEventsRef.current.push(event),
         );
 
         let isEnd = false;
@@ -1048,6 +1195,7 @@ export function NameArenaGame() {
         try {
             isEnd = engine.step(spinalSwordRef);
             battleTurnRef.current = engine.turnCount;
+            battleStateRef.current = cloneBattleState(engine.battleState);
             nextFighters = engine.fighters;
         } catch (error) {
             console.error("Game Loop Error:", error);
@@ -1067,6 +1215,8 @@ export function NameArenaGame() {
         } else {
             pendingFinalFightersRef.current = null;
             setFighters(finalFightersSnapshot);
+            setBattleTurn(battleTurnRef.current);
+            setBattleState(cloneBattleState(battleStateRef.current));
         }
 
         if (isEnd) {
@@ -1081,6 +1231,8 @@ export function NameArenaGame() {
             const playbackItem = logPlaybackQueueRef.current.shift();
             if (!playbackItem) return;
             setFighters(playbackItem.fighters);
+            setBattleTurn(playbackItem.turnCount);
+            setBattleState(playbackItem.battleState);
             appendDisplayLog(playbackItem.log);
             scheduleBattlePump(getLogPlaybackDelay(playbackItem.log, battleSpeedRef.current));
             return;
@@ -1088,6 +1240,8 @@ export function NameArenaGame() {
 
         if (pendingFinalFightersRef.current) {
             setFighters(pendingFinalFightersRef.current);
+            setBattleTurn(battleTurnRef.current);
+            setBattleState(cloneBattleState(battleStateRef.current));
             pendingFinalFightersRef.current = null;
         }
 
@@ -1131,6 +1285,7 @@ export function NameArenaGame() {
 
     const names = fighters.map(f => f.name).filter(n => n.length > 0).sort((a,b) => b.length - a.length);
     const nameRegex = names.length > 0 ? new RegExp(`(${names.map(escapeRegExp).join('|')})`, 'g') : null;
+    const roundProgress = getLargeRoundProgress(battleState);
 
         const renderLogText = (l: BattleLogEntry, i: number) => {
         const parts = nameRegex ? l.text.split(nameRegex) : [l.text];
@@ -1284,9 +1439,21 @@ export function NameArenaGame() {
     return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 font-sans text-slate-200">
             <header className="bg-slate-900 border-b border-slate-800 p-3 pr-16 shrink-0 flex justify-between items-center shadow-lg z-20">
-                <h1 className="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
-                    名字大乱斗 <span className="text-[10px] text-slate-500 border border-slate-700 px-1 rounded align-top">NameWar</span>
-                </h1>
+                <div className="flex min-w-0 items-center gap-3">
+                    <h1 className="truncate text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
+                        名字大乱斗 <span className="text-[10px] text-slate-500 border border-slate-700 px-1 rounded align-top">NameWar</span>
+                    </h1>
+                    {gameState !== 'SETUP' ? (
+                        <div
+                            className="hidden shrink-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-2 py-1 font-mono text-[11px] font-bold text-slate-300 sm:flex"
+                            title={`本局种子：${battleState.seed}\n当前大回合最多 ${roundProgress.maxActions} 次常规行动内完成`}
+                        >
+                            <span>全局 {battleTurn}</span>
+                            <span className="text-indigo-300">大回合 {roundProgress.number}</span>
+                            <span className="text-slate-500">{roundProgress.acted}/{roundProgress.total}</span>
+                        </div>
+                    ) : null}
+                </div>
                 <div className="flex items-center gap-2">
                     {gameState === 'FIGHTING' && (
                         <div className="flex bg-slate-800 rounded-lg p-0.5 gap-1 shadow-inner border border-slate-700/50">
@@ -1296,9 +1463,14 @@ export function NameArenaGame() {
                         </div>
                     )}
                     {gameState === 'END' && !showMvp && (
-                        <button onClick={() => setShowMvp(true)} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 shadow-lg transition-transform hover:scale-105" title="赛后结算">
-                            <Icons.BarChart size={14}/> <span className="hidden sm:inline">数据统计</span>
-                        </button>
+                        <>
+                            <button onClick={replayLastBattle} className="flex items-center gap-1 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-bold text-white shadow-lg transition-colors hover:bg-slate-700" title={`按相同种子 ${battleState.seed} 重放`}>
+                                <Icons.RotateCcw size={14}/> <span className="hidden sm:inline">重放本局</span>
+                            </button>
+                            <button onClick={() => setShowMvp(true)} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 shadow-lg transition-transform hover:scale-105" title="赛后结算">
+                                <Icons.BarChart size={14}/> <span className="hidden sm:inline">数据统计</span>
+                            </button>
+                        </>
                     )}
                 </div>
             </header>
@@ -1330,25 +1502,9 @@ export function NameArenaGame() {
                                     } catch (error) {
                                         const message = error instanceof Error ? error.message : String(error);
                                         return alert(message);
-                                    }
-                                    if(list.length<2) return alert("至少2人");
-                                    const f = list.map(generateNameArenaFighter).filter((x): x is Fighter => x !== null);
-                                    if (f.length < list.length) return alert("存在空名字或角色生成失败，请检查输入");
-
-                    fullLogsRef.current = []; setFullLogSnapshot([]); setDisplayLogs([]);
-                    battleTurnRef.current = 0;
-                    addLog({type:'system', text:'⚔️ 战斗开始！'});
-                    if (forcePuruisaishi) {
-                        spawnPuruisaishiEvent({
-                            fighters: f,
-                            core: namerenaCore,
-                            turnCount: 0,
-                            log: (type, text) => addLog({ type, text }),
-                        }, '隐藏调试指令启动');
-                    }
-                    fightersRef.current = f;
-                    setFighters(f);
-                    setGameState('FIGHTING'); spinalSwordRef.current = false; changeSpeed(1500);
+	                                    }
+	                                    if(list.length<2) return alert("至少2人");
+	                                    launchBattle(list, forcePuruisaishi, Math.max(1, Math.floor(Date.now() % 2147483646)));
                                 }} className="mt-6 w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 shadow-lg">
                                     <Icons.Play size={20} /> 开始战斗
                                 </button>
@@ -1359,7 +1515,10 @@ export function NameArenaGame() {
                     <>
                         <section className="relative flex min-h-0 min-w-0 flex-1 flex-col border-slate-800 bg-slate-900/30 lg:border-r">
                             <div className="z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/50 p-3 shadow-sm backdrop-blur">
-                                <span className="text-sm font-bold tracking-wide">存活人数: <span className="text-indigo-400">{fighters.filter(isWinningCombatant).length}</span></span>
+                                <span className="text-sm font-bold tracking-wide">
+                                    存活人数: <span className="text-indigo-400">{fighters.filter(isWinningCombatant).length}</span>
+                                    <span className="ml-3 font-mono text-xs text-slate-500 sm:hidden">全局 {battleTurn} · 大回合 {roundProgress.number} ({roundProgress.acted}/{roundProgress.total})</span>
+                                </span>
                                 {(gameState === 'FIGHTING' || gameState === 'END') && (
                                     <button onClick={resetGame} className="bg-red-600/80 hover:bg-red-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 transition-colors shadow-md" title="重开一局">
                                         <Icons.RotateCcw size={14}/> <span className="hidden sm:inline">重置大厅</span>
@@ -1396,7 +1555,7 @@ export function NameArenaGame() {
                                             </div>
                                         </div>
                                         <StatusStrip statuses={f.status} />
-                                        <ResourceStrip fighter={f} fighters={fighters} />
+                                        <ResourceStrip fighter={f} fighters={fighters} turnCount={battleTurn} battleState={battleState} />
                                         {!f.isDead && (
                                             <StatGrid fighter={f} />
                                         )}
@@ -1417,6 +1576,9 @@ export function NameArenaGame() {
                                         </button>
                                         <button onClick={downloadLogs} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
                                             <Icons.Download size={12}/> 导出 TXT
+                                        </button>
+                                        <button onClick={downloadReplayData} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
+                                            <Icons.Download size={12}/> 回放 JSON
                                         </button>
                                     </div>
                                 ) : (

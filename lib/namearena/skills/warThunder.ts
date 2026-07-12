@@ -11,6 +11,7 @@ import {
 } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
+import { consumeStatusCharge } from '../statusLifecycle';
 
 const { SKILL_TAGS } = Data;
 
@@ -84,10 +85,48 @@ function preferredTarget(ctx: SkillContext, fallback = ctx.target): Fighter {
   return enemies.sort((a, b) => threatScore(b) - threatScore(a))[0] ?? fallback;
 }
 
+function isOriginiumEntity(target: Fighter): boolean {
+  return !!(target.isOriginiumCrystal || target.isOriginiumCore || target.isPuruisaishi);
+}
+
+function describeOriginiumModuleHit(ctx: SkillContext, target: Fighter, type: string): string | null {
+  if (!isOriginiumEntity(target)) return null;
+  if (type === 'WT_AMMO_EXPOSED') {
+    return `💠 【源石核心暴露】${ctx.user.name} 的火力震裂 ${target.name} 外层晶格，内部源石核心完全暴露！`;
+  }
+  if (type === 'WT_BREECH_DAMAGED') {
+    return `🔹 【晶格破损】${ctx.user.name} 的钢针震裂 ${target.name} 的源石晶格，结构输出下降！`;
+  }
+  if (type === 'WT_TRACK_DAMAGED') {
+    return `◆ 【结晶锚点断裂】${ctx.user.name} 的火力打断 ${target.name} 的固定锚点，闪避归零！`;
+  }
+  return null;
+}
+
+function applyOriginiumModuleDisplay(target: Fighter, type: string): void {
+  if (!isOriginiumEntity(target)) return;
+  const status = target.status.find((entry) => entry.type === type);
+  if (!status) return;
+  if (type === 'WT_AMMO_EXPOSED') {
+    status.displayName = '源石核心暴露';
+    status.displayIcon = '💠';
+    status.displayDesc = '外层晶格破损，低生命时容易发生核心崩解';
+  } else if (type === 'WT_BREECH_DAMAGED') {
+    status.displayName = '晶格破损';
+    status.displayIcon = '🔹';
+    status.displayDesc = '源石晶格受损，输出下降';
+  } else if (type === 'WT_TRACK_DAMAGED') {
+    status.displayName = '结晶锚点断裂';
+    status.displayIcon = '◆';
+    status.displayDesc = '固定锚点断裂，闪避归零';
+  }
+}
+
 function exposeModule(ctx: SkillContext, target: Fighter, type: string, duration: number, text: string): void {
   if (!isActiveCombatant(target) || hasStatus(target, 'BKB')) return;
   refreshStatus(target, type, duration);
-  ctx.log('info', text);
+  applyOriginiumModuleDisplay(target, type);
+  ctx.log('info', describeOriginiumModuleHit(ctx, target, type) ?? text);
 }
 
 function grantDamageSpawnPoint(ctx: SkillContext, actualDmg: number, target: Fighter): void {
@@ -105,16 +144,20 @@ function maybeAmmoRack(ctx: SkillContext, target: Fighter, actualDmg: number, ac
   const threshold = exposed ? 0.34 : 0.24;
   const chance = exposed ? 0.34 : 0.18;
   if (target.hpPct >= threshold || Math.random() >= chance) return false;
-  return tryExecuteDefeat(ctx, target, '弹药架殉爆', {
-    message: `☠️ 【弹药架殉爆】${actionName} 精准命中 ${target.name} 的弹药区，炮塔飞上天！`,
+  const originium = isOriginiumEntity(target);
+  return tryExecuteDefeat(ctx, target, originium ? '源石核心崩解' : '弹药架殉爆', {
+    message: originium
+      ? `◆ 【源石核心崩解】${actionName} 精准命中 ${target.name} 暴露的源石核心，整体晶格碎裂！`
+      : `☠️ 【弹药架殉爆】${actionName} 精准命中 ${target.name} 的弹药区，炮塔飞上天！`,
     killer: ctx.user,
   });
 }
 
 function consumeAim(user: Fighter): boolean {
-  const hadAim = hasStatus(user, 'AIM');
-  if (hadAim) user.status = user.status.filter((status) => status.type !== 'AIM');
-  return hadAim;
+  const aim = user.status.find((status) => status.type === 'AIM');
+  if (!aim) return false;
+  consumeStatusCharge(user, aim);
+  return true;
 }
 
 function isCasEligibleTarget(ctx: SkillContext, fighter: SkillContext['target'] | undefined): boolean {
@@ -132,9 +175,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '快捷语音', tag: SKILL_TAGS.BUFF,
     text: '📻 {USER} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 {USER} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！',
     onExecute: (ctx) => {
-      ctx.user.status.push({ type: 'CONFUSED', duration: 2 });
+      grantStatus(ctx.user, 'CONFUSED', 2);
       const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && ctx.getTeamId(f) === ctx.getTeamId(ctx.user));
-      allies.forEach((a) => { a.atk = Math.floor(a.atk * 1.3); });
+      allies.forEach((ally) => grantStatus(ally, 'WT_RADIO_MORALE', 3));
       ctx.log('buff', `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 ${ctx.user.name} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！`);
       return true;
     },
@@ -143,7 +186,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '长按F修车', tag: SKILL_TAGS.HEAL, condition: (u) => u.hpPct < 0.6,
     text: '🔧 {USER} 载具受损！黑炮管了！"长按F进行战地抢修（50秒）"\n{USER} 原地瘫痪（眩晕），但装甲逐渐恢复，回复了海量生命值！',
     onExecute: (ctx) => {
-      ctx.user.status.push({ type: 'STUN', duration: 2 });
+      grantStatus(ctx.user, 'STUN', 2);
       const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.4));
       const healText = healed > 0 ? `实际恢复 ${healed} 点生命` : '生命已满，治疗溢出';
       ctx.log('heal', `🔧 【战地抢修】履带接上了！炮闩修好了！${ctx.user.name} ${healText}！`);
@@ -208,14 +251,15 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       if (Math.random() < (isTopTierWt(ctx.user) ? 0.03 : 0.05)) {
         ctx.log('info', `👻 【安东星魔法】服务器丢包了！${ctx.user.name} 的钢针变成了【幽灵炮弹】，直接穿模透过了 ${ctx.target.name} 的身体！伤害为 0！(血压飙升)`);
-        ctx.user.status.push({ type: 'RAGE', duration: 2 });
+        refreshStatus(ctx.user, 'RAGE', 2);
         return true;
       }
       return false;
     },
     afterExecute: (ctx, actualDmg) => {
-      if (!isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      if (ctx.damageRedirectedByOriginiumCore || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
+      if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
       const moduleRoll = Math.random();
       if (moduleRoll < 0.5) {
         exposeModule(ctx, ctx.target, 'WT_BREECH_DAMAGED', 3, `🔩 【模块破坏】${ctx.user.name} 的钢针击穿炮闩，${ctx.target.name} 主武器输出下降！`);
@@ -271,8 +315,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: 'BMPT死亡收割机', tag: SKILL_TAGS.PHYS, mult: 0.58, hits: 5, status: 'WT_SUPPRESS', alwaysHit: true,
     text: '🚜 {USER} 召唤巨大 BMPT 终结者！双联装30毫米机炮狂啸！\n"哒哒哒哒哒！" 对 {TARGET} 倾泻 5 段火力（共 {VAL} 伤害）并形成绝对【火力压制】！',
     afterExecute: (ctx, actualDmg) => {
-      if (!isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      if (ctx.damageRedirectedByOriginiumCore || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
+      if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
       exposeModule(ctx, ctx.target, 'WT_TRACK_DAMAGED', 2, `🛞 【履带断裂】${ctx.user.name} 的机炮扫断 ${ctx.target.name} 的机动部件，闪避归零！`);
       if (Math.random() < 0.35) {
         exposeModule(ctx, ctx.target, 'WT_BREECH_DAMAGED', 2, `🔩 【炮闩受损】BMPT 火力压制打坏 ${ctx.target.name} 的输出节奏！`);
@@ -283,14 +328,18 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: 'T-58 碎甲轰击', tag: SKILL_TAGS.PHYS, mult: 4.35, ignoreDef: true, status: 'WT_AIRBORNE',
     text: '💥 {USER} 召唤 T-58 重型坦克！155毫米线膛炮锁定！\n"一发入魂！" 粗壮的钢针瞬间粉碎了 {TARGET} 的装甲，造成 {VAL} 真实伤害并将其当场【击飞】！',
     afterExecute: (ctx, actualDmg) => {
-      if (!isTopTierWt(ctx.user)) return;
+      if (ctx.damageRedirectedByOriginiumCore || !isTopTierWt(ctx.user)) return;
       if (actualDmg > 0 && isActiveCombatant(ctx.target)) {
         grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
+        if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
         exposeModule(ctx, ctx.target, 'WT_AMMO_EXPOSED', 3, `💥 【弹药架暴露】T-58 大口径碎甲让 ${ctx.target.name} 的内部弹药区完全暴露！`);
       }
       if (ctx.target.currentHp > 0 && ctx.target.hpPct < (hasStatus(ctx.target, 'WT_AMMO_EXPOSED') ? 0.34 : 0.26) && !ctx.target.transformed && Math.random() < 0.36) {
-        tryExecuteDefeat(ctx, ctx.target, '弹药架殉爆', {
-          message: `☠️ 【弹药架殉爆】轰！！！T-58 的动能直接引爆了 ${ctx.target.name} 的弹药架！炮塔被炸飞了十几米高！完成极硬核斩杀！`,
+        const originium = isOriginiumEntity(ctx.target);
+        tryExecuteDefeat(ctx, ctx.target, originium ? '源石核心崩解' : '弹药架殉爆', {
+          message: originium
+            ? `◆ 【源石核心崩解】T-58 的动能贯穿 ${ctx.target.name} 暴露的核心，源石晶格当场崩解！`
+            : `☠️ 【弹药架殉爆】轰！！！T-58 的动能直接引爆了 ${ctx.target.name} 的弹药架！炮塔被炸飞了十几米高！完成极硬核斩杀！`,
           killer: ctx.user,
         });
       }
@@ -298,6 +347,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
   },
   wt_su30_cas: {
     name: '苏-30SM2 狂暴轰入', tag: SKILL_TAGS.PHYS, ignoreDef: true,
+    spellBlockMode: 'perHit',
     condition: (u) => (u.wtSpawnPoints ?? 0) >= (u.status.some((status) => status.type === 'AIM') ? WT_PRECISE_CAS_COST : WT_CAS_COST),
     text: '✈️ 【CAS 请求确认】{USER} 呼叫空中支援！一架 苏-30SM2 呼啸而过...\n"全体目光向我看齐！狂暴轰入！！！"',
     onExecute: (ctx) => {
@@ -350,9 +400,8 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         const damageOptions: DamageApplicationOptions = { actionName: '苏-30SM2 洗地' };
         const actualDmg = ctx.applyDamage(e, plannedDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
         const airborneImmune = findDefenseStatus(e, 'BKB') || findDefenseStatus(e, 'INVUL');
-        ctx.user.stats.dmgDealt += actualDmg;
         if (actualDmg <= 0) {
           ctx.log('info', `💥 轰炸冲击被化解！${e.name} 没有承受实际伤害，也没有被【击飞】！`);
         } else if (airborneImmune) {
@@ -364,15 +413,18 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         ctx.flushDeferredDamageEvents?.();
         if (actualDmg > 0 && !airborneImmune && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
-          e.status.push({ type: isPrimary ? 'WT_AIRBORNE' : 'WT_SUPPRESS', duration: isPrimary ? 2 : 1 });
+          ctx.applyStatus(e, isPrimary ? 'WT_AIRBORNE' : 'WT_SUPPRESS', isPrimary ? 2 : 1);
         }
 
         const ammoRackPct = isPrimary
           ? (hasLaserDesignation ? CAS_DESIGNATED_MAIN_AMMO_RACK_PCT : CAS_MAIN_AMMO_RACK_PCT)
           : (hasLaserDesignation ? CAS_DESIGNATED_SPLASH_AMMO_RACK_PCT : CAS_SPLASH_AMMO_RACK_PCT);
         if (!lethalOutcomeTriggered && actualDmg > 0 && e.currentHp > 0 && e.hpPct < ammoRackPct) {
-          lethalOutcomeTriggered = tryExecuteDefeat(ctx, e, '弹药架殉爆', {
-            message: `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`,
+          const originium = isOriginiumEntity(e);
+          lethalOutcomeTriggered = tryExecuteDefeat(ctx, e, originium ? '源石核心崩解' : '弹药架殉爆', {
+            message: originium
+              ? `◆ 【源石核心崩解】${e.name} 的源石核心被航弹冲击震碎，晶体当场崩解！`
+              : `☠️ 【弹药架殉爆】${e.name} 在轰炸中不幸弹药库殉爆，瞬间气化！`,
             killer: ctx.user,
           }) || lethalOutcomeTriggered;
         }

@@ -18,6 +18,7 @@ const SUMMON_STAT_KEYS = ['hp', ...STAT_KEYS] as const;
 const SUMMON_STAT_KEY_SET = new Set<string>(SUMMON_STAT_KEYS);
 const NUMERIC_SKILL_FIELDS = ['rate', 'mult', 'hits', 'minDamagePct', 'lifesteal', 'selfDmgPct', 'tributes', 'triggerAgain'] as const;
 const VALID_STAT_BUFF_KEYS = new Set<string>([...STAT_KEYS, 'crit']);
+const VALID_SPELL_BLOCK_MODES = new Set(['precast', 'afterSetup', 'perHit']);
 
 type StatBuff = Partial<Record<StatKey | 'crit', number>>;
 type NumericSkillField = typeof NUMERIC_SKILL_FIELDS[number];
@@ -62,6 +63,7 @@ function assertGachaEntry(entry: GachaEntry, owner: string): void {
   assertStatusExists(entry.status, owner);
   assertStatBuff(entry.statBuff, owner);
   assertSummonStats(entry.stats, owner);
+  if (entry.spellBlockMode) assert(VALID_SPELL_BLOCK_MODES.has(entry.spellBlockMode), `${owner}.spellBlockMode is invalid`);
   NUMERIC_SKILL_FIELDS.forEach((field) => {
     const value = getOptionalNumericField(entry, field);
     if (value !== undefined) assertFiniteNumber(value, owner, field);
@@ -81,6 +83,7 @@ function assertSkillDefinition(skillId: string, skill: SkillDefinition): void {
   assertStatusExists(skill.status, owner);
   assertStatBuff(skill.statBuff, owner);
   assertSummonStats(skill.stats, owner);
+  if (skill.spellBlockMode) assert(VALID_SPELL_BLOCK_MODES.has(skill.spellBlockMode), `${owner}.spellBlockMode is invalid`);
   NUMERIC_SKILL_FIELDS.forEach((field) => {
     const value = getOptionalNumericField(skill, field);
     if (value !== undefined) assertFiniteNumber(value, owner, field);

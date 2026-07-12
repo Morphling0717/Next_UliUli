@@ -25,3 +25,4 @@ export {
   missesSkill,
 } from './actionResolution/guards';
 export { handleValorantPreFire } from './actionResolution/preAction';
+export { tryApplyHostileStatus } from './actionResolution/status';

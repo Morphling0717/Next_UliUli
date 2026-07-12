@@ -3,6 +3,8 @@ import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 import { grantStatus } from '../defenseStatus';
 import { isSelectableTargetFor } from '../targeting';
+import { withOriginiumStatShapeSuspended } from '../puruisaishiMechanics';
+import { cleanupOrphanedTimedStatModifiers, withTimedStatModifiersSuspended } from '../statModifiers';
 import {
   addTokusatsuThroneResonance,
   clearTokusatsuThroneResonance,
@@ -45,24 +47,29 @@ export function enterTokusatsuMonsterForm(
   target.status = target.status.filter((status) =>
     status.type !== 'WAIT_COUNTER' && !isStatusType(status.type, REVIVE_CLEAN_STATUS_TYPES),
   );
+  cleanupOrphanedTimedStatModifiers(target);
 
-  const previousMaxHp = target.maxHp;
-  const monsterMaxHp = Math.max(3025, Math.min(4400, Math.floor(previousMaxHp * 1.27)));
-  target.maxHp = monsterMaxHp;
-  target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.7)));
-  target.atk = Math.max(190, Math.floor(target.atk * 1.56));
-  target.def = Math.max(108, Math.floor(target.def * 1.44));
-  target.res = Math.max(128, Math.floor(target.res * 1.55));
-  target.mag = Math.max(108, Math.floor(target.mag * 1.65));
-  target.spd = Math.max(128, Math.floor(target.spd * 1.15));
-  target.agl = Math.max(104, Math.floor(target.agl * 1.18));
-  target.wis = Math.max(220, Math.floor(target.wis * 1.15));
-  target.critRate = Math.min(0.41, target.critRate + 0.035);
-  if (MIRACLE_MONSTER) target.jobData = cloneJobDefinition(MIRACLE_MONSTER);
-  target.job = 'MIRACLE_MONSTER_BUJIN';
-  target.monsterTurns = 0;
-  delete target.savedStats;
-  target.hasUsedRainbowFever = false;
+  withTimedStatModifiersSuspended(target, () => {
+    withOriginiumStatShapeSuspended(target, () => {
+      const previousMaxHp = target.maxHp;
+      const monsterMaxHp = Math.max(3025, Math.min(4400, Math.floor(previousMaxHp * 1.27)));
+      target.maxHp = monsterMaxHp;
+      target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.7)));
+      target.atk = Math.max(190, Math.floor(target.atk * 1.56));
+      target.def = Math.max(108, Math.floor(target.def * 1.44));
+      target.res = Math.max(128, Math.floor(target.res * 1.55));
+      target.mag = Math.max(108, Math.floor(target.mag * 1.65));
+      target.spd = Math.max(128, Math.floor(target.spd * 1.15));
+      target.agl = Math.max(104, Math.floor(target.agl * 1.18));
+      target.wis = Math.max(220, Math.floor(target.wis * 1.15));
+      target.critRate = Math.min(0.41, target.critRate + 0.035);
+      if (MIRACLE_MONSTER) target.jobData = cloneJobDefinition(MIRACLE_MONSTER);
+      target.job = 'MIRACLE_MONSTER_BUJIN';
+      target.monsterTurns = 0;
+      delete target.savedStats;
+      target.hasUsedRainbowFever = false;
+    });
+  });
   clearTokusatsuThroneResonance(target);
   refreshStatus(target, 'BKB', 2, 'tokusatsu_bujin_throne');
   refreshStatus(target, 'SPELL_BLOCK', 2, 'tokusatsu_bujin_throne');

@@ -1,5 +1,5 @@
 import { healFighter, syncHpPct } from '../combatState';
-import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
+import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition, StatKey } from '../types';
 import { namerenaData as Data } from '../data';
 import {
   REVIVE_CLEAN_STATUS_TYPES,
@@ -11,6 +11,7 @@ import {
   enterTokusatsuThroneStance,
   getTokusatsuThroneResonance,
 } from '../tokusatsuMechanics';
+import { applyTimedStatModifier, cleanupOrphanedTimedStatModifiers, makeTimedStatModifier } from '../statModifiers';
 
 const {
   SKILL_TAGS,
@@ -67,6 +68,20 @@ function refreshStatus(fighter: Fighter, type: string, duration: number, sourceI
   grantStatus(fighter, type, duration, sourceId);
 }
 
+function applyTemporaryTokusatsuStats(
+  fighter: Fighter,
+  statusType: string,
+  duration: number,
+  buff: Partial<Record<StatKey | 'crit', number>>,
+): void {
+  const sourceId = `tokusatsu:${statusType.toLowerCase()}`;
+  refreshStatus(fighter, statusType, duration, sourceId);
+  const status = fighter.status.find((entry) => entry.type === statusType && entry.sourceId === sourceId);
+  const modifierId = `stat:${statusType}:${sourceId}`;
+  if (status) status.modifierId = modifierId;
+  applyTimedStatModifier(fighter, makeTimedStatModifier(modifierId, statusType, buff, sourceId));
+}
+
 function cleanseTokusatsu(fighter: Fighter): number {
   const before = fighter.status.length;
   fighter.status = fighter.status.filter((status) => !TOKUSATSU_CLEAN_STATUS_TYPES.has(status.type));
@@ -121,11 +136,10 @@ function applyNamedDamageDetailed(
   };
   const actual = ctx.applyDamage(target, amount, 'skill', trueDamage, ctx.user, damageOptions);
   if (actual > 0) {
-    ctx.user.stats.dmgDealt += actual;
   }
   return {
     actual,
-    redirected: !!damageOptions.redirectedByJoker,
+    redirected: !!(damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore),
     defeatedDuringDamage: !!damageOptions.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced,
   };
 }
@@ -151,6 +165,7 @@ function removeOnePositiveStatus(target: Fighter): string | null {
     const stillHasCharmStyle = target.status.some((status) => status.type === 'STYLE_SEXY' || status.type === 'STYLE_EMPEROR');
     if (!stillHasCharmStyle) target.status = target.status.filter((status) => status.type !== 'CTR_CHARM');
   }
+  cleanupOrphanedTimedStatModifiers(target);
   return removable.type;
 }
 
@@ -162,9 +177,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     condition: (u) => !!u.isTokusatsu && !u.transformed,
     text: '🧪 {USER} 在战场边缘快速调试腰带，预演下一次变身节奏！',
     onExecute: (ctx) => {
-      ctx.user.atk = Math.floor(ctx.user.atk * 1.18);
-      ctx.user.mag = Math.floor(ctx.user.mag * 1.18);
-      ctx.user.spd = Math.floor(ctx.user.spd * 1.15);
+      applyTemporaryTokusatsuStats(ctx.user, 'TOKUSATSU_REHEARSAL', 3, { atk: 1.18, mag: 1.18, spd: 1.15 });
       refreshStatus(ctx.user, 'AIM', 2);
       ctx.log('buff', `🧪 【变身预演】${ctx.user.name} 校准腰带与武神之刃，攻击、魔力、速度小幅提升，并获得锁头准备！`);
       return true;
@@ -188,6 +201,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
   miracle_magic: { name: '奇迹魔法', tag: SKILL_TAGS.MAG, mult: 2.8, status: 'STUN', text: '✨ {USER} 发动奇迹炼金术！对 {TARGET} 造成 {VAL} 魔法伤害并眩晕！' },
   black_mist_wave: {
     name: '黑气斩波', tag: SKILL_TAGS.PHYS,
+    spellBlockMode: 'perHit',
     condition: (u) => !!u.isTokusatsu && !!u.transformed,
     text: '🌑 {USER} 挥出【黑气斩波】，黑色剑气沿战场扩散！',
     onExecute: (ctx) => {
@@ -196,11 +210,13 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const primary = applyNamedDamage(ctx, ctx.target, base, '黑气斩波', true);
       if (!userCanContinue(ctx)) return true;
       ctx.log(primary > 0 ? 'skill' : 'info', `🌑 【黑气斩波】${ctx.target.name} 实际承受 ${primary} 点真实伤害！`);
+      ctx.flushDeferredDamageEvents?.();
       markIfDefeated(ctx, ctx.target, '黑气斩波');
       for (const enemy of chooseSplashTargets(ctx, ctx.target, 2)) {
         const splash = applyNamedDamage(ctx, enemy, Math.floor(base * 0.3), '黑气斩波余波', true);
         if (!userCanContinue(ctx)) return true;
         ctx.log(splash > 0 ? 'skill' : 'info', `🌑 黑气余波扫过 ${enemy.name}，实际造成 ${splash} 点真实伤害！`);
+        ctx.flushDeferredDamageEvents?.();
         markIfDefeated(ctx, enemy, '黑气斩波');
       }
       return true;
@@ -217,15 +233,16 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const actual = applyNamedDamage(ctx, ctx.target, base, '悲愿居合', true);
       if (!userCanContinue(ctx)) return true;
       const healed = healAndSync(ctx.user, Math.floor(actual * 0.25));
-      if (!ctx.target.status.some((status) => status.type === 'WEAK') && actual > 0) {
-        ctx.target.status.push({ type: 'WEAK', duration: 2 });
-      }
       const recovery = actual > 0
         ? healed > 0
           ? `${ctx.user.name} 借悲愿回流恢复 ${healed} 点生命`
           : `${ctx.user.name} 生命已满，悲愿回流溢出`
         : '悲愿没有形成有效回流';
       ctx.log(actual > 0 ? 'heal' : 'info', `⚔️ 【悲愿居合】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`);
+      ctx.flushDeferredDamageEvents?.();
+      if (isActive(ctx.target) && !ctx.target.status.some((status) => status.type === 'WEAK') && actual > 0) {
+        if (ctx.applyStatus(ctx.target, 'WEAK', 2)) ctx.log('debuff', `⚔️ 【悲愿居合】${ctx.target.name} 被悲愿压制，虚弱 2 回合！`);
+      }
       markIfDefeated(ctx, ctx.target, '悲愿居合');
       return true;
     },
@@ -240,7 +257,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'tokusatsu_miracle_alchemy');
       refreshStatus(ctx.user, 'REGEN', 4);
       if (ctx.user.hpPct <= 0.48 || cleanCount > 0) refreshStatus(ctx.user, 'BKB', 1, 'tokusatsu_miracle_alchemy');
-      ctx.user.res = Math.floor(ctx.user.res * 1.08);
+      applyTemporaryTokusatsuStats(ctx.user, 'TOKUSATSU_ALCHEMY_RES', 4, { res: 1.08 });
       ctx.log('heal', `✨ 【奇迹炼金】${ctx.user.name} 重构装甲，${recoveryText(healed)}${cleanseSuffix(cleanCount)}，并获得再生与法术抵挡！`);
       return true;
     },
@@ -250,8 +267,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     condition: (u) => !!u.isTokusatsu && !!u.transformed,
     text: '🛡️ {USER} 以炼金术临时加厚武刃装甲！',
     onExecute: (ctx) => {
-      ctx.user.def = Math.floor(ctx.user.def * 1.18);
-      ctx.user.res = Math.floor(ctx.user.res * 1.18);
+      applyTemporaryTokusatsuStats(ctx.user, 'TOKUSATSU_ALCHEMY_ARMOR', 2, { def: 1.18, res: 1.18 });
       refreshStatus(ctx.user, 'BKB', 1, 'tokusatsu_alchemy_armor');
       refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'tokusatsu_alchemy_armor');
       refreshStatus(ctx.user, 'REGEN', 2);
@@ -286,9 +302,6 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       ctx.log('skill', `🦀 【能量粉碎】${ctx.user.name} 用怪兽巨臂钳住 ${ctx.target.name}，炼金能量开始崩解护盾！`);
       const actual = applyNamedDamage(ctx, ctx.target, base, '能量粉碎', true);
       if (!userCanContinue(ctx)) return true;
-      if (actual > 0 && !ctx.target.status.some((status) => status.type === 'WEAK')) {
-        ctx.target.status.push({ type: 'WEAK', duration: 2 });
-      }
       const removedName = removedStatus ? (ctx.STATUS_EFFECTS[removedStatus]?.name ?? removedStatus) : '';
       const statusText = removedStatus
         ? actual > 0
@@ -296,6 +309,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
           : `；虽然伤害被挡下，炼金崩解仍粉碎了【${removedName}】`
         : '';
       ctx.log(actual > 0 ? 'skill' : 'info', `🦀 【能量粉碎】${ctx.target.name} 实际承受 ${actual} 点真实伤害${statusText}！`);
+      ctx.flushDeferredDamageEvents?.();
+      if (actual > 0 && isActive(ctx.target) && !ctx.target.status.some((status) => status.type === 'WEAK')) {
+        if (ctx.applyStatus(ctx.target, 'WEAK', 2)) ctx.log('debuff', `🦀 【能量粉碎】${ctx.target.name} 被炼金冲击压制，虚弱 2 回合！`);
+      }
       markIfDefeated(ctx, ctx.target, '能量粉碎');
       return true;
     },
@@ -307,8 +324,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const cleanCount = cleanseTokusatsu(ctx.user);
       const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.26 + ctx.user.mag * 2.2));
-      ctx.user.def = Math.floor(ctx.user.def * 1.12);
-      ctx.user.res = Math.floor(ctx.user.res * 1.12);
+      applyTemporaryTokusatsuStats(ctx.user, 'TOKUSATSU_MIRACLE_ARMOR', 4, { def: 1.12, res: 1.12 });
       refreshStatus(ctx.user, 'BKB', 2, 'tokusatsu_miracle_armor');
       refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'tokusatsu_miracle_armor');
       refreshStatus(ctx.user, 'REGEN', 4);
@@ -318,6 +334,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
   },
   bujin_monster_combo: {
     name: '武神怪兽连斩', tag: SKILL_TAGS.PHYS,
+    spellBlockMode: 'perHit',
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN',
     text: '🗡️ {USER} 在怪兽形态下连续挥动武神之刃！',
     onExecute: (ctx) => {
@@ -330,6 +347,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         const actual = applyNamedDamage(ctx, enemy, Math.floor(base * (index === 0 ? 1 : 0.72)), '武神怪兽连斩', true);
         if (!userCanContinue(ctx)) return true;
         ctx.log(actual > 0 ? 'skill' : 'info', `🗡️ 第 ${index + 1} 斩命中 ${enemy.name}，实际造成 ${actual} 点真实伤害！`);
+        ctx.flushDeferredDamageEvents?.();
         markIfDefeated(ctx, enemy, '武神怪兽连斩');
       }
       return true;
@@ -337,6 +355,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
   },
   monster_roar: {
     name: '怪兽咆哮', tag: SKILL_TAGS.MAG,
+    spellBlockMode: 'perHit',
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN',
     text: '📣 {USER} 发出怪兽咆哮，炼金冲击波席卷全场！',
     onExecute: (ctx) => {
@@ -347,13 +366,18 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       for (const enemy of enemies) {
         const actual = applyNamedDamage(ctx, enemy, base, '怪兽咆哮', true);
         if (!userCanContinue(ctx)) return true;
-        if (actual > 0 && !enemy.status.some((status) => status.type === 'WEAK')) {
-          enemy.status.push({ type: 'WEAK', duration: 2 });
-        }
-        if (actual > 0 && Math.random() < 0.35 && !enemy.status.some((status) => status.type === 'AIRBORNE')) {
-          enemy.status.push({ type: 'AIRBORNE', duration: 1 });
-        }
         ctx.log(actual > 0 ? 'skill' : 'info', `📣 咆哮冲击命中 ${enemy.name}，实际造成 ${actual} 点真实伤害！`);
+        ctx.flushDeferredDamageEvents?.();
+        const appliedEffects: string[] = [];
+        if (actual > 0 && isActive(enemy) && !enemy.status.some((status) => status.type === 'WEAK')) {
+          if (ctx.applyStatus(enemy, 'WEAK', 2)) appliedEffects.push('虚弱 2 回合');
+        }
+        if (actual > 0 && isActive(enemy) && Math.random() < 0.35 && !enemy.status.some((status) => status.type === 'AIRBORNE')) {
+          if (ctx.applyStatus(enemy, 'AIRBORNE', 1)) appliedEffects.push('击飞 1 回合');
+        }
+        if (appliedEffects.length > 0) {
+          ctx.log('debuff', `📣 【怪兽咆哮】${enemy.name} 被附加${appliedEffects.join('、')}！`);
+        }
         markIfDefeated(ctx, enemy, '怪兽咆哮');
       }
       return true;
@@ -393,6 +417,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         ctx.log(actual > 0 ? 'heal' : 'info', `⭐ 【GREAT MONSTER VICTORY】星光造成 ${actual} 点真实伤害并触发致死连锁，后续退场已单独结算；${recovery}！`);
       } else {
         ctx.log(actual > 0 ? 'heal' : 'info', `⭐ 【GREAT MONSTER VICTORY】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`);
+        ctx.flushDeferredDamageEvents?.();
         markIfDefeated(ctx, ctx.target, 'GREAT MONSTER VICTORY');
       }
       return true;
@@ -400,6 +425,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
   },
   rainbow_fever: {
     name: '彩虹狂热', tag: SKILL_TAGS.PHYS, mult: 5.4, ignoreDef: true, alwaysHit: true,
+    spellBlockMode: 'perHit',
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN' && !u.hasUsedRainbowFever,
     text: '🌈 {USER} 点三下彩虹龙头："Gon Gon GonGonGonGon"！推动腰带拉杆发动【彩虹狂热】："GOTCHARD RAINBOW FEVER! FEVER! FEVER! FEVER!"\n🚂 {USER} 使用炼金术将巨型列车用来附身的蒸汽列车模型再炼成，模型巨大化后与脚部一体化，化作火车头骑士踢贯穿 {TARGET}，造成 {VAL} 真实伤害！',
     onExecute: (ctx) => {
@@ -419,11 +445,13 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const primary = applyNamedDamage(ctx, ctx.target, base, '彩虹狂热', true, false);
       if (!userCanContinue(ctx)) return true;
       ctx.log(primary > 0 ? 'crit' : 'info', `🌈 【彩虹狂热】${ctx.target.name} 实际承受 ${primary} 点真实伤害！`);
+      ctx.flushDeferredDamageEvents?.();
       markIfDefeated(ctx, ctx.target, '彩虹狂热');
       for (const enemy of chooseSplashTargets(ctx, ctx.target, 3)) {
         const splash = applyNamedDamage(ctx, enemy, Math.floor(base * 0.18), '彩虹狂热余波', true);
         if (!userCanContinue(ctx)) return true;
         ctx.log(splash > 0 ? 'skill' : 'info', `🌈 彩虹列车余波撞上 ${enemy.name}，实际造成 ${splash} 点真实伤害！`);
+        ctx.flushDeferredDamageEvents?.();
         markIfDefeated(ctx, enemy, '彩虹狂热');
       }
       const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.18 + primary * 0.1));

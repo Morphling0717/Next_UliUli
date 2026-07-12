@@ -48,6 +48,17 @@ export function getEmoteAdaptTotal(fighter: Fighter): number {
   return totalEmoteStats(fighter.emoteAdaptStats);
 }
 
+export function getEmoteClaimableKills(fighter: Fighter): number {
+  return Math.max(0, Math.floor(fighter.stats.kills) - Math.floor(fighter.emoteClaimedKills ?? 0));
+}
+
+export function consumeEmoteClaimableKills(fighter: Fighter, amount = 1): number {
+  const before = getEmoteClaimableKills(fighter);
+  const consumed = Math.min(before, Math.max(0, Math.floor(amount)));
+  if (consumed > 0) fighter.emoteClaimedKills = (fighter.emoteClaimedKills ?? 0) + consumed;
+  return consumed;
+}
+
 export function addStatsToFighter(
   fighter: Fighter,
   gain: Partial<Record<EmoteStatKey, number>>,
