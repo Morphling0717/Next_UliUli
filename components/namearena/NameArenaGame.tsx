@@ -187,9 +187,12 @@ type IconProps = Omit<React.ComponentProps<typeof Icon>, "d">;
 
 const Icons = {
   Play: (p: IconProps) => <Icon {...p} fill="currentColor" d="M5 3l14 9-14 9V3z" />,
+  ArrowLeft: (p: IconProps) => <Icon {...p} d="M19 12H5 M12 19l-7-7 7-7" />,
   RotateCcw: (p: IconProps) => <Icon {...p} d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5" />,
   Swords: (p: IconProps) => <Icon {...p} d="M14.5 17.5 3 6V3h3l11.5 11.5 M13 19l6-6 M16 16l4 4 M19 21l2-2 M14.5 6.5 18 3h3v3l-3.5 3.5 M5 14l4 4 M7 17l-3 3 M3 19l2 2" />,
   Smartphone: (p: IconProps) => <Icon {...p} d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2 M10 18h4 M2 8l-1 2 1 2 M1 10h6" />,
+  Maximize: (p: IconProps) => <Icon {...p} d="M8 3H3v5 M16 3h5v5 M8 21H3v-5 M16 21h5v-5" />,
+  Minimize: (p: IconProps) => <Icon {...p} d="M8 3v5H3 M16 3v5h5 M8 21v-5H3 M16 21v-5h5" />,
   Download: (p: IconProps) => (
     <Icon {...p} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3" />
   ),
@@ -1000,7 +1003,11 @@ function StatGrid({ fighter }: { fighter: Fighter }) {
   );
 }
 
-export function NameArenaGame() {
+type NameArenaGameProps = {
+    onExit?: () => void;
+};
+
+export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const [inputNames, setInputNames] = useState('水人\n玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep');
     const [fighters, setFighters] = useState<Fighter[]>([]);
     const [battleTurn, setBattleTurn] = useState(0);
@@ -1034,6 +1041,7 @@ export function NameArenaGame() {
     const [mobileBattleView, setMobileBattleView] = useState<'arena' | 'logs'>('arena');
     const [isPortraitPhone, setIsPortraitPhone] = useState(false);
     const [landscapeHintDismissed, setLandscapeHintDismissed] = useState(false);
+    const [isFullscreen, setIsFullscreen] = useState(false);
     const showLandscapeHint = gameState === 'FIGHTING' && isPortraitPhone && !landscapeHintDismissed;
 
     useEffect(() => {
@@ -1045,6 +1053,12 @@ export function NameArenaGame() {
         updateScreenMode();
         window.addEventListener('resize', updateScreenMode);
         return () => window.removeEventListener('resize', updateScreenMode);
+    }, []);
+
+    useEffect(() => {
+        const handleFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
 
     useEffect(() => {
@@ -1063,6 +1077,19 @@ export function NameArenaGame() {
             return newLogs.length > DISPLAY_LOG_LIMIT ? newLogs.slice(-DISPLAY_LOG_LIMIT) : newLogs;
         });
     }, []);
+
+    const toggleFullscreen = async () => {
+        if (!document.fullscreenEnabled || !document.documentElement.requestFullscreen) {
+            alert('当前浏览器不支持网页全屏，可尝试将网站添加到主屏幕。');
+            return;
+        }
+        try {
+            if (document.fullscreenElement) await document.exitFullscreen();
+            else await document.documentElement.requestFullscreen();
+        } catch {
+            alert('无法进入全屏，请检查浏览器的全屏权限。');
+        }
+    };
 
     const resetGame = () => {
         setGameState('SETUP');
@@ -1341,6 +1368,7 @@ export function NameArenaGame() {
     const names = fighters.map(f => f.name).filter(n => n.length > 0).sort((a,b) => b.length - a.length);
     const nameRegex = names.length > 0 ? new RegExp(`(${names.map(escapeRegExp).join('|')})`, 'g') : null;
     const roundProgress = getLargeRoundProgress(battleState);
+    const aliveCount = fighters.filter(isWinningCombatant).length;
 
         const renderLogText = (l: BattleLogEntry, i: number) => {
         const parts = nameRegex ? l.text.split(nameRegex) : [l.text];
@@ -1492,11 +1520,23 @@ export function NameArenaGame() {
     };
 
     return (
-        <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 font-sans text-slate-200">
-            <header className="namerena-game-header z-20 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 p-3 pr-16 shadow-lg">
+        <div data-game-state={gameState} className={`namerena-shell relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 font-sans text-slate-200 ${onExit ? 'namerena-integrated-shell' : ''}`}>
+            <header className="namerena-game-header z-20 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 p-3 shadow-lg">
                 <div className="flex min-w-0 items-center gap-3">
+                    {onExit ? (
+                        <button
+                            type="button"
+                            onClick={onExit}
+                            className="namerena-exit-button inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+                            title="返回游戏大厅"
+                            aria-label="返回游戏大厅"
+                        >
+                            <Icons.ArrowLeft size={15} />
+                            <span className="namerena-exit-label">返回</span>
+                        </button>
+                    ) : null}
                     <h1 className="namerena-title truncate text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
-                        名字大乱斗 <span className="text-[10px] text-slate-500 border border-slate-700 px-1 rounded align-top">NameWar</span>
+                        名字大乱斗 <span className="namerena-title-badge text-[10px] text-slate-500 border border-slate-700 px-1 rounded align-top">NameWar</span>
                     </h1>
                     {gameState !== 'SETUP' ? (
                         <div
@@ -1508,22 +1548,58 @@ export function NameArenaGame() {
                             <span className="text-slate-500">{roundProgress.acted}/{roundProgress.total}</span>
                         </div>
                     ) : null}
+                    {gameState !== 'SETUP' ? (
+                        <span className="namerena-alive-summary hidden shrink-0 items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-100">
+                            存活 <span className="font-mono text-emerald-300">{aliveCount}</span>
+                        </span>
+                    ) : null}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="namerena-header-controls flex items-center gap-2">
                     {gameState === 'FIGHTING' && (
-                        <div className="flex bg-slate-800 rounded-lg p-0.5 gap-1 shadow-inner border border-slate-700/50">
-                            <button onClick={() => changeSpeed(1500)} className={`px-2 py-1 text-xs rounded font-mono transition-colors ${currentSpeedLvl===1 ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>x1</button>
-                            <button onClick={() => changeSpeed(500)} className={`px-2 py-1 text-xs rounded font-mono transition-colors ${currentSpeedLvl===2 ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>x2</button>
-                            <button onClick={() => changeSpeed(50)} className={`px-2 py-1 text-xs rounded font-mono transition-colors ${currentSpeedLvl===3 ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>x3</button>
-                        </div>
+                        <>
+                            <div className="namerena-speed-control flex bg-slate-800 rounded-lg p-0.5 gap-1 shadow-inner border border-slate-700/50">
+                                <button onClick={() => changeSpeed(1500)} className={`px-2 py-1 text-xs rounded font-mono transition-colors ${currentSpeedLvl===1 ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>x1</button>
+                                <button onClick={() => changeSpeed(500)} className={`px-2 py-1 text-xs rounded font-mono transition-colors ${currentSpeedLvl===2 ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>x2</button>
+                                <button onClick={() => changeSpeed(50)} className={`px-2 py-1 text-xs rounded font-mono transition-colors ${currentSpeedLvl===3 ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>x3</button>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsAutoScroll(!isAutoScroll)}
+                                className={`namerena-header-autoscroll hidden h-7 items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold transition-colors ${isAutoScroll ? 'border-indigo-500/30 bg-indigo-900/50 text-indigo-200' : 'border-slate-700 bg-slate-800 text-slate-400'}`}
+                                title={isAutoScroll ? '日志正在跟随最新行' : '日志已暂停自动滚动'}
+                            >
+                                <Icons.BookOpen size={12} />
+                                <span>{isAutoScroll ? '跟随' : '暂停'}</span>
+                            </button>
+                        </>
                     )}
+                    {gameState !== 'SETUP' ? (
+                        <button
+                            type="button"
+                            onClick={resetGame}
+                            className="namerena-header-reset hidden h-7 w-7 items-center justify-center rounded-md border border-red-500/30 bg-red-600/80 text-white transition-colors hover:bg-red-500"
+                            title="重置大厅"
+                            aria-label="重置大厅"
+                        >
+                            <Icons.RotateCcw size={13} />
+                        </button>
+                    ) : null}
+                    <button
+                        type="button"
+                        onClick={toggleFullscreen}
+                        className="namerena-fullscreen-toggle hidden h-7 w-7 items-center justify-center rounded-md border border-slate-600 bg-slate-800 text-slate-200 transition-colors hover:bg-slate-700"
+                        title={isFullscreen ? '退出全屏' : '进入全屏'}
+                        aria-label={isFullscreen ? '退出全屏' : '进入全屏'}
+                    >
+                        {isFullscreen ? <Icons.Minimize size={13} /> : <Icons.Maximize size={13} />}
+                    </button>
                     {gameState === 'END' && !showMvp && (
                         <>
                             <button onClick={replayLastBattle} className="flex items-center gap-1 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-bold text-white shadow-lg transition-colors hover:bg-slate-700" title={`按相同种子 ${battleState.seed} 重放`}>
-                                <Icons.RotateCcw size={14}/> <span className="hidden sm:inline">重放本局</span>
+                                <Icons.RotateCcw size={14}/> <span className="namerena-end-action-label hidden sm:inline">重放本局</span>
                             </button>
                             <button onClick={() => { setMobileBattleView('arena'); setShowMvp(true); }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 shadow-lg transition-transform hover:scale-105" title="赛后结算">
-                                <Icons.BarChart size={14}/> <span className="hidden sm:inline">数据统计</span>
+                                <Icons.BarChart size={14}/> <span className="namerena-end-action-label hidden sm:inline">数据统计</span>
                             </button>
                         </>
                     )}
@@ -1578,7 +1654,7 @@ export function NameArenaGame() {
                             >
                                 <Icons.Swords size={14} />
                                 <span>战场</span>
-                                <span className="rounded bg-black/25 px-1.5 font-mono text-[10px]">{fighters.filter(isWinningCombatant).length}</span>
+                                <span className="rounded bg-black/25 px-1.5 font-mono text-[10px]">{aliveCount}</span>
                             </button>
                             <button
                                 type="button"
@@ -1599,7 +1675,7 @@ export function NameArenaGame() {
                         >
                             <div className="namerena-panel-header z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/50 p-3 shadow-sm backdrop-blur">
                                 <span className="text-sm font-bold tracking-wide">
-                                    存活人数: <span className="text-indigo-400">{fighters.filter(isWinningCombatant).length}</span>
+                                    存活人数: <span className="text-indigo-400">{aliveCount}</span>
                                     <span className="namerena-panel-round ml-3 font-mono text-xs text-slate-500 sm:hidden">全局 {battleTurn} · 大回合 {roundProgress.number} ({roundProgress.acted}/{roundProgress.total})</span>
                                 </span>
                                 {(gameState === 'FIGHTING' || gameState === 'END') && (
@@ -1728,6 +1804,12 @@ export function NameArenaGame() {
                 .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
                 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
 
+                .namerena-integrated-shell .namerena-game-header {
+                    padding-top: max(0.75rem, env(safe-area-inset-top));
+                    padding-left: max(0.75rem, env(safe-area-inset-left));
+                    padding-right: max(0.75rem, env(safe-area-inset-right));
+                }
+
                 @media (max-width: 767px) and (orientation: portrait) {
                     .namerena-mobile-tabs {
                         display: flex;
@@ -1758,19 +1840,60 @@ export function NameArenaGame() {
 
                 @media (orientation: landscape) and (max-height: 600px) {
                     .namerena-game-header {
-                        min-height: 2.5rem;
-                        padding-top: 0.375rem;
-                        padding-bottom: 0.375rem;
-                        padding-left: max(0.75rem, env(safe-area-inset-left));
-                        padding-right: max(4rem, calc(env(safe-area-inset-right) + 3.5rem));
+                        min-height: 2.25rem;
+                        gap: 0.375rem;
+                        padding-top: max(0.25rem, env(safe-area-inset-top));
+                        padding-bottom: 0.25rem;
+                        padding-left: max(0.375rem, env(safe-area-inset-left));
+                        padding-right: max(0.375rem, env(safe-area-inset-right));
+                    }
+                    .namerena-integrated-shell .namerena-game-header {
+                        padding-top: max(0.25rem, env(safe-area-inset-top));
+                        padding-left: max(0.375rem, env(safe-area-inset-left));
+                        padding-right: max(0.375rem, env(safe-area-inset-right));
+                    }
+                    .namerena-game-header > div:first-child {
+                        gap: 0.375rem;
+                    }
+                    .namerena-exit-button {
+                        width: 1.75rem;
+                        height: 1.75rem;
+                        justify-content: center;
+                        padding: 0;
+                    }
+                    .namerena-exit-label,
+                    .namerena-end-action-label {
+                        display: none !important;
                     }
                     .namerena-title {
-                        font-size: 1rem;
-                        line-height: 1.25rem;
+                        font-size: 0.9375rem;
+                        line-height: 1.125rem;
+                    }
+                    .namerena-title-badge {
+                        display: none;
                     }
                     .namerena-round-summary {
+                        gap: 0.375rem;
+                        padding-left: 0.375rem;
+                        padding-right: 0.375rem;
                         padding-top: 0.125rem;
                         padding-bottom: 0.125rem;
+                        font-size: 0.5625rem;
+                    }
+                    .namerena-alive-summary,
+                    .namerena-header-autoscroll,
+                    .namerena-header-reset,
+                    .namerena-fullscreen-toggle {
+                        display: inline-flex;
+                    }
+                    .namerena-header-controls {
+                        gap: 0.25rem;
+                    }
+                    .namerena-speed-control {
+                        gap: 0.125rem;
+                    }
+                    .namerena-speed-control button {
+                        padding: 0.25rem 0.375rem;
                         font-size: 0.625rem;
                     }
                     .namerena-mobile-tabs {
@@ -1795,8 +1918,11 @@ export function NameArenaGame() {
                         padding-right: env(safe-area-inset-right);
                     }
                     .namerena-panel-header {
-                        min-height: 2.125rem;
-                        padding: 0.375rem 0.625rem;
+                        min-height: 1.75rem;
+                        padding: 0.25rem 0.5rem;
+                    }
+                    .namerena-shell[data-game-state="FIGHTING"] .namerena-panel-header {
+                        display: none;
                     }
                     .namerena-panel-round {
                         display: none;

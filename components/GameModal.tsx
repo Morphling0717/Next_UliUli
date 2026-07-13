@@ -44,7 +44,7 @@ export const GameModal: React.FC<GameModalProps> = ({ isOpen, onClose, config })
     <AnimatePresence>
       {isOpen && (
         <motion.div
-          className="fixed inset-0 z-10000 flex items-center justify-center p-0 md:p-4"
+          className="game-modal-layer fixed inset-0 z-10000 flex items-center justify-center p-0 md:p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -59,15 +59,17 @@ export const GameModal: React.FC<GameModalProps> = ({ isOpen, onClose, config })
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="relative flex h-full min-h-0 w-full flex-col overflow-hidden border border-(--neon-blue) bg-black md:h-[90vh] md:w-[95vw] md:rounded-xl rounded-none"
+            className="game-modal-frame relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-none border border-(--neon-blue) bg-black md:h-[90vh] md:w-[95vw] md:rounded-xl"
             onClick={(e: React.MouseEvent) => e.stopPropagation()}
           >
-            <button
-              onClick={onClose}
-              className="absolute top-4 right-4 z-50 text-red-500 hover:text-white transition-colors"
-            >
-              <Icons.X size={24} />
-            </button>
+            {activeGame !== 'namerena' ? (
+              <button
+                onClick={onClose}
+                className="absolute top-4 right-4 z-50 text-red-500 hover:text-white transition-colors"
+              >
+                <Icons.X size={24} />
+              </button>
+            ) : null}
 
             {!activeGame ? (
               // --- 游戏选择大厅 ---
@@ -128,20 +130,22 @@ export const GameModal: React.FC<GameModalProps> = ({ isOpen, onClose, config })
             ) : (
               // --- 具体的游戏渲染区 ---
               <div className="relative flex min-h-0 flex-1 flex-col">
-                <div className="z-50 flex shrink-0 justify-between border-b border-white/10 bg-gray-900 p-4">
-                   <button 
-                     onClick={() => setActiveGame(null)}
-                     className="text-gray-400 hover:text-white flex items-center gap-2 text-sm font-bold font-tech"
-                   >
-                     <Icons.ArrowLeft size={16} /> {gameCfg.returnText || "RETURN TO LOBBY"}
-                   </button>
-                </div>
+                {activeGame !== 'namerena' ? (
+                  <div className="z-50 flex shrink-0 justify-between border-b border-white/10 bg-gray-900 p-4">
+                    <button
+                      onClick={() => setActiveGame(null)}
+                      className="text-gray-400 hover:text-white flex items-center gap-2 text-sm font-bold font-tech"
+                    >
+                      <Icons.ArrowLeft size={16} /> {gameCfg.returnText || "RETURN TO LOBBY"}
+                    </button>
+                  </div>
+                ) : null}
                 
                 <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
                     {/* 名字大乱斗：内嵌 React 模块 */}
                     {activeGame === 'namerena' && (
                         <div className="h-full w-full min-h-0">
-                            <NameArenaGame />
+                            <NameArenaGame onExit={() => setActiveGame(null)} />
                         </div>
                     )}
                     
@@ -154,6 +158,19 @@ export const GameModal: React.FC<GameModalProps> = ({ isOpen, onClose, config })
               </div>
             )}
           </motion.div>
+          <style>{`
+            @media (orientation: landscape) and (max-height: 600px) {
+              .game-modal-layer {
+                padding: 0 !important;
+              }
+              .game-modal-frame {
+                width: 100vw !important;
+                height: 100dvh !important;
+                border-width: 0 !important;
+                border-radius: 0 !important;
+              }
+            }
+          `}</style>
         </motion.div>
       )}
     </AnimatePresence>

@@ -294,8 +294,8 @@ export default function AppFeatureHub() {
           </div>
         </FeaturePanel>
 
-        <FeaturePanel open={activePanel === "namerena"} onClose={() => setActivePanel(null)}>
-          <NameArenaGame />
+        <FeaturePanel open={activePanel === "namerena"} onClose={() => setActivePanel(null)} integrated>
+          <NameArenaGame onExit={() => setActivePanel(null)} />
         </FeaturePanel>
 
         <FeaturePanel open={activePanel === "dgp"} onClose={() => setActivePanel(null)}>
@@ -372,10 +372,11 @@ type FeaturePanelProps = {
   open: boolean;
   onClose: () => void;
   children: React.ReactNode;
+  integrated?: boolean;
 };
 
 // Modern iOS-like Bottom Sheet / Full Cover Overlay
-function FeaturePanel({ open, onClose, children }: FeaturePanelProps) {
+function FeaturePanel({ open, onClose, children, integrated = false }: FeaturePanelProps) {
   return (
     <AnimatePresence>
       {open && (
@@ -386,42 +387,43 @@ function FeaturePanel({ open, onClose, children }: FeaturePanelProps) {
           transition={{ type: "spring", damping: 28, stiffness: 280 }}
           className="fixed inset-0 z-[1400] flex flex-col bg-black"
         >
-          {/* Top Drag/Close Area - 支持下拉关闭 */}
-          <motion.div
-            className="shrink-0 bg-[#0a0a0c] border-b border-white/5 flex items-center justify-between relative z-50 select-none cursor-grab active:cursor-grabbing"
-            style={{
-              paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)",
-              paddingBottom: "0.5rem",
-              paddingLeft: "calc(env(safe-area-inset-left) + 1rem)",
-              paddingRight: "calc(env(safe-area-inset-right) + 1rem)",
-              touchAction: "none",
-            }}
-            drag="y"
-            dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={{ top: 0, bottom: 0.6 }}
-            onDragEnd={(_, info) => {
-              if (info.offset.y > 80 || info.velocity.y > 600) {
-                onClose();
-              }
-            }}
-          >
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-white px-2 py-1 flex items-center gap-1 active:opacity-50 transition-opacity text-sm font-medium"
+          {!integrated ? (
+            <motion.div
+              className="shrink-0 bg-[#0a0a0c] border-b border-white/5 flex items-center justify-between relative z-50 select-none cursor-grab active:cursor-grabbing"
+              style={{
+                paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)",
+                paddingBottom: "0.5rem",
+                paddingLeft: "calc(env(safe-area-inset-left) + 1rem)",
+                paddingRight: "calc(env(safe-area-inset-right) + 1rem)",
+                touchAction: "none",
+              }}
+              drag="y"
+              dragConstraints={{ top: 0, bottom: 0 }}
+              dragElastic={{ top: 0, bottom: 0.6 }}
+              onDragEnd={(_, info) => {
+                if (info.offset.y > 80 || info.velocity.y > 600) {
+                  onClose();
+                }
+              }}
             >
-              <ArrowLeft className="w-4 h-4" /> 返回
-            </button>
-            <div
-              className="w-12 h-1.5 bg-white/20 rounded-full absolute left-1/2 -translate-x-1/2"
-              style={{ top: "calc(env(safe-area-inset-top) + 0.5rem)" }}
-            />
-            <div className="w-12" />
-          </motion.div>
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-white px-2 py-1 flex items-center gap-1 active:opacity-50 transition-opacity text-sm font-medium"
+              >
+                <ArrowLeft className="w-4 h-4" /> 返回
+              </button>
+              <div
+                className="w-12 h-1.5 bg-white/20 rounded-full absolute left-1/2 -translate-x-1/2"
+                style={{ top: "calc(env(safe-area-inset-top) + 0.5rem)" }}
+              />
+              <div className="w-12" />
+            </motion.div>
+          ) : null}
           {/* Main Content */}
           <div
             className="flex-1 min-h-0 relative"
             style={{
-              paddingBottom: "env(safe-area-inset-bottom)",
+              paddingBottom: integrated ? undefined : "env(safe-area-inset-bottom)",
             }}
           >
             {children}
