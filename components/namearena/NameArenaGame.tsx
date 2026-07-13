@@ -188,6 +188,8 @@ type IconProps = Omit<React.ComponentProps<typeof Icon>, "d">;
 const Icons = {
   Play: (p: IconProps) => <Icon {...p} fill="currentColor" d="M5 3l14 9-14 9V3z" />,
   RotateCcw: (p: IconProps) => <Icon {...p} d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5" />,
+  Swords: (p: IconProps) => <Icon {...p} d="M14.5 17.5 3 6V3h3l11.5 11.5 M13 19l6-6 M16 16l4 4 M19 21l2-2 M14.5 6.5 18 3h3v3l-3.5 3.5 M5 14l4 4 M7 17l-3 3 M3 19l2 2" />,
+  Smartphone: (p: IconProps) => <Icon {...p} d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2 M10 18h4 M2 8l-1 2 1 2 M1 10h6" />,
   Download: (p: IconProps) => (
     <Icon {...p} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3" />
   ),
@@ -562,26 +564,39 @@ function StatusChip({ item, compact = false }: { item: StatusDisplayItem; compac
 }
 
 function StatusStrip({ statuses }: { statuses: StatusEntry[] }) {
+  const [expanded, setExpanded] = useState(false);
   const items = buildStatusDisplayItems(statuses);
   if (items.length === 0) return null;
 
-  const visibleItems = items.slice(0, STATUS_CHIP_LIMIT);
-  const hiddenItems = items.slice(STATUS_CHIP_LIMIT);
+  const visibleItems = expanded ? items : items.slice(0, STATUS_CHIP_LIMIT);
+  const hiddenItems = expanded ? [] : items.slice(STATUS_CHIP_LIMIT);
   const hiddenTitle = hiddenItems.map(formatStatusTitle).join('\n\n');
 
   return (
-    <div className="mt-2 rounded-lg border border-slate-700/60 bg-slate-950/50 px-2 py-1.5 shadow-inner">
+    <div className="namerena-status-strip mt-2 rounded-lg border border-slate-700/60 bg-slate-950/50 px-2 py-1.5 shadow-inner">
       <div className="flex min-w-0 flex-wrap gap-1">
         {visibleItems.map((item) => (
           <StatusChip key={statusGroupKey(item.status)} item={item} />
         ))}
         {hiddenItems.length > 0 ? (
-          <span
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            aria-expanded={false}
             title={hiddenTitle}
             className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-500/40 bg-slate-800 px-1.5 text-[10px] font-bold text-slate-200 shadow-sm"
           >
             +{hiddenItems.length}
-          </span>
+          </button>
+        ) : expanded && items.length > STATUS_CHIP_LIMIT ? (
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            aria-expanded={true}
+            className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-500/40 bg-slate-800 px-1.5 text-[10px] font-bold text-slate-200 shadow-sm"
+          >
+            收起
+          </button>
         ) : null}
       </div>
     </div>
@@ -880,14 +895,15 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
 };
 
 function ResourceStrip({ fighter, fighters, turnCount, battleState }: { fighter: Fighter; fighters: Fighter[]; turnCount: number; battleState: BattleState }) {
+  const [expanded, setExpanded] = useState(false);
   const chips = buildResourceChips(fighter, fighters, turnCount, battleState);
   if (chips.length === 0) return null;
 
-  const visibleChips = chips.slice(0, RESOURCE_CHIP_LIMIT);
-  const hiddenChips = chips.slice(RESOURCE_CHIP_LIMIT);
+  const visibleChips = expanded ? chips : chips.slice(0, RESOURCE_CHIP_LIMIT);
+  const hiddenChips = expanded ? [] : chips.slice(RESOURCE_CHIP_LIMIT);
 
   return (
-    <div className="mt-2 flex min-w-0 flex-wrap gap-1">
+    <div className="namerena-resource-strip mt-2 flex min-w-0 flex-wrap gap-1">
       {visibleChips.map((chip) => (
         <span
           key={`${chip.label}-${chip.value}`}
@@ -900,12 +916,24 @@ function ResourceStrip({ fighter, fighters, turnCount, battleState }: { fighter:
         </span>
       ))}
       {hiddenChips.length > 0 ? (
-        <span
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          aria-expanded={false}
           title={hiddenChips.map((chip) => chip.title).join('\n\n')}
           className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-500/40 bg-slate-800 px-1.5 text-[10px] font-bold text-slate-200 shadow-sm"
         >
           +{hiddenChips.length}
-        </span>
+        </button>
+      ) : expanded && chips.length > RESOURCE_CHIP_LIMIT ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          aria-expanded={true}
+          className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-500/40 bg-slate-800 px-1.5 text-[10px] font-bold text-slate-200 shadow-sm"
+        >
+          收起
+        </button>
       ) : null}
     </div>
   );
@@ -956,16 +984,16 @@ function HealthBar({ fighter }: { fighter: Fighter }) {
 
 function StatGrid({ fighter }: { fighter: Fighter }) {
   return (
-    <div className="mt-2 grid grid-cols-4 gap-1 rounded-lg bg-slate-900 p-1.5 text-[10px] font-bold leading-tight text-slate-300 shadow-inner md:grid-cols-2 2xl:grid-cols-4">
+    <div className="namerena-stat-grid mt-2 grid grid-cols-4 gap-1 rounded-lg bg-slate-900 p-1.5 text-[10px] font-bold leading-tight text-slate-300 shadow-inner md:grid-cols-2 2xl:grid-cols-4">
       {STAT_CHIPS.map((stat) => (
         <span
           key={stat.key}
           title={stat.label}
-          className={`flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 shadow-sm ${STAT_TONE_STYLES[stat.tone]}`}
+          className={`namerena-stat-chip flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 shadow-sm ${STAT_TONE_STYLES[stat.tone]}`}
         >
           <span className="shrink-0 text-[12px] leading-none">{stat.icon}</span>
-          <span className="hidden shrink-0 text-slate-400 md:inline">{stat.label}</span>
-          <span className="ml-auto shrink-0 font-mono text-white">{stat.value(fighter)}</span>
+          <span className="namerena-stat-label shrink-0 text-slate-400">{stat.label}</span>
+          <span className="namerena-stat-value ml-auto min-w-0 truncate font-mono text-white">{stat.value(fighter)}</span>
         </span>
       ))}
     </div>
@@ -1003,8 +1031,31 @@ export function NameArenaGame() {
     const battlePumpRef = useRef<() => void>(() => {});
     const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1);
     const [isAutoScroll, setIsAutoScroll] = useState(true);
+    const [mobileBattleView, setMobileBattleView] = useState<'arena' | 'logs'>('arena');
+    const [isPortraitPhone, setIsPortraitPhone] = useState(false);
+    const [landscapeHintDismissed, setLandscapeHintDismissed] = useState(false);
+    const showLandscapeHint = gameState === 'FIGHTING' && isPortraitPhone && !landscapeHintDismissed;
 
-    useEffect(() => { if (isAutoScroll && gameState === 'FIGHTING') logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [displayLogs, isAutoScroll, gameState]);
+    useEffect(() => {
+        const updateScreenMode = () => {
+            const portraitPhone = window.innerWidth < 768 && window.innerHeight > window.innerWidth;
+            setIsPortraitPhone(portraitPhone);
+            if (!portraitPhone) setLandscapeHintDismissed(true);
+        };
+        updateScreenMode();
+        window.addEventListener('resize', updateScreenMode);
+        return () => window.removeEventListener('resize', updateScreenMode);
+    }, []);
+
+    useEffect(() => {
+        if (
+            isAutoScroll &&
+            gameState === 'FIGHTING' &&
+            (!isPortraitPhone || mobileBattleView === 'logs')
+        ) {
+            logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [displayLogs, isAutoScroll, gameState, isPortraitPhone, mobileBattleView]);
 
     const appendDisplayLog = useCallback((logEntry: BattleLogEntry) => {
         setDisplayLogs(prev => {
@@ -1027,6 +1078,8 @@ export function NameArenaGame() {
         setBattleTurn(0);
         setIsFullLogModalOpen(false);
         setShowMvp(false);
+        setMobileBattleView('arena');
+        setLandscapeHintDismissed(false);
         spinalSwordRef.current = false;
         battleTurnRef.current = 0;
         const resetBattleState = createBattleState(1, 0);
@@ -1103,6 +1156,8 @@ export function NameArenaGame() {
         setBattleState(cloneBattleState(nextBattleState));
         setShowMvp(false);
         setIsFullLogModalOpen(false);
+        setMobileBattleView('arena');
+        setLandscapeHintDismissed(!(window.innerWidth < 768 && window.innerHeight > window.innerWidth));
         setGameState('FIGHTING');
         changeSpeed(1500);
     };
@@ -1264,7 +1319,7 @@ export function NameArenaGame() {
     }, [battlePump]);
 
     useEffect(() => {
-        if (gameState === 'FIGHTING')
+        if (gameState === 'FIGHTING' && !showLandscapeHint)
                 scheduleBattlePump(0);
             else if (timerRef.current !== null) {
                 clearTimeout(timerRef.current);
@@ -1276,7 +1331,7 @@ export function NameArenaGame() {
                     timerRef.current = null;
                 }
             };
-    }, [gameState, scheduleBattlePump]);
+    }, [gameState, scheduleBattlePump, showLandscapeHint]);
 
     const changeSpeed = (spd: number) => {
         battleSpeedRef.current = spd;
@@ -1306,7 +1361,7 @@ export function NameArenaGame() {
 
         if (isHighlightLog(l)) {
             return (
-                <div key={i} className="my-5 py-5 px-3 text-center rounded-xl bg-gradient-to-r from-indigo-900/60 via-purple-900/80 to-indigo-900/60 border border-purple-500/50 shadow-[0_0_20px_rgba(168,85,247,0.4)] relative overflow-hidden animate-log-entry animate-pulse-slow z-10">
+                <div key={i} className="namerena-log-highlight relative z-10 my-5 overflow-hidden rounded-lg border border-purple-500/50 bg-gradient-to-r from-indigo-900/60 via-purple-900/80 to-indigo-900/60 px-3 py-5 text-center shadow-[0_0_20px_rgba(168,85,247,0.4)] animate-log-entry animate-pulse-slow">
                     <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMSIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIi8+PC9zdmc+')] opacity-50"></div>
                     <span className="relative z-10 block text-base md:text-xl font-black leading-relaxed tracking-wide text-white drop-shadow-md">
                         {parts.map((part, idx) => {
@@ -1333,7 +1388,7 @@ export function NameArenaGame() {
         if (l.type === 'buff') colorClass = 'text-cyan-400';
 
         return (
-            <div key={i} className={`mb-2 leading-relaxed text-sm animate-log-entry ${colorClass} bg-slate-900/40 p-2.5 rounded-lg border border-slate-800/50 hover:bg-slate-800/80 transition-colors shadow-sm`}>
+            <div key={i} className={`namerena-log-entry mb-2 rounded-lg border border-slate-800/50 bg-slate-900/40 p-2.5 text-sm leading-relaxed shadow-sm transition-colors hover:bg-slate-800/80 animate-log-entry ${colorClass}`}>
                 <span className={`inline-block w-[36px] text-center px-1 py-0.5 rounded text-[11px] font-black text-white mr-2.5 align-middle shadow-sm ${tag.bg}`}>
                     {tag.label}
                 </span>
@@ -1437,15 +1492,15 @@ export function NameArenaGame() {
     };
 
     return (
-        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 font-sans text-slate-200">
-            <header className="bg-slate-900 border-b border-slate-800 p-3 pr-16 shrink-0 flex justify-between items-center shadow-lg z-20">
+        <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 font-sans text-slate-200">
+            <header className="namerena-game-header z-20 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 p-3 pr-16 shadow-lg">
                 <div className="flex min-w-0 items-center gap-3">
-                    <h1 className="truncate text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
+                    <h1 className="namerena-title truncate text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
                         名字大乱斗 <span className="text-[10px] text-slate-500 border border-slate-700 px-1 rounded align-top">NameWar</span>
                     </h1>
                     {gameState !== 'SETUP' ? (
                         <div
-                            className="hidden shrink-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-2 py-1 font-mono text-[11px] font-bold text-slate-300 sm:flex"
+                            className="namerena-round-summary hidden shrink-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-2 py-1 font-mono text-[11px] font-bold text-slate-300 sm:flex"
                             title={`本局种子：${battleState.seed}\n当前大回合最多 ${roundProgress.maxActions} 次常规行动内完成`}
                         >
                             <span>全局 {battleTurn}</span>
@@ -1467,7 +1522,7 @@ export function NameArenaGame() {
                             <button onClick={replayLastBattle} className="flex items-center gap-1 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-bold text-white shadow-lg transition-colors hover:bg-slate-700" title={`按相同种子 ${battleState.seed} 重放`}>
                                 <Icons.RotateCcw size={14}/> <span className="hidden sm:inline">重放本局</span>
                             </button>
-                            <button onClick={() => setShowMvp(true)} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 shadow-lg transition-transform hover:scale-105" title="赛后结算">
+                            <button onClick={() => { setMobileBattleView('arena'); setShowMvp(true); }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 shadow-lg transition-transform hover:scale-105" title="赛后结算">
                                 <Icons.BarChart size={14}/> <span className="hidden sm:inline">数据统计</span>
                             </button>
                         </>
@@ -1475,7 +1530,7 @@ export function NameArenaGame() {
                 </div>
             </header>
 
-            <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+            <main className="namerena-battle-layout relative flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
                 {gameState === 'SETUP' ? (
                     <div className="w-full h-full overflow-y-auto bg-slate-950/50">
                         <div className="min-h-full flex items-center justify-center p-4 md:p-6">
@@ -1513,11 +1568,39 @@ export function NameArenaGame() {
                     </div>
                 ) : (
                     <>
-                        <section className="relative flex min-h-0 min-w-0 flex-1 flex-col border-slate-800 bg-slate-900/30 lg:border-r">
-                            <div className="z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/50 p-3 shadow-sm backdrop-blur">
+                        <nav className="namerena-mobile-tabs hidden shrink-0 border-b border-slate-800 bg-slate-950 p-1.5" role="tablist" aria-label="手机战斗视图">
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={mobileBattleView === 'arena'}
+                                onClick={() => setMobileBattleView('arena')}
+                                className={`flex min-w-0 flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-bold transition-colors ${mobileBattleView === 'arena' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400'}`}
+                            >
+                                <Icons.Swords size={14} />
+                                <span>战场</span>
+                                <span className="rounded bg-black/25 px-1.5 font-mono text-[10px]">{fighters.filter(isWinningCombatant).length}</span>
+                            </button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={mobileBattleView === 'logs'}
+                                onClick={() => setMobileBattleView('logs')}
+                                className={`flex min-w-0 flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-bold transition-colors ${mobileBattleView === 'logs' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400'}`}
+                            >
+                                <Icons.BookOpen size={14} />
+                                <span>日志</span>
+                                <span className="rounded bg-black/25 px-1.5 font-mono text-[10px]">{displayLogs.length}</span>
+                            </button>
+                        </nav>
+
+                        <section
+                            data-mobile-active={mobileBattleView === 'arena'}
+                            className="namerena-battle-panel namerena-arena-panel relative flex min-h-0 min-w-0 flex-1 flex-col border-slate-800 bg-slate-900/30 lg:border-r"
+                        >
+                            <div className="namerena-panel-header z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/50 p-3 shadow-sm backdrop-blur">
                                 <span className="text-sm font-bold tracking-wide">
                                     存活人数: <span className="text-indigo-400">{fighters.filter(isWinningCombatant).length}</span>
-                                    <span className="ml-3 font-mono text-xs text-slate-500 sm:hidden">全局 {battleTurn} · 大回合 {roundProgress.number} ({roundProgress.acted}/{roundProgress.total})</span>
+                                    <span className="namerena-panel-round ml-3 font-mono text-xs text-slate-500 sm:hidden">全局 {battleTurn} · 大回合 {roundProgress.number} ({roundProgress.acted}/{roundProgress.total})</span>
                                 </span>
                                 {(gameState === 'FIGHTING' || gameState === 'END') && (
                                     <button onClick={resetGame} className="bg-red-600/80 hover:bg-red-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 transition-colors shadow-md" title="重开一局">
@@ -1526,20 +1609,20 @@ export function NameArenaGame() {
                                 )}
                             </div>
                             <div className="relative min-h-0 flex-1 overflow-hidden">
-                                <div className="grid h-full min-h-0 auto-rows-max grid-cols-1 content-start items-start gap-4 overflow-y-auto p-4 md:grid-cols-2 custom-scrollbar">
+                                <div className="namerena-fighter-grid grid h-full min-h-0 auto-rows-max grid-cols-1 content-start items-start gap-4 overflow-y-auto p-4 md:grid-cols-2 custom-scrollbar">
                                 {[...fighters].sort((a, b) => b.currentHp - a.currentHp).map((f) => (
                                     <div
                                         key={f.id}
-                                        className={`min-w-0 max-w-full rounded-2xl border p-3 transition-[transform,box-shadow,border-color,background-color] duration-300
+                                        className={`namerena-fighter-card min-w-0 max-w-full rounded-lg border p-3 transition-[transform,box-shadow,border-color,background-color] duration-300
                                         ${f.isActing ? 'z-10 scale-[1.02] border-indigo-400 bg-slate-800 shadow-[0_0_20px_rgba(99,102,241,0.4)]' : 'border-slate-700 bg-slate-800/80'}
                                         ${f.isHit ? 'animate-shake border-red-500/50 bg-red-900/30' : ''}
                                         ${f.isDead ? 'scale-95 border-slate-800 bg-slate-900 opacity-40 grayscale-[0.8]' : 'shadow-md'}`}
                                     >
-                                        <div className="mb-2 flex min-w-0 gap-3">
-                                            <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${f.color} flex items-center justify-center text-2xl shrink-0 shadow-inner border border-white/10`}>{f.jobData?.icon || '❓'}</div>
+                                        <div className="namerena-fighter-heading mb-2 flex min-w-0 gap-3">
+                                            <div className={`namerena-fighter-avatar flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-gradient-to-br text-2xl shadow-inner ${f.color}`}>{f.jobData?.icon || '❓'}</div>
                                             <div className="flex-1 min-w-0">
                                                 <div className="mb-1 flex min-w-0 items-end justify-between gap-2">
-                                                    <span className="min-w-0 truncate text-sm font-bold md:text-base">
+                                                    <span title={f.name} className="min-w-0 truncate text-sm font-bold md:text-base">
                                                         {f.name}
                                                         {f.teamId && <span className="text-[10px] ml-1.5 bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 hidden sm:inline-block border border-slate-600 shadow-sm">@{f.teamId}</span>}
                                                     </span>
@@ -1566,19 +1649,22 @@ export function NameArenaGame() {
                             </div>
                         </section>
 
-                        <section className="relative flex min-h-0 min-w-0 flex-1 flex-col border-t border-slate-800 bg-slate-950 shadow-[inset_10px_0_20px_rgba(0,0,0,0.2)] max-h-[42vh] lg:max-h-none lg:border-l lg:border-t-0">
-                            <div className="z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/80 p-3 shadow-sm backdrop-blur">
+                        <section
+                            data-mobile-active={mobileBattleView === 'logs'}
+                            className="namerena-battle-panel namerena-log-panel relative flex min-h-0 min-w-0 flex-1 flex-col border-t border-slate-800 bg-slate-950 shadow-[inset_10px_0_20px_rgba(0,0,0,0.2)] max-h-[42vh] lg:max-h-none lg:border-l lg:border-t-0"
+                        >
+                            <div className="namerena-panel-header z-10 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/80 p-3 shadow-sm backdrop-blur">
                                 <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">实时战斗记录 <span className="text-slate-500 normal-case tracking-normal">(显示末尾百条)</span></span>
                                 {gameState === 'END' ? (
-                                    <div className="flex gap-2">
-                                        <button onClick={() => { setLogPage(1); setFullLogSnapshot([...fullLogsRef.current]); setIsFullLogModalOpen(true); }} className="text-xs bg-indigo-600/80 hover:bg-indigo-500 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
-                                            <Icons.BookOpen size={12}/> 战报回放
+                                    <div className="flex gap-1.5">
+                                        <button title="打开完整战报" onClick={() => { setLogPage(1); setFullLogSnapshot([...fullLogsRef.current]); setIsFullLogModalOpen(true); }} className="text-xs bg-indigo-600/80 hover:bg-indigo-500 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
+                                            <Icons.BookOpen size={12}/> <span className="hidden sm:inline">战报回放</span><span className="sm:hidden">战报</span>
                                         </button>
-                                        <button onClick={downloadLogs} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
-                                            <Icons.Download size={12}/> 导出 TXT
+                                        <button title="导出 TXT 战斗日志" aria-label="导出 TXT 战斗日志" onClick={downloadLogs} className="text-xs bg-slate-700 hover:bg-slate-600 text-white p-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition sm:px-2">
+                                            <Icons.Download size={12}/><span className="hidden sm:inline">导出 TXT</span>
                                         </button>
-                                        <button onClick={downloadReplayData} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition">
-                                            <Icons.Download size={12}/> 回放 JSON
+                                        <button title="导出 JSON 回放" aria-label="导出 JSON 回放" onClick={downloadReplayData} className="text-xs bg-slate-700 hover:bg-slate-600 text-white p-1.5 rounded flex items-center gap-1 font-bold shadow-sm transition sm:px-2">
+                                            <Icons.Download size={12}/><span className="hidden sm:inline">回放 JSON</span>
                                         </button>
                                     </div>
                                 ) : (
@@ -1587,7 +1673,7 @@ export function NameArenaGame() {
                                     </button>
                                 )}
                             </div>
-                            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-slate-950 p-4 font-mono text-sm custom-scrollbar">
+                            <div className="namerena-log-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain bg-slate-950 p-4 font-mono text-sm custom-scrollbar">
                                 {displayLogs.map(renderLogText)}
                                 <div ref={logsEndRef} className="h-4" />
                             </div>
@@ -1617,12 +1703,188 @@ export function NameArenaGame() {
                     </>
                 )}
             </main>
+            {showLandscapeHint ? (
+                <div className="absolute inset-0 z-[80] flex items-center justify-center bg-slate-950/90 p-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="namerena-landscape-title">
+                    <div className="w-full max-w-sm rounded-lg border border-indigo-400/40 bg-slate-900 p-5 text-center shadow-2xl">
+                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-indigo-400/30 bg-indigo-500/10 text-indigo-300">
+                            <Icons.Smartphone size={25} />
+                        </div>
+                        <h2 id="namerena-landscape-title" className="mt-4 text-lg font-black text-white">横屏战斗更清晰</h2>
+                        <p className="mt-2 text-sm leading-6 text-slate-400">旋转手机后会自动显示战场与日志双栏。战斗目前已暂停。</p>
+                        <button
+                            type="button"
+                            onClick={() => setLandscapeHintDismissed(true)}
+                            className="mt-5 w-full rounded-md border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-700"
+                        >
+                            继续使用竖屏
+                        </button>
+                    </div>
+                </div>
+            ) : null}
             <style>{`
                 .custom-scrollbar { scrollbar-width: thin; scrollbar-color: #334155 #020617; }
                 .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
                 .custom-scrollbar::-webkit-scrollbar-track { background: #020617; border-radius: 4px; }
                 .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
                 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+                @media (max-width: 767px) and (orientation: portrait) {
+                    .namerena-mobile-tabs {
+                        display: flex;
+                    }
+                    .namerena-battle-panel[data-mobile-active="false"] {
+                        display: none;
+                    }
+                    .namerena-battle-panel[data-mobile-active="true"] {
+                        display: flex;
+                        flex: 1 1 0%;
+                        max-height: none;
+                    }
+                    .namerena-log-panel {
+                        border-top-width: 0;
+                    }
+                    .namerena-fighter-grid,
+                    .namerena-log-scroll {
+                        padding: 0.625rem;
+                        padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+                    }
+                    .namerena-fighter-grid {
+                        gap: 0.625rem;
+                    }
+                    .namerena-panel-header {
+                        padding: 0.625rem 0.75rem;
+                    }
+                }
+
+                @media (orientation: landscape) and (max-height: 600px) {
+                    .namerena-game-header {
+                        min-height: 2.5rem;
+                        padding-top: 0.375rem;
+                        padding-bottom: 0.375rem;
+                        padding-left: max(0.75rem, env(safe-area-inset-left));
+                        padding-right: max(4rem, calc(env(safe-area-inset-right) + 3.5rem));
+                    }
+                    .namerena-title {
+                        font-size: 1rem;
+                        line-height: 1.25rem;
+                    }
+                    .namerena-round-summary {
+                        padding-top: 0.125rem;
+                        padding-bottom: 0.125rem;
+                        font-size: 0.625rem;
+                    }
+                    .namerena-mobile-tabs {
+                        display: none;
+                    }
+                    .namerena-battle-layout {
+                        flex-direction: row;
+                    }
+                    .namerena-battle-panel {
+                        display: flex;
+                    }
+                    .namerena-arena-panel {
+                        flex: 0 0 62%;
+                        max-width: 62%;
+                        border-right-width: 1px;
+                    }
+                    .namerena-log-panel {
+                        flex: 1 1 38%;
+                        max-height: none;
+                        border-top-width: 0;
+                        border-left-width: 1px;
+                        padding-right: env(safe-area-inset-right);
+                    }
+                    .namerena-panel-header {
+                        min-height: 2.125rem;
+                        padding: 0.375rem 0.625rem;
+                    }
+                    .namerena-panel-round {
+                        display: none;
+                    }
+                    .namerena-fighter-grid {
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                        gap: 0.5rem;
+                        padding: 0.5rem;
+                        padding-left: max(0.5rem, env(safe-area-inset-left));
+                        padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+                    }
+                    .namerena-fighter-card {
+                        padding: 0.5rem;
+                    }
+                    .namerena-fighter-heading {
+                        margin-bottom: 0.375rem;
+                        gap: 0.5rem;
+                    }
+                    .namerena-fighter-avatar {
+                        width: 2.25rem;
+                        height: 2.25rem;
+                        font-size: 1.125rem;
+                    }
+                    .namerena-status-strip {
+                        margin-top: 0.375rem;
+                        padding: 0.25rem;
+                    }
+                    .namerena-resource-strip,
+                    .namerena-stat-grid {
+                        margin-top: 0.375rem;
+                    }
+                    .namerena-status-strip .inline-flex,
+                    .namerena-resource-strip .inline-flex {
+                        height: 1.25rem;
+                        padding-left: 0.25rem;
+                        padding-right: 0.25rem;
+                        font-size: 0.5625rem;
+                    }
+                    .namerena-stat-grid {
+                        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+                        gap: 0.125rem;
+                        padding: 0.25rem;
+                    }
+                    .namerena-stat-chip {
+                        height: 1.375rem;
+                        gap: 0.125rem;
+                        padding-left: 0.25rem;
+                        padding-right: 0.25rem;
+                    }
+                    .namerena-stat-chip > span:first-child {
+                        font-size: 0.625rem;
+                    }
+                    .namerena-stat-label,
+                    .namerena-stat-value {
+                        font-size: 0.5625rem;
+                    }
+                    .namerena-log-scroll {
+                        padding: 0.5rem;
+                        padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+                        font-size: 0.75rem;
+                    }
+                    .namerena-log-entry {
+                        margin-bottom: 0.375rem;
+                        padding: 0.5rem;
+                        font-size: 0.75rem;
+                    }
+                    .namerena-log-highlight {
+                        margin-top: 0.5rem;
+                        margin-bottom: 0.5rem;
+                        padding: 0.75rem 0.5rem;
+                    }
+                    .namerena-log-highlight strong {
+                        margin-left: 0.125rem;
+                        margin-right: 0.125rem;
+                        padding: 0.125rem 0.375rem;
+                        font-size: 0.875rem;
+                        line-height: 1.25rem;
+                    }
+                }
+
+                @media (orientation: landscape) and (max-height: 600px) and (max-width: 720px) {
+                    .namerena-fighter-grid {
+                        grid-template-columns: minmax(0, 1fr);
+                    }
+                    .namerena-stat-grid {
+                        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+                    }
+                }
 
                 @keyframes shake {
                     0%, 100% { transform: translateX(0) scale(1.02); }
