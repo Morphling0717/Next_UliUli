@@ -1,6 +1,10 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import {
+  NameArenaBattleStage,
+  type NameArenaStageBadge,
+} from "@/components/namearena/NameArenaBattleStage";
 import { BattleEngine } from "@/lib/namearena/battleEngine";
 import { cloneFighters, isWinningCombatant } from "@/lib/namearena/combatState";
 import { namerenaCore } from "@/lib/namearena/core";
@@ -63,15 +67,22 @@ const LOG_PLAYBACK_PROFILE_BY_SPEED: Record<number, {
   minDeath: number;
   minLong: number;
   minHighlight: number;
+  minTransform: number;
+  minFinisher: number;
 }> = {
-  1500: { base: 2400, charMs: 28, maxTextExtra: 3600, minDeath: 3600, minLong: 4500, minHighlight: 5600 },
-  500: { base: 1100, charMs: 12, maxTextExtra: 1500, minDeath: 1700, minLong: 2100, minHighlight: 2800 },
-  50: { base: 260, charMs: 3, maxTextExtra: 320, minDeath: 480, minLong: 620, minHighlight: 800 },
+  1500: { base: 2400, charMs: 28, maxTextExtra: 3600, minDeath: 3600, minLong: 4500, minHighlight: 5600, minTransform: 3400, minFinisher: 2100 },
+  500: { base: 1100, charMs: 12, maxTextExtra: 1500, minDeath: 1700, minLong: 2100, minHighlight: 2800, minTransform: 3400, minFinisher: 2100 },
+  50: { base: 260, charMs: 3, maxTextExtra: 320, minDeath: 480, minLong: 620, minHighlight: 800, minTransform: 3400, minFinisher: 2100 },
 };
+
+const FORM_TRANSITION_PATTERN = /转职为(?:专属辅助)?【|变身(?:为|——)?【|显露出【|展现出【|觉醒欧皇血统|乘员昏迷|KABOOM|解除了限制|进化为【|进入二阶段|进入三阶段/;
+const FINISHER_CINEMATIC_PATTERN = /触发必杀|终结技锁定|一次性必杀|GREAT MONSTER VICTORY|彩虹狂热|GOTCHARD RAINBOW FEVER|Furioso/i;
+
+const isFormTransitionLog = (log: BattleLogEntry) => FORM_TRANSITION_PATTERN.test(log.text);
 
 const isTransformLog = (log: BattleLogEntry) =>
   log.type === 'transform' ||
-  /转职为(?:专属辅助)?【|变身(?:为|——)?【|显露出【|展现出【|觉醒欧皇血统|乘员昏迷|KABOOM|解除了限制/.test(log.text);
+  isFormTransitionLog(log);
 
 const isHighlightLog = (log: BattleLogEntry) =>
   log.type === 'win' ||
@@ -86,6 +97,8 @@ const getLogPlaybackDelay = (log: BattleLogEntry, speed: number) => {
   if (log.text.includes('\n')) delay = Math.max(delay, profile.minLong);
   if (log.type === 'death') delay = Math.max(delay, profile.minDeath);
   if (isHighlightLog(log)) delay = Math.max(delay, profile.minHighlight);
+  if (isFormTransitionLog(log)) delay = Math.max(delay, profile.minTransform);
+  if (FINISHER_CINEMATIC_PATTERN.test(log.text)) delay = Math.max(delay, profile.minFinisher);
   return delay;
 };
 
@@ -897,6 +910,29 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
   return chips.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label, 'zh-Hans-CN'));
 };
 
+const buildStageStatusBadges = (fighter: Fighter): NameArenaStageBadge[] =>
+  buildStatusDisplayItems(fighter.status).map((item) => ({
+    key: `status-${statusGroupKey(item.status)}`,
+    icon: item.info.icon,
+    label: `${item.info.name}${item.info.durationLabel ? ` ${item.info.durationLabel}` : ''}${item.count > 1 ? ` x${item.count}` : ''}`,
+    detail: formatStatusTitle(item),
+    tone: item.info.category,
+  }));
+
+const buildStageResourceBadges = (
+  fighter: Fighter,
+  fighters: Fighter[],
+  turnCount: number,
+  battleState: BattleState,
+): NameArenaStageBadge[] =>
+  buildResourceChips(fighter, fighters, turnCount, battleState).map((chip) => ({
+    key: `resource-${chip.label}-${chip.value}`,
+    icon: chip.icon,
+    label: `${chip.label} ${chip.value}`,
+    detail: chip.title,
+    tone: 'resource',
+  }));
+
 function ResourceStrip({ fighter, fighters, turnCount, battleState }: { fighter: Fighter; fighters: Fighter[]; turnCount: number; battleState: BattleState }) {
   const [expanded, setExpanded] = useState(false);
   const chips = buildResourceChips(fighter, fighters, turnCount, battleState);
@@ -1037,12 +1073,17 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const lastBattleSetupRef = useRef<{ names: string[]; forcePuruisaishi: boolean; seed: number } | null>(null);
     const battlePumpRef = useRef<() => void>(() => {});
     const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1);
+    const [battleUiMode, setBattleUiMode] = useState<'next' | 'classic'>('next');
     const [isAutoScroll, setIsAutoScroll] = useState(true);
     const [mobileBattleView, setMobileBattleView] = useState<'arena' | 'logs'>('arena');
     const [isPortraitPhone, setIsPortraitPhone] = useState(false);
     const [landscapeHintDismissed, setLandscapeHintDismissed] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const showLandscapeHint = gameState === 'FIGHTING' && isPortraitPhone && !landscapeHintDismissed;
+
+    const changeBattleUiMode = (mode: 'next' | 'classic') => {
+        setBattleUiMode(mode);
+    };
 
     useEffect(() => {
         const updateScreenMode = () => {
@@ -1063,13 +1104,14 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
     useEffect(() => {
         if (
+            battleUiMode === 'classic' &&
             isAutoScroll &&
             gameState === 'FIGHTING' &&
             (!isPortraitPhone || mobileBattleView === 'logs')
         ) {
             logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [displayLogs, isAutoScroll, gameState, isPortraitPhone, mobileBattleView]);
+    }, [battleUiMode, displayLogs, isAutoScroll, gameState, isPortraitPhone, mobileBattleView]);
 
     const appendDisplayLog = useCallback((logEntry: BattleLogEntry) => {
         setDisplayLogs(prev => {
@@ -1521,7 +1563,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
     return (
         <div data-game-state={gameState} className={`namerena-shell relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 font-sans text-slate-200 ${onExit ? 'namerena-integrated-shell' : ''}`}>
-            <header className="namerena-game-header z-20 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 p-3 shadow-lg">
+            <header className={`namerena-game-header z-20 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 p-3 shadow-lg ${battleUiMode === 'next' && gameState !== 'SETUP' ? 'namerena-modern-header' : ''}`}>
                 <div className="flex min-w-0 items-center gap-3">
                     {onExit ? (
                         <button
@@ -1535,7 +1577,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             <span className="namerena-exit-label">返回</span>
                         </button>
                     ) : null}
-                    <h1 className="namerena-title truncate text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500">
+                    <h1 className={`namerena-title truncate text-xl font-black ${battleUiMode === 'next' && gameState !== 'SETUP' ? 'text-white' : 'bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500'}`}>
                         名字大乱斗 <span className="namerena-title-badge text-[10px] text-slate-500 border border-slate-700 px-1 rounded align-top">NameWar</span>
                     </h1>
                     {gameState !== 'SETUP' ? (
@@ -1573,6 +1615,26 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             </button>
                         </>
                     )}
+                    <div className="namerena-ui-mode-control flex shrink-0 gap-0.5 rounded border border-slate-700 bg-slate-950 p-0.5" role="group" aria-label="战斗界面版本">
+                        <button
+                            type="button"
+                            aria-pressed={battleUiMode === 'next'}
+                            onClick={() => changeBattleUiMode('next')}
+                            className={`rounded-sm px-1.5 py-1 text-[10px] font-bold transition-colors ${battleUiMode === 'next' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                            title="使用新战斗舞台"
+                        >
+                            新<span className="namerena-ui-mode-long">舞台</span>
+                        </button>
+                        <button
+                            type="button"
+                            aria-pressed={battleUiMode === 'classic'}
+                            onClick={() => changeBattleUiMode('classic')}
+                            className={`rounded-sm px-1.5 py-1 text-[10px] font-bold transition-colors ${battleUiMode === 'classic' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            title="切回经典战斗界面"
+                        >
+                            经典
+                        </button>
+                    </div>
                     {gameState !== 'SETUP' ? (
                         <button
                             type="button"
@@ -1641,6 +1703,52 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                 </button>
                             </div>
                         </div>
+                    </div>
+                ) : battleUiMode === 'next' ? (
+                    <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                        <NameArenaBattleStage
+                            fighters={fighters}
+                            displayLogs={displayLogs}
+                            battleTurn={battleTurn}
+                            battleState={battleState}
+                            roundProgress={roundProgress}
+                            aliveCount={aliveCount}
+                            gameState={gameState}
+                            mobileView={mobileBattleView}
+                            setMobileView={setMobileBattleView}
+                            isAutoScroll={isAutoScroll}
+                            onToggleAutoScroll={() => setIsAutoScroll((current) => !current)}
+                            onReset={resetGame}
+                            onOpenFullLog={() => {
+                                setLogPage(1);
+                                setFullLogSnapshot([...fullLogsRef.current]);
+                                setIsFullLogModalOpen(true);
+                            }}
+                            onDownloadLogs={downloadLogs}
+                            onDownloadReplay={downloadReplayData}
+                            getStatusBadges={buildStageStatusBadges}
+                            getResourceBadges={(fighter) => buildStageResourceBadges(fighter, fighters, battleTurn, battleState)}
+                            mvpOverlay={showMvp ? renderMVP() : null}
+                        />
+                        {isFullLogModalOpen ? (
+                            <div className="absolute inset-0 z-[90] flex min-h-0 flex-col bg-slate-950/95 backdrop-blur-sm animate-fade-in">
+                                <div className="flex shrink-0 justify-between border-b border-slate-800 bg-slate-900 p-4 shadow-md">
+                                    <div className="flex items-center gap-3">
+                                        <h3 className="flex items-center gap-2 text-lg font-bold text-white"><Icons.BookOpen size={20} className="text-cyan-400"/> 完整战报复盘</h3>
+                                        <span className="rounded bg-slate-800 px-2 py-1 font-mono text-xs font-bold text-slate-400 shadow-inner">共 {fullLogSnapshot.length} 个动作片段</span>
+                                    </div>
+                                    <button onClick={() => setIsFullLogModalOpen(false)} className="rounded-full p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white" aria-label="关闭完整战报"><Icons.X size={24}/></button>
+                                </div>
+                                <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain bg-slate-950/80 p-6 font-mono text-base shadow-inner">
+                                    {fullLogSnapshot.slice((logPage-1)*LOGS_PER_PAGE, logPage*LOGS_PER_PAGE).map(renderLogText)}
+                                </div>
+                                <div className="flex shrink-0 justify-center gap-6 border-t border-slate-800 bg-slate-900 p-4 shadow-[0_-10px_20px_rgba(0,0,0,0.2)]">
+                                    <button disabled={logPage <= 1} onClick={() => setLogPage((page) => page - 1)} className="rounded-lg border border-slate-700 bg-slate-800 px-6 py-2 text-sm font-bold text-slate-300 transition hover:bg-slate-700 disabled:opacity-30">上一页</button>
+                                    <span className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-1.5 font-mono text-sm font-bold text-slate-400">Page <span className="text-cyan-400">{logPage}</span> / {Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))}</span>
+                                    <button disabled={logPage >= Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))} onClick={() => setLogPage((page) => page + 1)} className="rounded-lg border border-slate-700 bg-slate-800 px-6 py-2 text-sm font-bold text-slate-300 transition hover:bg-slate-700 disabled:opacity-30">下一页</button>
+                                </div>
+                            </div>
+                        ) : null}
                     </div>
                 ) : (
                     <>
@@ -1804,6 +1912,17 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                 .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
                 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
 
+                .namerena-modern-header {
+                    background: #080b0e;
+                    border-bottom-color: rgba(255,255,255,0.16);
+                    box-shadow: 0 8px 30px rgba(0,0,0,0.38);
+                }
+
+                .namerena-modern-header .namerena-round-summary {
+                    border-color: rgba(255,255,255,0.12);
+                    background: #11171d;
+                }
+
                 .namerena-integrated-shell .namerena-game-header {
                     padding-top: max(0.75rem, env(safe-area-inset-top));
                     padding-left: max(0.75rem, env(safe-area-inset-left));
@@ -1895,6 +2014,9 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                     .namerena-speed-control button {
                         padding: 0.25rem 0.375rem;
                         font-size: 0.625rem;
+                    }
+                    .namerena-ui-mode-long {
+                        display: none;
                     }
                     .namerena-mobile-tabs {
                         display: none;
