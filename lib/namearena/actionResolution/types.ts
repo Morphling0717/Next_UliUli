@@ -1,5 +1,6 @@
 import type {
   BattleEngineData,
+  BattleLogMetadata,
   DamageApplicationOptions,
   DefeatOptions,
   Fighter,
@@ -20,7 +21,7 @@ export interface ActionResolutionRuntime {
   largeRound: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   syncHpPct: (fighter: Fighter) => void;
   applyDamage: (
     target: Fighter,

@@ -11,12 +11,19 @@ import type {
   BattleEngineCore,
   StatusEffectsMap,
   BattleEvent,
+  BattleFormIdentity,
+  BattleLogMetadata,
   BattleLogEntry,
   BattleState,
   DamageResolutionRecord,
   DamageResolutionOutcome,
   StatusApplicationOptions,
 } from './types';
+import {
+  battleFormChanged,
+  readBattleFormIdentity,
+  resolveSkillPresentation,
+} from './battlePresentation';
 import type { PuruisaishiRuntime } from './puruisaishiMechanics';
 import { cloneJobDefinition, healFighter, isActiveCombatant, setCurrentHp, syncHpPct } from './combatState';
 import {
@@ -288,6 +295,7 @@ type ActiveActionContext = {
   actorName: string;
   skillId: string | null;
   skillName: string;
+  presentation: import('./types').SkillPresentation;
   triggerDepth: number;
   forcedTargetId?: string;
 };
@@ -310,10 +318,11 @@ export class BattleEngine {
   private randomDepth = 0;
   private actionStack: ActiveActionContext[] = [];
   private deferredDamageActions = new Map<string, Array<() => void>>();
+  private formSnapshots = new Map<string, BattleFormIdentity>();
 
   constructor(
     fighters: Fighter[],
-    addLogCallback: (e: { type: string; text: string }) => void,
+    addLogCallback: (e: BattleLogEntry) => void,
     JOBS: Partial<Record<string, JobDefinition>>,
     SKILLS: Record<string, SkillDefinition>,
     Data: BattleEngineData,
@@ -336,11 +345,34 @@ export class BattleEngine {
     this.battleState = battleState ?? createBattleState(Math.floor(Math.random() * 2147483646) + 1, turnCount);
     this.battleState.turnCount = turnCount;
     syncLargeRoundState(this.battleState, this.fighters);
+    this.formSnapshots = new Map(this.fighters.map((fighter) => [fighter.id, readBattleFormIdentity(fighter)]));
     this.initializeYuzuOpeningShields();
   }
 
-  log(type: string, text: string): void {
-    const event = this.createEvent('log', type, text.replace(/\s*\r?\n\s*/g, ' '), true);
+  log(type: string, text: string, metadata: BattleLogMetadata = {}): void {
+    const previousForms = this.formSnapshots;
+    const nextForms = new Map(this.fighters.map((fighter) => [fighter.id, readBattleFormIdentity(fighter)]));
+    const changed = metadata.displayInFeed === false ? [] : this.fighters.filter((fighter) => {
+      const before = previousForms.get(fighter.id);
+      const after = nextForms.get(fighter.id);
+      return Boolean(before && after && battleFormChanged(before, after));
+    });
+    const actionActorId = this.actionStack[this.actionStack.length - 1]?.actorId;
+    const transformed = changed.find((fighter) => fighter.id === actionActorId)
+      ?? changed.find((fighter) => text.includes(fighter.name))
+      ?? (changed.length === 1 ? changed[0] : undefined);
+    const inferredCue = transformed ? {
+      kind: 'transformation' as const,
+      fighterId: transformed.id,
+      fighterName: transformed.name,
+      from: previousForms.get(transformed.id)!,
+      to: nextForms.get(transformed.id)!,
+    } : undefined;
+    if (metadata.displayInFeed !== false) this.formSnapshots = nextForms;
+    const event = this.createEvent('log', type, text.replace(/\s*\r?\n\s*/g, ' '), true, {
+      ...metadata,
+      visualCue: metadata.visualCue ?? inferredCue,
+    });
     this.addLogCallback(event as BattleLogEntry);
   }
 
@@ -369,6 +401,7 @@ export class BattleEngine {
         actorName: action.actorName,
         skillId: action.skillId,
         skillName: action.skillName,
+        presentation: action.presentation,
         triggerDepth: action.triggerDepth,
       } : {}),
       ...extra,
@@ -401,6 +434,7 @@ export class BattleEngine {
       actorName: actor.name,
       skillId,
       skillName,
+      presentation: resolveSkillPresentation(skillId, skillId ? this.SKILLS[skillId] : undefined, actor),
       triggerDepth,
       forcedTargetId: forcedTarget?.id,
     };
@@ -1368,6 +1402,7 @@ export class BattleEngine {
     fighter.defeatHooksResolved = false;
     fighter.resurrected = true;
     fighter.isSon = true;
+    fighter.job = 'MORPHLING_SON';
     fighter.jobData = cloneJobDefinition(MORPHLING_SON);
     withTimedStatModifiersSuspended(fighter, () => {
       fighter.maxHp = Math.floor(fighter.maxHp * 6);
@@ -1380,7 +1415,7 @@ export class BattleEngine {
     this.syncHpPct(fighter);
     fighter.status = [];
     fighter.isDeadAnnounced = false;
-    this.log('buff', `👶 ${fighter.name} 刚被判定退场，就被水人救起！清除了负面状态并转职为【${MORPHLING_SON.name}】！`);
+    this.log('transform', `👶 ${fighter.name} 刚被判定退场，就被水人救起！清除了负面状态并转职为【${MORPHLING_SON.name}】！`);
     return true;
   }
 

@@ -57,6 +57,7 @@ export const tingSkills: Record<string, SkillDefinition> = {
   suicide_bomb: {
     name: '自爆',
     tag: SKILL_TAGS.PHYS,
+    presentation: 'finisher',
     mult: 3.6,
     ignoreDef: true,
     selfDmgPct: 0.82,

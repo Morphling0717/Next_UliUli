@@ -1,5 +1,6 @@
 import type {
   BattleEngineCore,
+  BattleLogMetadata,
   DefeatOptions,
   Fighter,
   JobDefinition,
@@ -26,7 +27,7 @@ export interface SummonResolutionRuntime {
   clearSpinalSword: (fighter: Fighter) => void;
   syncPuppetMasterStatus: (fighter: Fighter) => void;
   formatSkillText: (skill: SkillDefinition, text: string) => string;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
 }
 
 function getSummonBaseName(fighter: Fighter): string {
@@ -48,6 +49,7 @@ export function executeSummonSkill(
   user: Fighter,
   userTeamId: string,
 ): void {
+  let summonMaterials: string[] = [];
   if ((skill.unique || skill.summonName === '黑暗大法师') && runtime.fighters.some((fighter) => getSummonBaseName(fighter) === skill.summonName && runtime.isActiveCombatant(fighter))) {
     runtime.log('info', `🚫 场上已经存在 ${skill.summonName}，无法重复召唤！`);
     return;
@@ -72,11 +74,13 @@ export function executeSummonSkill(
       runtime.log('info', `🚫 ${user.name} 试图融合青眼究极龙，但缺少青眼白龙或两只普通召唤物！`);
       return;
     }
-    [blueEyes, ...ordinaryMaterials].forEach((victim) => {
+    const fusionMaterials = [blueEyes, ...ordinaryMaterials];
+    summonMaterials = fusionMaterials.map((fighter) => fighter.name);
+    fusionMaterials.forEach((victim) => {
       runtime.markDefeated(victim, { awardKill: false });
       victim.isDead = true;
     });
-    runtime.log('death', `💀 融合！${[blueEyes, ...ordinaryMaterials].map((fighter) => fighter.name).join('、')} 化为了召唤 青眼究极龙 的融合素材！`);
+    runtime.log('death', `💀 融合！${summonMaterials.join('、')} 化为了召唤 青眼究极龙 的融合素材！`);
   }
 
   if ((skill.tributes ?? 0) > 0) {
@@ -103,6 +107,7 @@ export function executeSummonSkill(
       return;
     }
     const sacrificed = potentialTributes.sort(() => 0.5 - Math.random()).slice(0, skill.tributes);
+    summonMaterials = sacrificed.map((fighter) => fighter.name);
     sacrificed.forEach((victim) => {
       runtime.markDefeated(victim, { awardKill: false });
       victim.isDead = true;
@@ -172,7 +177,25 @@ export function executeSummonSkill(
   runtime.fighters.push(summon);
   if (skill.summonName === '小汀(傀儡)') runtime.syncPuppetMasterStatus(user);
   const summonText = runtime.formatSkillText(skill, skill.text ?? '').replace(/{USER}/g, user.name);
-  runtime.log('skill', `${summonText}\n✨ 【召唤成功】${user.name} 召唤出了 ${summonName}！`);
+  const summonKind = skill.summonName === '黑暗大法师'
+    ? 'exodia'
+    : skill.summonName === '青眼究极龙'
+      ? 'fusion'
+      : (skill.tributes ?? 0) > 0
+        ? 'tribute'
+      : undefined;
+  if (summonKind === 'exodia') summonMaterials = [...(user.exodiaPieces ?? [])];
+  runtime.log('skill', `${summonText}\n✨ 【召唤成功】${user.name} 召唤出了 ${summonName}！`, summonKind ? {
+    targetIds: [summon.id],
+    visualCue: {
+      kind: 'summon_card',
+      summonKind,
+      summonerId: user.id,
+      summonId: summon.id,
+      summonName: summonBaseName,
+      materials: summonMaterials,
+    },
+  } : { targetIds: [summon.id] });
   if (skill.summonName === '翼神龙') {
     runtime.log('buff', `☀️ 【太阳神降临】${summonName} 入场即获得 1 层太阳神力、法术抵挡、神性金身与再生，并点燃一次【神不死鸟】复燃！`);
   }

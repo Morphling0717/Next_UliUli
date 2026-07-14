@@ -91,17 +91,110 @@
   position: absolute;
   z-index: 42;
   inset: 0;
+  overflow: hidden;
   pointer-events: none;
   animation: impact-flash 340ms ease-out both;
 }
 
+.impactFlash > i {
+  display: none;
+  position: absolute;
+  pointer-events: none;
+}
+
+.impactFlash[data-impact-theme="ting_slash"] {
+  animation: ting-slash-impact 460ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="ting_slash"] > i {
+  display: none;
+}
+
+.impactFlash[data-impact-theme="ting_blood"],
+.impactFlash[data-impact-theme="ting_curse"] {
+  animation: ting-blood-impact 780ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="ting_blood"] > i,
+.impactFlash[data-impact-theme="ting_curse"] > i {
+  display: block;
+  width: 38%;
+  aspect-ratio: 1.7;
+  border: 2px solid rgba(255, 54, 95, 0.56);
+  border-radius: 46% 54% 61% 39% / 37% 42% 58% 63%;
+  filter: blur(8px);
+  animation: ting-mist-swell 780ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="ting_blood"] > i:nth-child(1),
+.impactFlash[data-impact-theme="ting_curse"] > i:nth-child(1) {
+  top: 18%;
+  left: 13%;
+}
+
+.impactFlash[data-impact-theme="ting_blood"] > i:nth-child(2),
+.impactFlash[data-impact-theme="ting_curse"] > i:nth-child(2) {
+  right: 8%;
+  bottom: 14%;
+  animation-delay: 90ms;
+}
+
+.impactFlash[data-impact-theme="ting_blood"] > i:nth-child(3),
+.impactFlash[data-impact-theme="ting_curse"] > i:nth-child(3) {
+  top: 36%;
+  left: 39%;
+  width: 27%;
+  animation-delay: 150ms;
+}
+
+.impactFlash[data-impact-theme="ting_curse"] {
+  filter: contrast(1.28) saturate(0.72);
+}
+
+.impactFlash[data-impact-theme="ting_guard"] {
+  animation: ting-guard-impact 620ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="ting_guard"] > i {
+  display: none;
+}
+
+.impactFlash[data-impact-theme="ting_detonation"] {
+  animation: ting-detonation-impact 1.18s ease-out both;
+}
+
+.impactFlash[data-impact-theme="ting_detonation"] > i {
+  --ray-angle: 0deg;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: 145vmax;
+  height: 2px;
+  background: rgba(255, 54, 95, 0.82);
+  box-shadow: 0 0 20px #ff365f;
+  transform-origin: left center;
+  animation: ting-blast-ray 1.05s cubic-bezier(0.16, 0.72, 0.24, 1) both;
+}
+
+.impactFlash[data-impact-theme="ting_detonation"] > i:nth-child(2) {
+  --ray-angle: 63deg;
+  animation-delay: 35ms;
+}
+
+.impactFlash[data-impact-theme="ting_detonation"] > i:nth-child(3) {
+  --ray-angle: 126deg;
+  animation-delay: 80ms;
+}
+
 .actionBanner {
   position: absolute;
-  z-index: 20;
+  z-index: 50;
   top: 18px;
   left: 20px;
   display: grid;
-  width: min(390px, 46%);
+  grid-template-rows: 15px 30px minmax(34px, auto);
+  width: min(460px, 56%);
+  min-height: 91px;
   min-width: 0;
   padding: 10px 13px 11px;
   border-left: 3px solid var(--event-accent, var(--cyan));
@@ -115,17 +208,32 @@
   overflow: hidden;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0;
   text-overflow: ellipsis;
+}
+
+.actionBanner span {
   white-space: nowrap;
+}
+
+.actionBanner small {
+  display: -webkit-box;
+  align-self: start;
+  padding-top: 2px;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.42;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .actionBanner strong {
   overflow: hidden;
   margin: 2px 0;
   color: var(--text);
-  font-size: clamp(16px, 2vw, 25px);
+  font-size: 25px;
   font-weight: 950;
   line-height: 1.15;
   letter-spacing: 0;
@@ -170,7 +278,7 @@
 .roundOrbit span,
 .roundOrbit small {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0;
 }
 
@@ -212,14 +320,29 @@
 }
 
 .fighter.dimmed {
-  opacity: 0.5;
-  filter: saturate(0.48);
+  opacity: 0.66;
+  filter: saturate(0.68);
 }
 
 .fighter.active {
   z-index: 18;
   filter: drop-shadow(0 0 16px color-mix(in srgb, var(--accent), transparent 42%));
   transform: translate(-50%, -50%) scale(1.09);
+}
+
+.fighter[data-combat-motion] {
+  z-index: 34;
+  pointer-events: none;
+  will-change: translate, filter;
+}
+
+.fighter[data-combat-motion="melee_lunge"] {
+  filter: brightness(1.08) drop-shadow(0 0 18px rgba(255, 54, 95, 0.68));
+}
+
+.fighter[data-combat-motion="self_destruct_cling"] {
+  z-index: 36;
+  filter: brightness(1.16) saturate(1.18) drop-shadow(0 0 24px rgba(255, 54, 95, 0.86));
 }
 
 .fighter.target .portrait {
@@ -289,9 +412,27 @@
   background: var(--accent);
   color: #061014;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 950;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.teamBadge {
+  position: absolute;
+  z-index: 3;
+  top: 2px;
+  left: 2px;
+  overflow: hidden;
+  max-width: 38px;
+  padding: 1px 3px;
+  border-left: 2px solid var(--team-color, var(--cyan));
+  background: rgba(5, 8, 10, 0.86);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -316,7 +457,7 @@
   justify-content: space-between;
   min-width: 0;
   gap: 5px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 850;
 }
 
@@ -331,7 +472,7 @@
   flex: 0 0 auto;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 10px;
   white-space: nowrap;
 }
 
@@ -375,7 +516,7 @@
   border-left: 2px solid var(--accent);
   background: rgba(255, 255, 255, 0.08);
   color: #cfd6dc;
-  font-size: 8px;
+  font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -385,35 +526,131 @@
   color: #ffaca5;
 }
 
+.unitBadges .moreBadge {
+  flex: 0 0 auto;
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.root[data-density="compact"] .fighter {
+  left: clamp(74px, var(--x), calc(100% - 74px));
+  grid-template-columns: 46px minmax(82px, 94px);
+  min-width: 128px;
+}
+
+.root[data-density="compact"] .portrait {
+  width: 46px;
+  height: 54px;
+}
+
+.root[data-density="compact"] .emblem {
+  max-width: 39px;
+  font-size: 21px;
+}
+
+.root[data-density="compact"] .unitHud {
+  grid-template-rows: 21px 7px 7px 15px;
+  height: 54px;
+  padding: 3px 5px;
+}
+
+.root[data-density="compact"] .unitName {
+  font-size: 11px;
+}
+
+.root[data-density="compact"] .unitName small {
+  font-size: 9px;
+}
+
+.root[data-density="compact"] .unitBadges span {
+  height: 13px;
+  font-size: 9px;
+}
+
 .root[data-density="dense"] .fighter {
-  left: clamp(65px, var(--x), calc(100% - 65px));
-  grid-template-columns: 40px minmax(68px, 98px);
-  min-width: 110px;
+  left: clamp(64px, var(--x), calc(100% - 64px));
+  grid-template-columns: 42px minmax(64px, 70px);
+  min-width: 106px;
+}
+
+.root[data-density="dense"] .fighter.active,
+.root[data-density="dense"] .fighter.selected,
+.root[data-density="dense"] .fighter:hover {
+  transform: translate(-50%, -50%);
 }
 
 .root[data-density="dense"] .portrait {
-  width: 40px;
-  height: 48px;
+  width: 42px;
+  height: 50px;
 }
 
 .root[data-density="dense"] .emblem {
-  max-width: 34px;
-  font-size: 18px;
+  max-width: 36px;
+  font-size: 19px;
 }
 
 .root[data-density="dense"] .unitHud {
-  grid-template-rows: 19px 6px 6px 13px;
-  height: 48px;
+  grid-template-rows: 20px 6px 6px 14px;
+  height: 50px;
   padding: 2px 4px;
 }
 
 .root[data-density="dense"] .unitName {
-  font-size: 9px;
+  font-size: 10px;
+}
+
+.root[data-density="dense"] .unitName small {
+  font-size: 8px;
 }
 
 .root[data-density="dense"] .unitBadges span {
-  height: 11px;
+  height: 12px;
+  font-size: 8px;
+}
+
+.root[data-density="crowded"] .fighter {
+  left: clamp(51px, var(--x), calc(100% - 51px));
+  grid-template-columns: 34px minmax(58px, 66px);
+  width: 100px;
+  min-width: 92px;
+}
+
+.root[data-density="crowded"] .portrait {
+  width: 34px;
+  height: 44px;
+}
+
+.root[data-density="crowded"] .emblem {
+  max-width: 29px;
+  font-size: 16px;
+}
+
+.root[data-density="crowded"] .unitHud {
+  grid-template-rows: 18px 6px 6px 10px;
+  width: 66px;
+  height: 44px;
+  padding: 2px 3px;
+}
+
+.root[data-density="crowded"] .unitName {
+  font-size: 8.5px;
+}
+
+.root[data-density="crowded"] .unitName small,
+.root[data-density="crowded"] .unitBadges span {
+  display: none;
+}
+
+.root[data-density="crowded"] .phase,
+.root[data-density="crowded"] .teamBadge {
+  max-width: 30px;
   font-size: 7px;
+}
+
+.root[data-density="crowded"] .fighter.active,
+.root[data-density="crowded"] .fighter.selected,
+.root[data-density="crowded"] .fighter:hover {
+  transform: translate(-50%, -50%) scale(1.02);
 }
 
 .popupLayer {
@@ -461,13 +698,15 @@
 .dossier {
   --selected-accent: var(--cyan);
   position: absolute;
-  z-index: 22;
+  z-index: 50;
   left: 18px;
+  right: 300px;
   bottom: 18px;
   display: grid;
   grid-template-columns: 4px minmax(0, 1fr);
-  width: min(430px, 48%);
-  min-height: 88px;
+  width: auto;
+  max-width: 720px;
+  min-height: 100px;
   background: rgba(8, 12, 15, 0.86);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.38);
   backdrop-filter: blur(9px);
@@ -479,15 +718,15 @@
 
 .dossierBody {
   display: grid;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
   padding: 9px 11px;
 }
 
 .dossierHeading {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(280px, 1.4fr);
+  align-items: center;
   min-width: 0;
   gap: 12px;
 }
@@ -500,7 +739,7 @@
 .dossierHeading > div:first-child span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -508,15 +747,17 @@
 .dossierHeading strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 15px;
+  font-size: 18px;
+  line-height: 1.18;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dossierHeading dl {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 7px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(42px, auto));
+  justify-content: end;
+  gap: 5px 8px;
   margin: 0;
 }
 
@@ -524,7 +765,7 @@
   display: flex;
   gap: 2px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .dossierHeading dt {
@@ -537,11 +778,22 @@
   font-weight: 900;
 }
 
+.dossierHeading .dossierVital {
+  margin-top: 2px;
+  color: #d8e0e5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .dossierBadges {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
+  max-height: 50px;
   gap: 4px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .dossierBadges > span {
@@ -549,14 +801,14 @@
   flex: 0 1 auto;
   align-items: center;
   min-width: 0;
-  height: 21px;
+  height: 24px;
   overflow: hidden;
   padding: 0 6px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.07);
   color: #d6dde2;
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -587,7 +839,7 @@
 
 .dossierBadges small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .arenaFooter {
@@ -607,7 +859,7 @@
   min-width: 118px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .threat > div {
@@ -627,7 +879,7 @@
 .currentActor b {
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -640,7 +892,7 @@
   position: relative;
   z-index: 25;
   display: grid;
-  grid-template-rows: 68px 48px minmax(0, 1fr) 34px;
+  grid-template-rows: 72px 50px minmax(0, 1fr) 36px;
   min-width: 0;
   min-height: 0;
   background: var(--panel);
@@ -663,12 +915,12 @@
 .feedHeader > div:first-child span {
   color: var(--cyan);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .feedHeader strong {
   margin-top: 2px;
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .feedActions {
@@ -679,9 +931,9 @@
 
 .feedActions button {
   display: grid;
-  min-width: 32px;
-  height: 30px;
-  padding: 0 7px;
+  min-width: 36px;
+  height: 34px;
+  padding: 0 9px;
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -689,7 +941,7 @@
   color: var(--text);
   cursor: pointer;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .feedActions button:hover {
@@ -700,7 +952,7 @@
 .pulseStrip {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   min-width: 0;
   padding: 7px 13px;
   overflow: hidden;
@@ -708,13 +960,27 @@
   background: #10161b;
 }
 
+.pulseList {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.pulseList::-webkit-scrollbar {
+  display: none;
+}
+
 .pulseStrip button {
   --pulse-accent: var(--cyan);
   position: relative;
   display: grid;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
   overflow: hidden;
   padding: 0;
   place-items: center;
@@ -723,7 +989,7 @@
   background: #151c22;
   color: var(--text);
   cursor: pointer;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .pulseStrip button::after {
@@ -740,17 +1006,34 @@
   transform: translateY(-1px);
 }
 
-.pulseStrip > span {
+.pulseStrip button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pulseGlyph {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.pulseMore {
   flex: 0 0 auto;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .feedScroll {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   min-height: 0;
   padding: 12px 12px 18px;
   overflow-x: hidden;
@@ -762,7 +1045,7 @@
 .logGroup {
   --log-accent: var(--cyan);
   position: relative;
-  padding: 10px 10px 10px 14px;
+  padding: 11px 11px 11px 15px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: #11171d;
@@ -812,12 +1095,12 @@
   border: 1px solid var(--log-accent);
   color: var(--log-accent);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .logGroup header strong {
   overflow: hidden;
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -826,15 +1109,15 @@
   flex: 0 0 auto;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 10px;
   white-space: nowrap;
 }
 
 .logGroup p {
   margin: 4px 0 0;
   color: #cbd3d8;
-  font-size: 11px;
-  line-height: 1.58;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .logGroup p strong {
@@ -848,7 +1131,7 @@
   padding: 0 12px;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .feedFooter span {
@@ -893,6 +1176,79 @@
   background: #07090b;
   pointer-events: none;
   animation: cinematic-in 1.9s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.cinematic[data-cinematic-theme="ting_blood"] {
+  background: #120207;
+  animation: ting-finisher-shell 2.1s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.tingFinisherFx {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+}
+
+.tingFinisherFx::before,
+.tingFinisherFx::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(38vw, 460px);
+  aspect-ratio: 1;
+  border: 5px solid rgba(255, 54, 95, 0.74);
+  border-radius: 50%;
+  box-shadow: 0 0 0 20px rgba(201, 21, 60, 0.12), 0 0 70px rgba(255, 54, 95, 0.46), inset 0 0 70px rgba(58, 7, 19, 0.82);
+  content: "";
+  transform: translate(-50%, -50%) scale(0.1);
+  animation: ting-finisher-core 1.35s 180ms cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.tingFinisherFx::after {
+  width: min(22vw, 260px);
+  border-color: rgba(243, 223, 196, 0.88);
+  animation-delay: 310ms;
+}
+
+.tingFinisherFx > i {
+  --vein-angle: 0deg;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 82vmax;
+  height: 3px;
+  background: #c9153c;
+  box-shadow: 0 0 12px #ff365f, 0 0 38px rgba(201, 21, 60, 0.7);
+  transform: translate(-50%, -50%) rotate(var(--vein-angle)) scaleX(0);
+  animation: ting-finisher-vein 1.15s cubic-bezier(0.2, 0.72, 0.26, 1) both;
+}
+
+.tingFinisherFx > i:nth-child(2) { --vein-angle: 27deg; animation-delay: 45ms; }
+.tingFinisherFx > i:nth-child(3) { --vein-angle: 58deg; animation-delay: 90ms; }
+.tingFinisherFx > i:nth-child(4) { --vein-angle: 91deg; animation-delay: 135ms; }
+.tingFinisherFx > i:nth-child(5) { --vein-angle: 126deg; animation-delay: 180ms; }
+.tingFinisherFx > i:nth-child(6) { --vein-angle: 153deg; animation-delay: 225ms; }
+
+.cinematic[data-cinematic-theme="ting_blood"] .cinematicArt {
+  filter: grayscale(0.35) sepia(0.24) saturate(1.5) drop-shadow(24px 0 0 rgba(201, 21, 60, 0.34)) contrast(1.18);
+  animation: ting-finisher-art 1.26s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.cinematic[data-cinematic-theme="ting_blood"] .cinematicCopy {
+  animation: ting-finisher-copy 1.3s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.cinematic[data-cinematic-theme="ting_blood"] .cinematicCopy span {
+  color: #ff6a83;
+}
+
+.cinematic[data-cinematic-theme="ting_blood"] .cinematicCopy h2 {
+  text-shadow: 7px 7px 0 rgba(126, 6, 32, 0.92), 0 0 28px rgba(255, 54, 95, 0.5);
+}
+
+.cinematic[data-cinematic-theme="ting_blood"] .cinematicCopy p {
+  color: #f3dfc4;
 }
 
 .cinematicScan {
@@ -962,6 +1318,14 @@
   color: var(--amber);
   font-size: clamp(16px, 2vw, 31px);
   font-weight: 900;
+}
+
+.finisherTarget {
+  margin-top: 18px;
+  color: rgba(255, 255, 255, 0.72);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: clamp(11px, 1.15vw, 15px);
+  font-weight: 850;
 }
 
 .cinematic > i {
@@ -1223,6 +1587,484 @@
   animation: transformation-progress 3.2s linear both;
 }
 
+.summonCinematic {
+  position: absolute;
+  z-index: 74;
+  inset: 0;
+  overflow: hidden;
+  background: #05080b;
+  color: #f4f8fa;
+  pointer-events: none;
+  animation: ritual-shell 4.4s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.summonCinematic[data-summon-kind="fusion"] {
+  background: #080510;
+}
+
+.summonCinematic[data-summon-kind="exodia"] {
+  background: #090705;
+}
+
+.summonCinematic[data-summon-ritual="ra"] {
+  background: #0d0902;
+}
+
+.summonCinematic[data-summon-ritual="ra"]::after {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  background: rgba(255, 214, 90, 0.86);
+  content: "";
+  mix-blend-mode: screen;
+  opacity: 0;
+  animation: divine-flash 4.4s ease-out both;
+}
+
+.ritualBackdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, transparent 49.7%, color-mix(in srgb, var(--ritual-accent), transparent 38%) 50%, transparent 50.3%),
+    linear-gradient(0deg, transparent 49.7%, color-mix(in srgb, var(--ritual-accent), transparent 62%) 50%, transparent 50.3%),
+    repeating-linear-gradient(0deg, transparent 0 7px, rgba(255, 255, 255, 0.028) 8px),
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--ritual-accent), transparent 75%), transparent 46%);
+  opacity: 0.82;
+}
+
+.ritualBackdrop::before,
+.ritualBackdrop::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(58%, 520px);
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--ritual-accent), transparent 32%);
+  border-radius: 50%;
+  content: "";
+  transform: translate(-50%, -50%);
+  animation: ritual-ring 4.4s ease-in-out both;
+}
+
+.ritualMonsterGhost {
+  position: absolute;
+  z-index: 4;
+  inset: 5% 7%;
+  opacity: 0;
+  transform: scale(0.84);
+  animation: ritual-monster-ghost 4.4s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.ritualMonsterGhost img {
+  object-fit: contain;
+  object-position: center;
+  filter: saturate(0.78) drop-shadow(0 0 32px var(--ritual-accent));
+}
+
+.summonCinematic[data-summon-ritual="ra"] .ritualMonsterGhost img {
+  filter: saturate(1.08) brightness(1.12) drop-shadow(0 0 42px #ffd65a);
+}
+
+.ritualBackdrop::after {
+  width: min(42%, 370px);
+  border-style: dashed;
+  animation-direction: reverse;
+}
+
+.ritualHeader {
+  position: absolute;
+  z-index: 20;
+  top: 18px;
+  left: 22px;
+  display: grid;
+  padding-left: 10px;
+  border-left: 3px solid var(--ritual-accent);
+}
+
+.ritualHeader span,
+.ritualHeader strong,
+.ritualHeader small,
+.ritualResultName span,
+.ritualResultName strong {
+  letter-spacing: 0;
+}
+
+.ritualHeader span {
+  color: var(--ritual-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.ritualHeader strong {
+  margin-top: 2px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.ritualHeader small {
+  margin-top: 3px;
+  color: #9eabb3;
+  font-size: 9px;
+}
+
+.ritualResultName {
+  position: absolute;
+  z-index: 22;
+  right: 22px;
+  bottom: 18px;
+  display: grid;
+  max-width: 54%;
+  padding-right: 10px;
+  border-right: 3px solid var(--ritual-accent);
+  text-align: right;
+  animation: ritual-name 4.4s ease-out both;
+}
+
+.ritualResultName span {
+  color: var(--ritual-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.ritualResultName strong {
+  overflow-wrap: anywhere;
+  color: #fff;
+  font-size: 24px;
+  line-height: 1.05;
+  text-shadow: 3px 3px 0 color-mix(in srgb, var(--ritual-accent), transparent 55%);
+}
+
+.ritualCard {
+  position: relative;
+  width: 116px;
+  aspect-ratio: 1 / 1.458;
+  filter: drop-shadow(0 16px 18px rgba(0, 0, 0, 0.62));
+  transform-style: preserve-3d;
+}
+
+.ritualCardFace {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 34px;
+  overflow: hidden;
+  padding: 7px;
+  border: 2px solid var(--card-accent);
+  border-radius: 5px;
+  background: #151a1e;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.1), 0 0 24px color-mix(in srgb, var(--card-accent), transparent 58%);
+}
+
+.ritualCard[data-has-card-art="true"] .ritualCardFace {
+  display: block;
+  padding: 0;
+  border-width: 1px;
+  background: #06080a;
+}
+
+.ritualCard[data-has-card-art="true"] .ritualCardArt {
+  position: absolute;
+  inset: 0;
+  border: 0;
+}
+
+.ritualCard[data-has-card-art="true"] .ritualCardArt img {
+  object-fit: contain;
+  object-position: center;
+}
+
+.ritualCard[data-card-tier="advanced"] .ritualCardFace,
+.ritualCard[data-card-tier="divine"] .ritualCardFace {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.22), 0 0 34px color-mix(in srgb, var(--card-accent), transparent 34%);
+}
+
+.ritualCardArt {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--card-accent), white 16%);
+  background: #080b0d;
+}
+
+.ritualCardArt img {
+  object-fit: cover;
+}
+
+.ritualCardPlaceholder {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-content: center;
+  background:
+    linear-gradient(135deg, transparent 48%, color-mix(in srgb, var(--card-accent), transparent 60%) 49% 51%, transparent 52%),
+    repeating-linear-gradient(0deg, transparent 0 8px, color-mix(in srgb, var(--card-accent), transparent 90%) 9px);
+  color: var(--card-accent);
+  text-align: center;
+}
+
+.ritualCardPlaceholder span {
+  font-size: 34px;
+  font-weight: 950;
+  line-height: 1;
+  text-shadow: 0 0 18px currentColor;
+}
+
+.ritualCardPlaceholder small {
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.ritualCardName {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  padding: 3px 2px 0;
+}
+
+.ritualCardName strong {
+  overflow: hidden;
+  color: #f5f7f8;
+  font-size: 9px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ritualCardName small {
+  margin-top: 2px;
+  color: var(--card-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 6px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.tributeRitual,
+.fusionRitual,
+.exodiaRitual {
+  position: absolute;
+  z-index: 10;
+  inset: 54px 18px 48px;
+}
+
+.tributeMaterials {
+  position: absolute;
+  inset: 0;
+}
+
+.tributeMaterials .ritualCard {
+  --tribute-entry-x: calc(-220px + var(--tribute-slot) * 120px);
+  --tribute-entry-y: 0px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(30%, 116px);
+  min-width: 82px;
+  animation: tribute-material 4.4s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--card-index) * 90ms);
+}
+
+.tributeSeal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 112px;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+}
+
+.tributeSeal::before,
+.tributeSeal::after,
+.tributeSeal i {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--ritual-accent);
+  border-radius: 50%;
+  content: "";
+  opacity: 0;
+  animation: tribute-seal 4.4s ease-in-out both;
+}
+
+.tributeSeal::after {
+  inset: 18%;
+  border-style: dashed;
+  animation-direction: reverse;
+}
+
+.tributeSeal i:nth-child(1) { transform: rotate(0deg) scaleX(0.28); }
+.tributeSeal i:nth-child(2) { transform: rotate(60deg) scaleX(0.28); }
+.tributeSeal i:nth-child(3) { transform: rotate(120deg) scaleX(0.28); }
+
+.tributeBeams {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+}
+
+.tributeBeams i {
+  position: absolute;
+  top: 12%;
+  bottom: 12%;
+  left: 50%;
+  width: 3px;
+  background: var(--ritual-accent);
+  box-shadow: 0 0 16px 5px color-mix(in srgb, var(--ritual-accent), transparent 35%);
+  opacity: 0;
+  transform: translateX(calc(var(--beam-slot) * 18px)) rotate(calc(var(--beam-slot) * 5deg));
+  animation: tribute-beam 4.4s ease-in-out both;
+}
+
+.ritualResultCard,
+.fusionResultCard,
+.exodiaResultCard {
+  position: absolute;
+  z-index: 8;
+}
+
+.ritualResultCard {
+  top: 50%;
+  left: 50%;
+  width: 154px;
+  transform: translate(-50%, -50%);
+}
+
+.ritualResultCard .ritualCard {
+  width: 100%;
+  animation: tribute-result 4.4s cubic-bezier(0.12, 0.72, 0.18, 1) both;
+}
+
+.summonCinematic[data-summon-ritual="ra"] .tributeMaterials .ritualCard {
+  --tribute-entry-x: calc(-220px + var(--tribute-slot) * 112px);
+  width: min(28%, 108px);
+  min-width: 72px;
+}
+
+.summonCinematic[data-summon-ritual="ra"] .ritualResultCard {
+  width: 172px;
+}
+
+.summonCinematic[data-summon-ritual="ra"] .ritualResultCard .ritualCard {
+  animation-name: divine-result;
+}
+
+.summonCinematic[data-summon-ritual="ra"] .tributeSeal {
+  width: 146px;
+  filter: drop-shadow(0 0 24px #ffd65a);
+}
+
+.fusionVortex {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  width: 190px;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+}
+
+.fusionVortex::before,
+.fusionVortex::after,
+.fusionVortex i {
+  position: absolute;
+  inset: 0;
+  border: 5px solid color-mix(in srgb, var(--ritual-accent), transparent 18%);
+  border-right-color: transparent;
+  border-radius: 50%;
+  content: "";
+  opacity: 0;
+  animation: fusion-vortex 4.4s cubic-bezier(0.2, 0.74, 0.28, 1) both;
+}
+
+.fusionVortex::after { inset: 15%; animation-direction: reverse; }
+.fusionVortex i:nth-child(1) { inset: 28%; border-width: 3px; }
+.fusionVortex i:nth-child(2) { inset: 42%; border-width: 2px; animation-direction: reverse; }
+.fusionVortex i:nth-child(3) { inset: 48%; border: 0; background: #fff; box-shadow: 0 0 50px 28px var(--ritual-accent); }
+
+.fusionMaterials .ritualCard {
+  --fusion-entry-x: -225px;
+  --fusion-y: calc(var(--fusion-slot) * 132px);
+  position: absolute;
+  z-index: 5;
+  top: 50%;
+  left: 50%;
+  width: 108px;
+  animation: fusion-material 4.4s cubic-bezier(0.2, 0.74, 0.28, 1) both;
+  animation-delay: calc(var(--card-index) * 70ms);
+}
+
+.fusionResultCard {
+  top: 50%;
+  left: 50%;
+  width: 166px;
+  transform: translate(-50%, -50%);
+}
+
+.fusionResultCard .ritualCard {
+  width: 100%;
+  animation: fusion-result 4.4s cubic-bezier(0.12, 0.72, 0.18, 1) both;
+}
+
+.exodiaRitual {
+  inset: 52px 54px 46px;
+}
+
+.exodiaStar {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  width: min(68%, 590px);
+  height: min(92%, 590px);
+  overflow: visible;
+  transform: translate(-50%, -50%);
+}
+
+.exodiaStar polygon {
+  fill: color-mix(in srgb, var(--ritual-accent), transparent 94%);
+  stroke: var(--ritual-accent);
+  stroke-dasharray: 240;
+  stroke-dashoffset: 240;
+  stroke-linejoin: round;
+  stroke-width: 0.8;
+  filter: drop-shadow(0 0 5px var(--ritual-accent));
+  animation: exodia-star 4.4s ease-in-out both;
+}
+
+.exodiaComponents {
+  position: absolute;
+  inset: 0;
+}
+
+.exodiaComponents .ritualCard {
+  position: absolute;
+  z-index: 5;
+  width: 92px;
+  animation: exodia-component 4.4s cubic-bezier(0.18, 0.78, 0.22, 1) both;
+  animation-delay: calc(var(--card-index) * 90ms);
+}
+
+.exodiaComponents .ritualCard:nth-child(1) { top: 2%; left: 50%; transform: translate(-50%, 0); }
+.exodiaComponents .ritualCard:nth-child(2) { top: 27%; right: 4%; }
+.exodiaComponents .ritualCard:nth-child(3) { right: 20%; bottom: 0; }
+.exodiaComponents .ritualCard:nth-child(4) { bottom: 0; left: 20%; }
+.exodiaComponents .ritualCard:nth-child(5) { top: 27%; left: 4%; }
+
+.exodiaResultCard {
+  top: 50%;
+  left: 50%;
+  width: 158px;
+  transform: translate(-50%, -50%);
+}
+
+.exodiaResultCard .ritualCard {
+  width: 100%;
+  animation: exodia-result 4.4s cubic-bezier(0.12, 0.72, 0.18, 1) both;
+}
+
 .glitching {
   animation: glitch-shift 900ms steps(2, end);
 }
@@ -1260,6 +2102,124 @@
   10% { opacity: 1; clip-path: inset(0); }
   82% { opacity: 1; clip-path: inset(0); }
   100% { opacity: 0; clip-path: inset(0 0 0 100%); }
+}
+
+@keyframes ritual-shell {
+  0% { opacity: 0; clip-path: inset(48% 0); }
+  6% { opacity: 1; clip-path: inset(0); }
+  92% { opacity: 1; clip-path: inset(0); }
+  100% { opacity: 0; clip-path: inset(0 0 0 100%); }
+}
+
+@keyframes ritual-ring {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.55) rotate(0); }
+  18%, 82% { opacity: 0.75; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.18) rotate(240deg); }
+}
+
+@keyframes ritual-name {
+  0%, 55% { opacity: 0; transform: translateX(18px); }
+  68%, 90% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(-8px); }
+}
+
+@keyframes ritual-monster-ghost {
+  0%, 48% { opacity: 0; transform: scale(0.84); }
+  62% { opacity: 0.22; transform: scale(1.05); }
+  72%, 90% { opacity: 0.34; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.03); }
+}
+
+@keyframes tribute-material {
+  0% {
+    opacity: 0;
+    transform: translate(
+      calc(-50% + var(--tribute-entry-x)),
+      calc(-50% + var(--tribute-entry-y) + 58px)
+    ) rotate(-7deg) scale(0.88);
+  }
+  14%, 38% {
+    opacity: 1;
+    transform: translate(
+      calc(-50% + var(--tribute-entry-x)),
+      calc(-50% + var(--tribute-entry-y))
+    ) rotate(0) scale(1);
+  }
+  56% { opacity: 1; filter: brightness(3); transform: translate(-50%, -50%) rotate(360deg) scale(0.12); }
+  62%, 100% { opacity: 0; filter: brightness(4); transform: translate(-50%, -50%) rotate(420deg) scale(0); }
+}
+
+@keyframes tribute-seal {
+  0%, 28% { opacity: 0; }
+  42%, 68% { opacity: 0.9; }
+  78%, 100% { opacity: 0; filter: brightness(2.4); }
+}
+
+@keyframes tribute-beam {
+  0%, 42% { opacity: 0; scale: 1 0; }
+  52%, 66% { opacity: 0.95; scale: 1 1; }
+  76%, 100% { opacity: 0; scale: 2.5 1; }
+}
+
+@keyframes tribute-result {
+  0%, 52% { opacity: 0; filter: brightness(3); transform: translateY(38px) scale(0.45) rotateY(80deg); }
+  66% { opacity: 1; filter: brightness(1.8); transform: translateY(-4px) scale(1.08) rotateY(0); }
+  78%, 92% { opacity: 1; filter: brightness(1); transform: translateY(0) scale(1) rotateY(0); }
+  100% { opacity: 0; transform: translateY(-8px) scale(1.02); }
+}
+
+@keyframes divine-result {
+  0%, 50% { opacity: 0; filter: brightness(4); transform: translateY(-110px) scale(0.55); }
+  65% { opacity: 1; filter: brightness(2.4); transform: translateY(8px) scale(1.14); }
+  78%, 92% { opacity: 1; filter: brightness(1); transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-12px) scale(1.03); }
+}
+
+@keyframes divine-flash {
+  0%, 54% { opacity: 0; }
+  62% { opacity: 0.62; }
+  69%, 100% { opacity: 0; }
+}
+
+@keyframes fusion-vortex {
+  0%, 20% { opacity: 0; filter: brightness(1); transform: rotate(0) scale(0.35); }
+  34%, 64% { opacity: 0.9; filter: brightness(1.35); }
+  72% { opacity: 1; filter: brightness(3); transform: rotate(920deg) scale(0.28); }
+  82%, 100% { opacity: 0; filter: brightness(4); transform: rotate(1080deg) scale(0); }
+}
+
+@keyframes fusion-material {
+  0% { opacity: 0; transform: translate(calc(-50% + var(--fusion-entry-x) - 10px), calc(-50% + var(--fusion-y))) rotate(-10deg) scale(0.84); }
+  16%, 40% { opacity: 1; transform: translate(calc(-50% + var(--fusion-entry-x)), calc(-50% + var(--fusion-y))) rotate(0) scale(1); }
+  62% { opacity: 1; filter: brightness(4); transform: translate(-50%, -50%) rotate(540deg) scale(0.08); }
+  68%, 100% { opacity: 0; filter: brightness(4); transform: translate(-50%, -50%) rotate(620deg) scale(0); }
+}
+
+@keyframes fusion-result {
+  0%, 58% { opacity: 0; filter: brightness(4); transform: scale(0.15) rotateY(-90deg); }
+  70% { opacity: 1; filter: brightness(2); transform: scale(1.12) rotateY(0); }
+  82%, 92% { opacity: 1; filter: brightness(1); transform: scale(1) rotateY(0); }
+  100% { opacity: 0; transform: scale(1.04); }
+}
+
+@keyframes exodia-star {
+  0%, 25% { opacity: 0; stroke-dashoffset: 240; }
+  56%, 90% { opacity: 1; stroke-dashoffset: 0; }
+  100% { opacity: 0; stroke-dashoffset: 0; }
+}
+
+@keyframes exodia-component {
+  0%, 8% { opacity: 0; filter: brightness(2); }
+  18%, 55% { opacity: 1; filter: brightness(1); }
+  68%, 90% { opacity: 1; filter: brightness(1.7); }
+  100% { opacity: 0; filter: brightness(3); }
+}
+
+@keyframes exodia-result {
+  0%, 58% { opacity: 0; filter: brightness(4); transform: scale(0.1) rotateY(90deg); }
+  72% { opacity: 1; filter: brightness(2.2); transform: scale(1.16) rotateY(0); }
+  82%, 92% { opacity: 1; filter: brightness(1); transform: scale(1) rotateY(0); }
+  100% { opacity: 0; transform: scale(1.04); }
 }
 
 @keyframes transformation-shell {
@@ -1311,9 +2271,79 @@
   to { transform: scaleX(1); }
 }
 
+@keyframes ting-slash-impact {
+  0% { background: rgba(243, 223, 196, 0.2); }
+  35% { background: rgba(201, 21, 60, 0.11); }
+  100% { background: transparent; }
+}
+
+@keyframes ting-blood-impact {
+  0% { background: rgba(58, 7, 19, 0.34); box-shadow: inset 0 0 0 rgba(201, 21, 60, 0); }
+  38% { background: rgba(201, 21, 60, 0.08); box-shadow: inset 0 0 90px rgba(201, 21, 60, 0.34); }
+  100% { background: transparent; box-shadow: inset 0 0 160px rgba(58, 7, 19, 0); }
+}
+
+@keyframes ting-mist-swell {
+  0% { opacity: 0; transform: scale(0.35) rotate(-8deg); }
+  42% { opacity: 0.68; transform: scale(1) rotate(3deg); }
+  100% { opacity: 0; transform: scale(1.42) translateY(-8%); }
+}
+
+@keyframes ting-guard-impact {
+  0% { background: rgba(243, 223, 196, 0.12); }
+  45% { background: rgba(201, 21, 60, 0.06); }
+  100% { background: transparent; }
+}
+
+@keyframes ting-detonation-impact {
+  0%, 18% { background: rgba(24, 4, 10, 0.2); }
+  34% { background: rgba(243, 223, 196, 0.5); }
+  43% { background: rgba(201, 21, 60, 0.3); box-shadow: inset 0 0 150px rgba(58, 7, 19, 0.85); }
+  100% { background: transparent; box-shadow: inset 0 0 220px rgba(58, 7, 19, 0); }
+}
+
+@keyframes ting-blast-ray {
+  0%, 23% { opacity: 0; transform: rotate(var(--ray-angle)) scaleX(0); }
+  42% { opacity: 0.92; transform: rotate(var(--ray-angle)) scaleX(1); }
+  100% { opacity: 0; transform: rotate(var(--ray-angle)) scaleX(1.08); }
+}
+
+@keyframes ting-finisher-shell {
+  0% { opacity: 0; clip-path: inset(46% 0 46% 0); }
+  9% { opacity: 1; clip-path: inset(0); }
+  46% { opacity: 1; filter: none; }
+  52% { opacity: 1; filter: brightness(2.6); }
+  64%, 100% { opacity: 0; filter: brightness(1); }
+}
+
+@keyframes ting-finisher-core {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
+  42% { opacity: 0.94; transform: translate(-50%, -50%) scale(1); }
+  67% { opacity: 1; transform: translate(-50%, -50%) scale(1.16); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.55); }
+}
+
+@keyframes ting-finisher-vein {
+  0%, 14% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--vein-angle)) scaleX(0); }
+  44% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--vein-angle)) scaleX(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--vein-angle)) scaleX(1.12); }
+}
+
+@keyframes ting-finisher-art {
+  0% { opacity: 0; transform: translateX(-12%) scale(1.08); }
+  24%, 58% { opacity: 1; transform: translateX(0) scale(1); }
+  100% { opacity: 0; transform: translateX(-4%) scale(1.06); }
+}
+
+@keyframes ting-finisher-copy {
+  0%, 10% { opacity: 0; transform: translateX(36px); }
+  30%, 62% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(18px); }
+}
+
 @keyframes impact-flash {
-  0% { background: rgba(255, 255, 255, 0.78); }
-  42% { background: rgba(255, 93, 93, 0.16); }
+  0% { background: rgba(255, 255, 255, 0.28); }
+  42% { background: rgba(255, 93, 93, 0.1); }
   100% { background: transparent; }
 }
 
@@ -1352,7 +2382,20 @@
   }
 
   .dossier {
+    right: auto;
     width: min(390px, 50%);
+    max-width: none;
+  }
+
+  .dossierHeading {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 5px;
+  }
+
+  .dossierHeading dl {
+    grid-template-columns: repeat(5, minmax(36px, auto));
+    justify-content: start;
   }
 }
 
@@ -1399,19 +2442,50 @@
 
   .logGroup p {
     margin-top: 2px;
-    font-size: 9px;
-    line-height: 1.42;
+    font-size: 10px;
+    line-height: 1.45;
+  }
+
+  .logGroup header strong {
+    font-size: 11px;
+  }
+
+  .logGroup header span,
+  .logGroup time {
+    font-size: 8px;
   }
 
   .actionBanner {
     top: 9px;
     left: 10px;
+    grid-template-rows: 11px 21px 15px;
+    width: min(360px, 44%);
+    min-height: 58px;
     padding: 6px 9px 7px;
   }
 
+  .actionBanner span {
+    font-size: 8px;
+  }
+
+  .actionBanner strong {
+    font-size: 17px;
+  }
+
+  .actionBanner small {
+    padding-top: 0;
+    font-size: 9px;
+    line-height: 1.35;
+    -webkit-line-clamp: 1;
+  }
+
   .dossier {
-    bottom: 8px;
-    left: 10px;
+    top: 8px;
+    right: 8px;
+    bottom: auto;
+    left: auto;
+    width: min(46%, 360px);
+    max-width: none;
     min-height: 54px;
   }
 
@@ -1420,18 +2494,46 @@
     padding: 5px 7px;
   }
 
-  .dossierBadges {
-    display: none;
+  .dossierHeading {
+    grid-template-columns: minmax(90px, 0.75fr) minmax(0, 1.25fr);
+    align-items: center;
+    gap: 6px;
   }
 
-  .dossierHeading dl div:nth-child(2),
-  .dossierHeading dl div:nth-child(4) {
-    display: none;
+  .dossierBadges {
+    flex-wrap: nowrap;
+    max-height: 17px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .dossierHeading dl {
+    display: grid;
+    grid-template-columns: repeat(5, auto);
+    gap: 2px 5px;
+  }
+
+  .dossierHeading dl div {
+    font-size: 8px;
+  }
+
+  .dossierHeading > div:first-child span,
+  .dossierHeading .dossierVital {
+    font-size: 8px;
+  }
+
+  .dossierHeading strong {
+    font-size: 13px;
+  }
+
+  .dossierBadges > span,
+  .dossierBadges small {
+    height: 17px;
+    font-size: 8px;
   }
 
   .arenaFooter {
-    right: 10px;
-    bottom: 8px;
+    display: none;
   }
 
   .fighter {
@@ -1457,12 +2559,91 @@
   }
 
   .unitName {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .unitBadges span {
     height: 12px;
-    font-size: 7px;
+    font-size: 8px;
+  }
+
+  .root[data-density="compact"] .fighter {
+    left: clamp(54px, var(--x), calc(100% - 54px));
+    grid-template-columns: 39px 69px;
+    width: 108px;
+    min-width: 108px;
+  }
+
+  .root[data-density="compact"] .portrait {
+    width: 39px;
+    height: 48px;
+  }
+
+  .root[data-density="compact"] .unitHud {
+    grid-template-rows: 18px 6px 6px 14px;
+    width: 69px;
+    height: 48px;
+    padding: 3px 5px;
+  }
+
+  .root[data-density="compact"] .unitName {
+    font-size: 9.5px;
+  }
+
+  .root[data-density="compact"] .unitBadges span {
+    height: 12px;
+    font-size: 7.5px;
+  }
+
+  .root[data-density="dense"] .fighter {
+    left: clamp(54px, var(--x), calc(100% - 54px));
+    grid-template-columns: 40px 68px;
+    width: 108px;
+    min-width: 108px;
+  }
+
+  .root[data-density="dense"] .portrait {
+    width: 40px;
+    height: 48px;
+  }
+
+  .root[data-density="dense"] .unitHud {
+    grid-template-rows: 18px 6px 6px 14px;
+    width: 68px;
+    height: 48px;
+    padding: 3px 4px;
+  }
+
+  .root[data-density="dense"] .unitName {
+    font-size: 9px;
+  }
+
+  .root[data-density="dense"] .unitBadges span {
+    height: 12px;
+    font-size: 7.5px;
+  }
+
+  .root[data-density="crowded"] .fighter {
+    left: clamp(43px, var(--x), calc(100% - 43px));
+    grid-template-columns: 31px minmax(43px, 52px);
+    width: 83px;
+    min-width: 83px;
+  }
+
+  .root[data-density="crowded"] .portrait {
+    width: 31px;
+    height: 42px;
+  }
+
+  .root[data-density="crowded"] .unitHud {
+    grid-template-rows: 16px 6px 5px 11px;
+    width: 52px;
+    height: 42px;
+    padding: 2px 3px;
+  }
+
+  .root[data-density="crowded"] .unitName {
+    font-size: 7.5px;
   }
 
   .cinematicCopy {
@@ -1555,6 +2736,162 @@
   .transformationTitle {
     font-size: 9px;
   }
+
+  .summonCinematic {
+    min-height: 220px;
+  }
+
+  .ritualHeader {
+    top: 8px;
+    left: 10px;
+  }
+
+  .ritualHeader strong {
+    font-size: 14px;
+  }
+
+  .ritualResultName {
+    right: 10px;
+    bottom: 8px;
+  }
+
+  .ritualResultName strong {
+    font-size: 14px;
+  }
+
+  .tributeRitual,
+  .fusionRitual,
+  .exodiaRitual {
+    inset: 34px 8px 27px;
+  }
+
+  .ritualCardFace {
+    grid-template-rows: minmax(0, 1fr) 23px;
+    padding: 4px;
+  }
+
+  .ritualCardName strong {
+    font-size: 7px;
+  }
+
+  .ritualCardName small {
+    font-size: 5px;
+  }
+
+  .ritualCardPlaceholder span {
+    font-size: 20px;
+  }
+
+  .ritualCardPlaceholder small {
+    margin-top: 3px;
+    font-size: 5px;
+  }
+
+  .tributeMaterials .ritualCard {
+    --tribute-entry-x: calc(-150px + var(--tribute-slot) * 70px);
+    min-width: 52px;
+  }
+
+  .summonCinematic[data-summon-ritual="ra"] .tributeMaterials .ritualCard {
+    --tribute-entry-x: calc(-145px + var(--tribute-slot) * 64px);
+    min-width: 48px;
+  }
+
+  .tributeSeal {
+    width: 82px;
+  }
+
+  .summonCinematic[data-summon-ritual="ra"] .tributeSeal {
+    width: 96px;
+  }
+
+  .ritualResultCard {
+    width: 104px;
+  }
+
+  .summonCinematic[data-summon-ritual="ra"] .ritualResultCard {
+    width: 116px;
+  }
+
+  .fusionVortex {
+    width: 120px;
+  }
+
+  .fusionMaterials .ritualCard {
+    --fusion-entry-x: -160px;
+    --fusion-y: calc(var(--fusion-slot) * 70px);
+    width: 66px;
+  }
+
+  .fusionResultCard {
+    width: 112px;
+  }
+
+  .exodiaRitual {
+    right: 20px;
+    left: 20px;
+  }
+
+  .exodiaComponents .ritualCard {
+    width: 52px;
+  }
+
+  .exodiaResultCard {
+    width: 88px;
+  }
+}
+
+@media (max-width: 720px) and (max-height: 620px) and (orientation: landscape) {
+  .root {
+    grid-template-columns: minmax(0, 1fr) 240px;
+  }
+
+  .dossier {
+    width: min(48%, 170px);
+  }
+
+  .dossierHeading {
+    grid-template-columns: 1fr;
+  }
+
+  .dossierHeading dl {
+    display: none;
+  }
+
+  .root[data-density="dense"] .fighter {
+    left: clamp(43px, var(--x), calc(100% - 43px));
+    grid-template-columns: 31px 52px;
+    width: 83px;
+    min-width: 83px;
+  }
+
+  .root[data-density="dense"] .portrait {
+    width: 31px;
+    height: 42px;
+  }
+
+  .root[data-density="dense"] .unitHud {
+    grid-template-rows: 17px 6px 6px 9px;
+    width: 52px;
+    height: 42px;
+    padding: 2px 3px;
+  }
+
+  .root[data-density="dense"] .unitName,
+  .root[data-density="crowded"] .unitName {
+    font-size: 8px;
+  }
+
+  .root[data-density="dense"] .unitName small,
+  .root[data-density="dense"] .unitBadges span {
+    display: none;
+  }
+
+  .root[data-density="dense"] .phase,
+  .root[data-density="dense"] .teamBadge {
+    max-width: 27px;
+    font-size: 7px;
+  }
 }
 
 @media (max-width: 760px) and (orientation: portrait) {
@@ -1637,6 +2974,7 @@
     height: 52px;
   }
 
+  .root[data-density="compact"] .fighter,
   .root[data-density="dense"] .fighter {
     left: clamp(70px, var(--x), calc(100% - 70px));
     grid-template-columns: 38px minmax(0, 86px);
@@ -1644,37 +2982,38 @@
     min-width: 124px;
   }
 
+  .root[data-density="compact"] .portrait,
   .root[data-density="dense"] .portrait {
     width: 38px;
     height: 46px;
   }
 
+  .root[data-density="compact"] .unitHud,
   .root[data-density="dense"] .unitHud {
     grid-template-rows: 17px 6px 6px 13px;
     width: 86px;
     height: 46px;
   }
 
+  .root[data-density="compact"] .fighter.active,
+  .root[data-density="compact"] .fighter.selected,
+  .root[data-density="compact"] .fighter:hover,
   .root[data-density="dense"] .fighter.active,
   .root[data-density="dense"] .fighter.selected,
   .root[data-density="dense"] .fighter:hover {
     transform: translate(-50%, -50%) scale(1.02);
   }
 
-  .root[data-density="dense"] .fighter:nth-child(3n + 1) { left: 17.5%; }
-  .root[data-density="dense"] .fighter:nth-child(3n + 2) { left: 50%; }
-  .root[data-density="dense"] .fighter:nth-child(3n) { left: 82.5%; }
-  .root[data-density="dense"] .fighter:nth-child(-n + 3) { top: 22%; }
-  .root[data-density="dense"] .fighter:nth-child(n + 4):nth-child(-n + 6) { top: 34%; }
-  .root[data-density="dense"] .fighter:nth-child(n + 7):nth-child(-n + 9) { top: 46%; }
-  .root[data-density="dense"] .fighter:nth-child(n + 10):nth-child(-n + 12) { top: 58%; }
-  .root[data-density="dense"] .fighter:nth-child(n + 13):nth-child(-n + 15) { top: 70%; }
-  .root[data-density="dense"] .fighter:nth-child(n + 16):nth-child(-n + 18) { top: 78%; }
-  .root[data-density="dense"] .fighter:nth-child(n + 19):nth-child(-n + 21) { top: 84%; }
-
   .dossier {
-    width: calc(100% - 36px);
+    right: 18px;
+    left: 18px;
+    width: auto;
+    max-width: none;
     bottom: 18px;
+  }
+
+  .dossierHeading {
+    grid-template-columns: 1fr;
   }
 
   .arenaFooter {
@@ -1788,6 +3127,115 @@
 
   .transformationTitle {
     font-size: 11px;
+  }
+
+  .summonCinematic {
+    min-height: 420px;
+  }
+
+  .ritualHeader {
+    top: 16px;
+    left: 14px;
+  }
+
+  .ritualResultName {
+    right: 14px;
+    bottom: 16px;
+    max-width: 72%;
+  }
+
+  .ritualResultName strong {
+    font-size: 19px;
+  }
+
+  .tributeRitual,
+  .fusionRitual,
+  .exodiaRitual {
+    inset: 62px 8px 58px;
+  }
+
+  .tributeMaterials,
+  .summonCinematic[data-summon-ritual="ra"] .tributeMaterials {
+    inset: 0;
+  }
+
+  .tributeMaterials .ritualCard,
+  .summonCinematic[data-summon-ritual="ra"] .tributeMaterials .ritualCard {
+    --tribute-entry-x: calc(var(--tribute-slot) * 82px);
+    --tribute-entry-y: -150px;
+    width: min(28%, 92px);
+    min-width: 64px;
+  }
+
+  .tributeSeal,
+  .summonCinematic[data-summon-ritual="ra"] .tributeSeal {
+    top: 50%;
+    left: 50%;
+  }
+
+  .tributeBeams i {
+    top: 20%;
+    bottom: 20%;
+    left: 50%;
+  }
+
+  .ritualResultCard,
+  .summonCinematic[data-summon-ritual="ra"] .ritualResultCard {
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    left: 50%;
+    width: 126px;
+    transform: translate(-50%, -50%);
+  }
+
+  .summonCinematic[data-summon-ritual="ra"] .ritualResultCard {
+    width: 142px;
+  }
+
+  .fusionVortex {
+    top: 50%;
+    left: 50%;
+    width: 148px;
+  }
+
+  .fusionMaterials .ritualCard {
+    --fusion-entry-x: -112px;
+    --fusion-y: calc(var(--fusion-slot) * 82px);
+    top: 50%;
+    left: 50%;
+    width: 70px;
+  }
+
+  .fusionResultCard {
+    top: 50%;
+    bottom: auto;
+    left: 50%;
+    width: 128px;
+    transform: translate(-50%, -50%);
+  }
+
+  .exodiaRitual {
+    right: 10px;
+    left: 10px;
+  }
+
+  .exodiaStar {
+    width: 94%;
+    height: 66%;
+  }
+
+  .exodiaComponents .ritualCard {
+    width: 62px;
+  }
+
+  .exodiaComponents .ritualCard:nth-child(2) { right: 0; }
+  .exodiaComponents .ritualCard:nth-child(3) { right: 10%; bottom: 4%; }
+  .exodiaComponents .ritualCard:nth-child(4) { bottom: 4%; left: 10%; }
+  .exodiaComponents .ritualCard:nth-child(5) { left: 0; }
+
+  .exodiaResultCard {
+    width: 112px;
   }
 }
 

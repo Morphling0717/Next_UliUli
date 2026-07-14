@@ -37,6 +37,7 @@ type YuzuAttackPlan = {
   group?: boolean;
   furioso?: boolean;
   applyRandomDebuff?: boolean;
+  presentation?: SkillDefinition['presentation'];
 };
 
 function isActive(fighter: Fighter): boolean {
@@ -269,6 +270,7 @@ function makeYuzuSkill(plan: YuzuAttackPlan, rate: number): SkillDefinition {
   return {
     name: plan.actionName,
     tag: SKILL_TAGS.SPECIAL,
+    presentation: plan.presentation,
     spellBlockMode: 'perHit',
     rate,
     onExecute: (ctx) => executeYuzuAttackPlan(ctx, plan),
@@ -368,5 +370,6 @@ export const yuzuSkills: Record<string, SkillDefinition> = {
     preferredWeapon: 'scythe',
     preferredBonus: 0.1,
     furioso: true,
+    presentation: 'finisher',
   }, 0.08),
 };

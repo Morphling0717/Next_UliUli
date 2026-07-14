@@ -1,6 +1,7 @@
 import type {
   BattleEngineCore,
   BattleEngineData,
+  BattleLogMetadata,
   DamageApplicationOptions,
   DefeatOptions,
   Fighter,
@@ -32,7 +33,7 @@ export interface BattleRuntimeHost {
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   getFatigueDamageBonus: () => number;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   syncHpPct: (fighter: Fighter) => void;
   applyDamage: (
     target: Fighter,
@@ -134,7 +135,7 @@ export function buildSummonResolutionRuntime(host: BattleRuntimeHost): SummonRes
     clearSpinalSword: (fighter) => host.clearSpinalSword(fighter),
     syncPuppetMasterStatus: (fighter) => host.syncPuppetMasterStatus(fighter),
     formatSkillText: (skill, text) => host.formatSkillText(skill, text),
-    log: (type, text) => host.log(type, text),
+    log: (type, text, metadata) => host.log(type, text, metadata),
   };
 }
 
@@ -166,7 +167,7 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     largeRound: host.battleState.largeRound.number,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
-    log: (type, text) => host.log(type, text),
+    log: (type, text, metadata) => host.log(type, text, metadata),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     markDefeated: (target, options) => host.markDefeated(target, options),

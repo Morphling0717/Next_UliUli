@@ -61,6 +61,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
   exodia_obliterate: {
     name: 'Exodia Obliterate',
     tag: SKILL_TAGS.SPECIAL,
+    presentation: 'finisher',
     spellBlockMode: 'perHit',
     rate: 0.45,
     condition: (user) => !user.hasUsedExodiaObliterate,
@@ -106,6 +107,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
   blue_eyes_burst_stream: {
     name: '毁灭爆裂疾风弹',
     tag: SKILL_TAGS.MAG,
+    presentation: 'finisher',
     rate: 0.55,
     mult: 4.3,
     text: '🐲 {USER} 张开龙口，轰出毁灭爆裂疾风弹！对 {TARGET} 造成 {VAL} 点魔法伤害！',
@@ -156,6 +158,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
   ultimate_burst_stream: {
     name: '究极爆裂疾风弹',
     tag: SKILL_TAGS.SPECIAL,
+    presentation: 'finisher',
     spellBlockMode: 'perHit',
     rate: 0.45,
     text: '🐉 {USER} 三首齐鸣，准备释放究极爆裂疾风弹！',
@@ -232,6 +235,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
   ra_sun_flare: {
     name: '太阳神烈焰',
     tag: SKILL_TAGS.MAG,
+    presentation: 'finisher',
     rate: 0.45,
     mult: 3.9,
     ignoreDef: true,

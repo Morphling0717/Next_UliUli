@@ -364,6 +364,12 @@ export function executeSkillAction(
       runtime.log('info', `📌 实际结算：${target.name} 完全抵消了这次伤害（原始预估 ${preMitigationDmg}），没有承受实际伤害。`);
     }
   }
+  if (preMitigationDmg > 0) {
+    runtime.log('system', `state-sync:${target.id}`, {
+      displayInFeed: false,
+      targetIds: [target.id],
+    });
+  }
   const selfStatusResolvedThroughShield = skill.statusTarget === 'user' && (damageOptions.resolution?.shieldDamage ?? 0) > 0;
   if ((actualDmg > 0 || selfStatusResolvedThroughShield) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore) {
     if (skill.statusTarget === 'user' || (actualDmg > 0 && target.currentHp > 0)) {

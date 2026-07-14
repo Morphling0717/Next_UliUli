@@ -206,6 +206,39 @@ export type BattleEventKind =
   | 'status'
   | 'round';
 
+/** Visual weight of an action. UI effects must consume this field instead of guessing from log text. */
+export type SkillPresentation = 'basic' | 'skill' | 'finisher';
+
+export interface BattleFormIdentity {
+  jobKey: string;
+  jobName: string;
+  icon: string;
+  phase: number;
+}
+
+export type SummonCinematicKind = 'tribute' | 'fusion' | 'exodia';
+
+export type BattleVisualCue =
+  | {
+      kind: 'transformation';
+      fighterId: string;
+      fighterName: string;
+      from: BattleFormIdentity;
+      to: BattleFormIdentity;
+    }
+  | {
+      kind: 'summon_card';
+      summonKind: SummonCinematicKind;
+      summonerId: string;
+      summonId: string;
+      summonName: string;
+      materials: string[];
+      /** Reserved for the future card art supplied by the site owner. */
+      cardImage?: string;
+    };
+
+export type BattleLogMetadata = Partial<Pick<BattleEvent, 'targetIds' | 'visualCue' | 'displayInFeed'>>;
+
 export interface BattleEvent {
   id: string;
   sequence: number;
@@ -222,8 +255,12 @@ export interface BattleEvent {
   targetIds?: string[];
   skillId?: string | null;
   skillName?: string;
+  presentation?: SkillPresentation;
+  /** False for a state checkpoint consumed by playback but omitted from visible battle logs. */
+  displayInFeed?: boolean;
   triggerDepth?: number;
   damage?: DamageResolutionRecord;
+  visualCue?: BattleVisualCue;
 }
 
 export type BattleLogEntry = BattleEvent & { visible: true };
@@ -573,6 +610,8 @@ export interface StylePoolEntry {
 export interface SkillDefinition {
   name: string;
   tag: SkillTag;
+  /** Defaults to `skill`; basic attacks are represented by a null skill id. */
+  presentation?: Exclude<SkillPresentation, 'basic'>;
   rate?: number;
   mult?: number;
   hits?: number;

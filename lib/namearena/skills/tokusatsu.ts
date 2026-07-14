@@ -384,7 +384,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     },
   },
   great_monster_victory: {
-    name: '怪兽胜利', tag: SKILL_TAGS.PHYS, mult: 7.0, ignoreDef: true, alwaysHit: true,
+    name: '怪兽胜利', tag: SKILL_TAGS.PHYS, presentation: 'finisher', mult: 7.0, ignoreDef: true, alwaysHit: true,
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN' && !u.hasUsedGreatMonsterVictory,
     text: '⭐ {USER} 触发必杀！【GREAT MONSTER VICTORY】！星光粉碎了 {TARGET}，造成 {VAL} 伤害！',
     onExecute: (ctx) => {
@@ -424,7 +424,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     },
   },
   rainbow_fever: {
-    name: '彩虹狂热', tag: SKILL_TAGS.PHYS, mult: 5.4, ignoreDef: true, alwaysHit: true,
+    name: '彩虹狂热', tag: SKILL_TAGS.PHYS, presentation: 'finisher', mult: 5.4, ignoreDef: true, alwaysHit: true,
     spellBlockMode: 'perHit',
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN' && !u.hasUsedRainbowFever,
     text: '🌈 {USER} 点三下彩虹龙头："Gon Gon GonGonGonGon"！推动腰带拉杆发动【彩虹狂热】："GOTCHARD RAINBOW FEVER! FEVER! FEVER! FEVER!"\n🚂 {USER} 使用炼金术将巨型列车用来附身的蒸汽列车模型再炼成，模型巨大化后与脚部一体化，化作火车头骑士踢贯穿 {TARGET}，造成 {VAL} 真实伤害！',

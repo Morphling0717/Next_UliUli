@@ -56,3 +56,6 @@ codes.db
 *.db-journal
 *.sqlite
 *.sqlite3
+
+# Source artwork is kept locally; the site ships optimized WebP cards.
+/public/namearena/cards/components/*.jpg

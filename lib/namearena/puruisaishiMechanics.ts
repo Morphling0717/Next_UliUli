@@ -217,7 +217,7 @@ export function spawnPuruisaishiEvent(runtime: PuruisaishiSpawnRuntime, reason =
   const puruisaishi = createPuruisaishi(runtime);
   const ananna = createAnanna(runtime, puruisaishi);
   runtime.fighters.push(puruisaishi, ananna);
-  runtime.log('transform', `🜲 【普瑞赛斯】${reason}，${puruisaishi.name} 出现在战场边缘。她不在参赛名单中，不会攻击，也不会成为胜利者。`);
+  runtime.log('system', `🜲 【普瑞赛斯】${reason}，${puruisaishi.name} 出现在战场边缘。她不在参赛名单中，不会攻击，也不会成为胜利者。`);
   runtime.log('skill', `🜚 【阿喃那】最初的源石在 ${puruisaishi.name} 身旁生成；5 回合内无法被选为攻击目标，并将开始增殖源石结晶。`);
   return puruisaishi;
 }
@@ -692,7 +692,7 @@ export function clearAllOriginiumAndRetreat(runtime: PuruisaishiRuntime, puruisa
   setCurrentHp(puruisaishi, 0);
   puruisaishi.isDead = true;
   puruisaishi.isDeadAnnounced = true;
-  runtime.log('transform', `🜲 【普瑞赛斯退场】${puruisaishi.name} 的护盾归零，清除全场矿石病层数后离开战场。`);
+  runtime.log('system', `🜲 【普瑞赛斯退场】${puruisaishi.name} 的护盾归零，清除全场矿石病层数后离开战场。`);
 }
 
 export function isOriginiumNpc(fighter: Fighter): boolean {

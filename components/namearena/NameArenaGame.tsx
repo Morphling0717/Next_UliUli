@@ -59,7 +59,7 @@ type SettlementRow = {
 };
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const DISPLAY_LOG_LIMIT = 100;
+const DISPLAY_LOG_LIMIT = 240;
 const LOG_PLAYBACK_PROFILE_BY_SPEED: Record<number, {
   base: number;
   charMs: number;
@@ -69,20 +69,20 @@ const LOG_PLAYBACK_PROFILE_BY_SPEED: Record<number, {
   minHighlight: number;
   minTransform: number;
   minFinisher: number;
+  minSummon: number;
 }> = {
-  1500: { base: 2400, charMs: 28, maxTextExtra: 3600, minDeath: 3600, minLong: 4500, minHighlight: 5600, minTransform: 3400, minFinisher: 2100 },
-  500: { base: 1100, charMs: 12, maxTextExtra: 1500, minDeath: 1700, minLong: 2100, minHighlight: 2800, minTransform: 3400, minFinisher: 2100 },
-  50: { base: 260, charMs: 3, maxTextExtra: 320, minDeath: 480, minLong: 620, minHighlight: 800, minTransform: 3400, minFinisher: 2100 },
+  1500: { base: 2400, charMs: 28, maxTextExtra: 3600, minDeath: 3600, minLong: 4500, minHighlight: 5600, minTransform: 3400, minFinisher: 2100, minSummon: 4550 },
+  500: { base: 1100, charMs: 12, maxTextExtra: 1500, minDeath: 1700, minLong: 2100, minHighlight: 2800, minTransform: 3400, minFinisher: 2100, minSummon: 4550 },
+  50: { base: 260, charMs: 3, maxTextExtra: 320, minDeath: 480, minLong: 620, minHighlight: 800, minTransform: 3400, minFinisher: 2100, minSummon: 4550 },
 };
 
-const FORM_TRANSITION_PATTERN = /转职为(?:专属辅助)?【|变身(?:为|——)?【|显露出【|展现出【|觉醒欧皇血统|乘员昏迷|KABOOM|解除了限制|进化为【|进入二阶段|进入三阶段/;
-const FINISHER_CINEMATIC_PATTERN = /触发必杀|终结技锁定|一次性必杀|GREAT MONSTER VICTORY|彩虹狂热|GOTCHARD RAINBOW FEVER|Furioso/i;
-
-const isFormTransitionLog = (log: BattleLogEntry) => FORM_TRANSITION_PATTERN.test(log.text);
+const isFormTransitionLog = (log: BattleLogEntry) => log.visualCue?.kind === 'transformation';
 
 const isTransformLog = (log: BattleLogEntry) =>
-  log.type === 'transform' ||
   isFormTransitionLog(log);
+
+const isCinematicLog = (log: BattleLogEntry) =>
+  log.presentation === 'finisher' || log.visualCue?.kind === 'summon_card';
 
 const isHighlightLog = (log: BattleLogEntry) =>
   log.type === 'win' ||
@@ -98,7 +98,8 @@ const getLogPlaybackDelay = (log: BattleLogEntry, speed: number) => {
   if (log.type === 'death') delay = Math.max(delay, profile.minDeath);
   if (isHighlightLog(log)) delay = Math.max(delay, profile.minHighlight);
   if (isFormTransitionLog(log)) delay = Math.max(delay, profile.minTransform);
-  if (FINISHER_CINEMATIC_PATTERN.test(log.text)) delay = Math.max(delay, profile.minFinisher);
+  if (isCinematicLog(log)) delay = Math.max(delay, profile.minFinisher);
+  if (log.visualCue?.kind === 'summon_card') delay = Math.max(delay, profile.minSummon);
   return delay;
 };
 
@@ -1048,6 +1049,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const [fighters, setFighters] = useState<Fighter[]>([]);
     const [battleTurn, setBattleTurn] = useState(0);
     const [battleState, setBattleState] = useState<BattleState>(() => createBattleState(1, 0));
+    const [battleRunId, setBattleRunId] = useState(0);
     const [gameState, setGameState] = useState<'SETUP' | 'FIGHTING' | 'END'>('SETUP');
     const [showMvp, setShowMvp] = useState(false);
 
@@ -1228,6 +1230,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         setMobileBattleView('arena');
         setLandscapeHintDismissed(!(window.innerWidth < 768 && window.innerHeight > window.innerWidth));
         setGameState('FIGHTING');
+        setBattleRunId((runId) => runId + 1);
         changeSpeed(1500);
     };
 
@@ -1295,17 +1298,28 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         // Collect logs with an immediate fighter snapshot so the UI state advances with the log that explains it.
         pendingPlaybackItemsRef.current = [];
         let engine: BattleEngine | null = null;
+        const clonedFighters = cloneFighters(fightersRef.current);
         const batchedLog = (logEntry: BattleLogEntry) => {
-            fullLogsRef.current.push(logEntry);
-            pendingPlaybackItemsRef.current.push({
+            const playbackItem: BattlePlaybackItem = {
                 log: logEntry,
-                fighters: cloneFighters(engine?.fighters ?? fightersRef.current),
+                fighters: cloneFighters(engine?.fighters ?? clonedFighters),
                 turnCount: engine?.turnCount ?? battleTurnRef.current,
                 battleState: cloneBattleState(engine?.battleState ?? battleStateRef.current),
-            });
+            };
+            if (logEntry.displayInFeed === false) {
+                const previous = pendingPlaybackItemsRef.current[pendingPlaybackItemsRef.current.length - 1];
+                if (previous && previous.log.actionId === logEntry.actionId) {
+                    previous.fighters = playbackItem.fighters;
+                    previous.turnCount = playbackItem.turnCount;
+                    previous.battleState = playbackItem.battleState;
+                    return;
+                }
+                pendingPlaybackItemsRef.current.push(playbackItem);
+                return;
+            }
+            fullLogsRef.current.push(logEntry);
+            pendingPlaybackItemsRef.current.push(playbackItem);
         };
-
-        const clonedFighters = cloneFighters(fightersRef.current);
 
         engine = new BattleEngine(
             clonedFighters, batchedLog,
@@ -1357,6 +1371,10 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
             setFighters(playbackItem.fighters);
             setBattleTurn(playbackItem.turnCount);
             setBattleState(playbackItem.battleState);
+            if (playbackItem.log.displayInFeed === false) {
+                scheduleBattlePump(0);
+                return;
+            }
             appendDisplayLog(playbackItem.log);
             scheduleBattlePump(getLogPlaybackDelay(playbackItem.log, battleSpeedRef.current));
             return;
@@ -1500,60 +1518,75 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         };
 
         return (
-            <div className="absolute inset-0 z-30 flex min-h-0 flex-col overflow-y-auto bg-slate-900 p-4 md:p-6 animate-fade-in custom-scrollbar">
-                <div className="flex justify-between items-center mb-6 shrink-0">
-                    <h2 className="text-2xl font-bold text-white flex items-center gap-2">📊 赛后结算面板</h2>
-                    <button onClick={() => setShowMvp(false)} className="text-slate-400 hover:text-white p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition"><Icons.X size={20}/></button>
+            <div className="absolute inset-0 z-30 flex min-h-0 flex-col overflow-y-auto bg-[#080b0e] p-5 text-slate-100 animate-fade-in custom-scrollbar md:p-7">
+                <div className="mb-5 flex shrink-0 items-end justify-between border-b border-white/10 pb-4">
+                    <div>
+                        <span className="font-mono text-[11px] font-black text-cyan-300">AFTER ACTION REPORT</span>
+                        <h2 className="mt-1 text-2xl font-black text-white">赛后结算</h2>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setShowMvp(false)}
+                        className="grid h-9 w-9 place-items-center rounded border border-white/15 bg-[#11171d] text-slate-400 transition-colors hover:border-cyan-300 hover:text-white"
+                        title="关闭结算面板"
+                        aria-label="关闭结算面板"
+                    >
+                        <Icons.X size={18}/>
+                    </button>
                 </div>
 
                 {showPuruisaishiProphecy ? (
-                    <div className="mb-6 shrink-0 rounded-2xl border border-violet-400/40 bg-violet-950/40 p-5 text-center shadow-[0_0_24px_rgba(139,92,246,0.25)]">
-                        <div className="text-xs font-black uppercase tracking-[0.25em] text-violet-300">普瑞赛斯</div>
-                        <div className="mt-2 text-xl font-black text-white">“我会一直看着你，预言家”</div>
+                    <div className="mb-5 shrink-0 border border-violet-400/35 border-l-4 bg-[#11171d] p-4 text-center shadow-[0_0_22px_rgba(139,92,246,0.16)]">
+                        <div className="font-mono text-[11px] font-black text-violet-300">PRIESTESS // 普瑞赛斯</div>
+                        <div className="mt-1 text-lg font-black text-white">“我会一直看着你，预言家”</div>
                     </div>
                 ) : null}
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 shrink-0">
-                    <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 flex flex-col items-center shadow-xl relative overflow-hidden">
-                        <div className="absolute top-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>
-                        <span className="text-sm text-slate-400 mb-2 font-bold tracking-widest">⚔️ 输出 MVP</span>
-                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpDmg?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpDmg?.icon || '❓'}</div>
-                        <span className="font-black text-lg text-white mb-1">{mvpDmg?.name || '-'}</span>
-                        <span className="text-orange-400 font-mono font-bold">{mvpDmg?.stats.dmgDealt.toLocaleString() || 0} 伤害</span>
-                        {summonSummary(mvpDmg) && <span className="mt-1 text-center text-[11px] font-bold text-orange-200/80">{summonSummary(mvpDmg)}</span>}
+                <div className="mb-6 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-3">
+                    <div className="relative flex min-h-40 flex-col items-center overflow-hidden rounded border border-white/10 bg-[#11171d] p-4">
+                        <div className="absolute inset-x-0 top-0 h-[3px] bg-[#ff7a45]" />
+                        <span className="mb-2 text-sm font-black text-slate-400">输出 MVP</span>
+                        <div className={`mb-2 grid h-12 w-12 place-items-center rounded-sm border border-orange-300/50 bg-gradient-to-br text-2xl ${mvpDmg?.color || 'bg-slate-700'}`}>{mvpDmg?.icon || '❓'}</div>
+                        <span className="mb-1 max-w-full truncate text-lg font-black text-white">{mvpDmg?.name || '-'}</span>
+                        <span className="font-mono text-sm font-black text-orange-300">{mvpDmg?.stats.dmgDealt.toLocaleString() || 0} 伤害</span>
+                        {summonSummary(mvpDmg) && <span className="mt-1 max-w-full truncate text-center text-[11px] font-bold text-orange-200/80" title={summonSummary(mvpDmg) ?? undefined}>{summonSummary(mvpDmg)}</span>}
                     </div>
-                    <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 flex flex-col items-center shadow-xl relative overflow-hidden">
-                        <div className="absolute top-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-teal-400"></div>
-                        <span className="text-sm text-slate-400 mb-2 font-bold tracking-widest">🛡️ 承伤 MVP</span>
-                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpTank?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpTank?.icon || '❓'}</div>
-                        <span className="font-black text-lg text-white mb-1">{mvpTank?.name || '-'}</span>
-                        <span className="text-emerald-400 font-mono font-bold">{mvpTank?.stats.dmgTaken.toLocaleString() || 0} 承伤</span>
-                        {summonSummary(mvpTank) && <span className="mt-1 text-center text-[11px] font-bold text-emerald-200/80">{summonSummary(mvpTank)}</span>}
+                    <div className="relative flex min-h-40 flex-col items-center overflow-hidden rounded border border-white/10 bg-[#11171d] p-4">
+                        <div className="absolute inset-x-0 top-0 h-[3px] bg-[#46a8ff]" />
+                        <span className="mb-2 text-sm font-black text-slate-400">承伤 MVP</span>
+                        <div className={`mb-2 grid h-12 w-12 place-items-center rounded-sm border border-blue-300/50 bg-gradient-to-br text-2xl ${mvpTank?.color || 'bg-slate-700'}`}>{mvpTank?.icon || '❓'}</div>
+                        <span className="mb-1 max-w-full truncate text-lg font-black text-white">{mvpTank?.name || '-'}</span>
+                        <span className="font-mono text-sm font-black text-blue-300">{mvpTank?.stats.dmgTaken.toLocaleString() || 0} 承伤</span>
+                        {summonSummary(mvpTank) && <span className="mt-1 max-w-full truncate text-center text-[11px] font-bold text-blue-200/80" title={summonSummary(mvpTank) ?? undefined}>{summonSummary(mvpTank)}</span>}
                     </div>
-                    <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 flex flex-col items-center shadow-xl relative overflow-hidden">
-                        <div className="absolute top-0 w-full h-1 bg-gradient-to-r from-purple-500 to-pink-500"></div>
-                        <span className="text-sm text-slate-400 mb-2 font-bold tracking-widest">☠️ 击杀王</span>
-                        <div className={`w-14 h-14 rounded-full bg-gradient-to-br ${mvpKills?.color || 'bg-slate-600'} flex items-center justify-center text-3xl mb-3 shadow-lg border-2 border-slate-800`}>{mvpKills?.icon || '❓'}</div>
-                        <span className="font-black text-lg text-white mb-1">{mvpKills?.name || '-'}</span>
-                        <span className="text-pink-400 font-mono font-bold">{mvpKills?.stats.kills || 0} 击杀</span>
-                        {summonSummary(mvpKills) && <span className="mt-1 text-center text-[11px] font-bold text-pink-200/80">{summonSummary(mvpKills)}</span>}
+                    <div className="relative flex min-h-40 flex-col items-center overflow-hidden rounded border border-white/10 bg-[#11171d] p-4">
+                        <div className="absolute inset-x-0 top-0 h-[3px] bg-[#ffc84a]" />
+                        <span className="mb-2 text-sm font-black text-slate-400">击杀王</span>
+                        <div className={`mb-2 grid h-12 w-12 place-items-center rounded-sm border border-amber-300/50 bg-gradient-to-br text-2xl ${mvpKills?.color || 'bg-slate-700'}`}>{mvpKills?.icon || '❓'}</div>
+                        <span className="mb-1 max-w-full truncate text-lg font-black text-white">{mvpKills?.name || '-'}</span>
+                        <span className="font-mono text-sm font-black text-amber-300">{mvpKills?.stats.kills || 0} 击杀</span>
+                        {summonSummary(mvpKills) && <span className="mt-1 max-w-full truncate text-center text-[11px] font-bold text-amber-200/80" title={summonSummary(mvpKills) ?? undefined}>{summonSummary(mvpKills)}</span>}
                     </div>
                 </div>
 
-                <h3 className="text-lg font-bold text-white mb-4 shrink-0">📈 队伍输出统计</h3>
-                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-xl border border-slate-700/50 bg-slate-800/50 p-4 custom-scrollbar">
+                <div className="mb-3 flex shrink-0 items-end justify-between border-b border-white/10 pb-2">
+                    <div>
+                        <span className="font-mono text-[10px] font-black text-cyan-300">DAMAGE RANKING</span>
+                        <h3 className="text-lg font-black text-white">队伍输出统计</h3>
+                    </div>
+                    <span className="font-mono text-[11px] font-bold text-slate-500">{sortedByDmg.length} 名参战者</span>
+                </div>
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 custom-scrollbar">
                     {sortedByDmg.map(f => (
-                        <div key={f.id} className="flex items-center gap-3">
-                            <div className="w-32 min-w-0 text-right">
-                                <div className="truncate text-sm font-bold text-slate-300">{f.name}</div>
-                                {summonSummary(f) && <div className="truncate text-[10px] font-bold text-indigo-200/80">{summonSummary(f)}</div>}
+                        <div key={f.id} className="grid grid-cols-[minmax(76px,120px)_minmax(0,1fr)_auto] items-center gap-3 border-b border-white/5 pb-3">
+                            <div className="min-w-0">
+                                <div className="truncate text-sm font-black text-slate-200" title={f.name}>{f.name}</div>
+                                {summonSummary(f) && <div className="truncate text-[10px] font-bold text-cyan-100/65" title={summonSummary(f) ?? undefined}>{summonSummary(f)}</div>}
                             </div>
-                            <div className="flex-1 h-6 bg-slate-900 rounded-lg overflow-hidden relative border border-slate-800 shadow-inner">
-                                <div className={`h-full bg-gradient-to-r ${f.color} transition-all duration-1000 ease-out`} style={{ width: `${(f.stats.dmgDealt / maxDmg) * 100}%` }}></div>
-                                <span className="absolute inset-0 flex items-center px-3 text-xs font-mono font-bold text-white mix-blend-difference drop-shadow-md">
-                                    {f.stats.dmgDealt.toLocaleString()}
-                                </span>
+                            <div className="h-3 overflow-hidden bg-white/10">
+                                <div className={`h-full bg-gradient-to-r ${f.color} transition-[width] duration-1000 ease-out`} style={{ width: `${(f.stats.dmgDealt / maxDmg) * 100}%` }} />
                             </div>
+                            <span className="min-w-12 text-right font-mono text-sm font-black text-white">{f.stats.dmgDealt.toLocaleString()}</span>
                         </div>
                     ))}
                 </div>
@@ -1563,7 +1596,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
     return (
         <div data-game-state={gameState} className={`namerena-shell relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 font-sans text-slate-200 ${onExit ? 'namerena-integrated-shell' : ''}`}>
-            <header className={`namerena-game-header z-20 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 p-3 shadow-lg ${battleUiMode === 'next' && gameState !== 'SETUP' ? 'namerena-modern-header' : ''}`}>
+            <header className={`namerena-game-header z-20 flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 p-3 shadow-lg ${battleUiMode === 'next' ? 'namerena-modern-header' : ''}`}>
                 <div className="flex min-w-0 items-center gap-3">
                     {onExit ? (
                         <button
@@ -1577,12 +1610,12 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             <span className="namerena-exit-label">返回</span>
                         </button>
                     ) : null}
-                    <h1 className={`namerena-title truncate text-xl font-black ${battleUiMode === 'next' && gameState !== 'SETUP' ? 'text-white' : 'bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500'}`}>
+                    <h1 className={`namerena-title truncate text-xl font-black ${battleUiMode === 'next' ? 'text-white' : 'bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-500'}`}>
                         名字大乱斗 <span className="namerena-title-badge text-[10px] text-slate-500 border border-slate-700 px-1 rounded align-top">NameWar</span>
                     </h1>
                     {gameState !== 'SETUP' ? (
                         <div
-                            className="namerena-round-summary hidden shrink-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-2 py-1 font-mono text-[11px] font-bold text-slate-300 sm:flex"
+                            className="namerena-round-summary hidden shrink-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-2.5 py-1 font-mono text-xs font-bold text-slate-300 sm:flex"
                             title={`本局种子：${battleState.seed}\n当前大回合最多 ${roundProgress.maxActions} 次常规行动内完成`}
                         >
                             <span>全局 {battleTurn}</span>
@@ -1591,7 +1624,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                         </div>
                     ) : null}
                     {gameState !== 'SETUP' ? (
-                        <span className="namerena-alive-summary hidden shrink-0 items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-100">
+                        <span className="namerena-alive-summary hidden shrink-0 items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold text-emerald-100">
                             存活 <span className="font-mono text-emerald-300">{aliveCount}</span>
                         </span>
                     ) : null}
@@ -1607,11 +1640,11 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             <button
                                 type="button"
                                 onClick={() => setIsAutoScroll(!isAutoScroll)}
-                                className={`namerena-header-autoscroll hidden h-7 items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold transition-colors ${isAutoScroll ? 'border-indigo-500/30 bg-indigo-900/50 text-indigo-200' : 'border-slate-700 bg-slate-800 text-slate-400'}`}
-                                title={isAutoScroll ? '日志正在跟随最新行' : '日志已暂停自动滚动'}
+                                className={`namerena-header-autoscroll hidden h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-bold transition-colors ${isAutoScroll ? 'border-indigo-500/30 bg-indigo-900/50 text-indigo-200' : 'border-slate-700 bg-slate-800 text-slate-400'}`}
+                                title={isAutoScroll ? '暂停日志自动跟随' : '恢复日志自动跟随'}
                             >
                                 <Icons.BookOpen size={12} />
-                                <span>{isAutoScroll ? '跟随' : '暂停'}</span>
+                                <span>{isAutoScroll ? '暂停' : '跟随'}</span>
                             </button>
                         </>
                     )}
@@ -1620,7 +1653,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             type="button"
                             aria-pressed={battleUiMode === 'next'}
                             onClick={() => changeBattleUiMode('next')}
-                            className={`rounded-sm px-1.5 py-1 text-[10px] font-bold transition-colors ${battleUiMode === 'next' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                            className={`rounded-sm px-2 py-1 text-[11px] font-bold transition-colors ${battleUiMode === 'next' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400 hover:text-white'}`}
                             title="使用新战斗舞台"
                         >
                             新<span className="namerena-ui-mode-long">舞台</span>
@@ -1629,7 +1662,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             type="button"
                             aria-pressed={battleUiMode === 'classic'}
                             onClick={() => changeBattleUiMode('classic')}
-                            className={`rounded-sm px-1.5 py-1 text-[10px] font-bold transition-colors ${battleUiMode === 'classic' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`rounded-sm px-2 py-1 text-[11px] font-bold transition-colors ${battleUiMode === 'classic' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'}`}
                             title="切回经典战斗界面"
                         >
                             经典
@@ -1670,19 +1703,28 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
             <main className="namerena-battle-layout relative flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
                 {gameState === 'SETUP' ? (
-                    <div className="w-full h-full overflow-y-auto bg-slate-950/50">
-                        <div className="min-h-full flex items-center justify-center p-4 md:p-6">
-                            <div className="bg-slate-900 border border-slate-700 p-6 md:p-8 rounded-2xl max-w-2xl w-full shadow-2xl relative z-10 my-auto">
-                                <h2 className="text-3xl font-bold text-center mb-4 text-white">名字大乱斗 NameWar</h2>
-                                <p className="text-center text-slate-400 text-sm mb-6">
-                                    输入名字开始混战（支持组队：名字@战队名）。<br/>
-                                    特殊彩蛋：<span className="text-indigo-400">水人</span>、<span className="text-indigo-400">玄凝</span>、
-                                    <span className="text-cyan-400">屑</span>、
-                                    <span className="text-emerald-400">刺猬人</span>、<span className="text-pink-400">牢鳄</span>、
-                                    <span className="text-red-500">小汀</span>、<span className="text-purple-400">克蕾儿丝菲尔</span>、
-                                    <span className="text-teal-400">丝瓜uli</span>、<span className="text-pink-400 font-bold">兔卷卷</span>、<span className="text-yellow-500 font-bold">M1</span>
-                                </p>
-                                <textarea value={inputNames} onChange={(e) => setInputNames(e.target.value)} className="w-full h-32 md:h-48 bg-slate-950 border border-slate-800 rounded-xl p-4 text-slate-300 focus:ring-indigo-500 outline-none font-mono text-sm md:text-base shadow-inner" />
+                    <div className="h-full w-full overflow-y-auto bg-[#080b0e]">
+                        <div className="flex min-h-full items-center justify-center p-5 md:p-8">
+                            <section className="my-auto w-full max-w-3xl border-y border-white/10 py-6 md:py-8">
+                                <header className="mb-6 border-l-4 border-cyan-300 pl-4">
+                                    <span className="font-mono text-[11px] font-black text-cyan-300">MATCH CONFIGURATION</span>
+                                    <h2 className="mt-1 text-3xl font-black text-white">配置参战名单</h2>
+                                    <p className="mt-2 text-sm leading-6 text-slate-400">每行一个名字；组队时使用“名字@战队名”。</p>
+                                </header>
+
+                                <label htmlFor="namearena-roster" className="mb-2 block text-sm font-black text-slate-200">参战者</label>
+                                <textarea
+                                    id="namearena-roster"
+                                    value={inputNames}
+                                    onChange={(e) => setInputNames(e.target.value)}
+                                    placeholder={'玄凝\n小汀\n牢鳄@红队'}
+                                    className="h-48 w-full resize-y rounded border border-white/15 bg-[#0d1217] p-4 font-mono text-base leading-7 text-slate-200 outline-none transition-colors focus:border-cyan-300 md:h-56"
+                                />
+
+                                <div className="mt-3 text-xs leading-5 text-slate-500">
+                                    特殊角色：<span className="text-cyan-200">水人、玄凝、屑、刺猬人、牢鳄、小汀、克蕾儿丝菲尔、丝瓜uli、兔卷卷、M1、柚子、表情</span>
+                                </div>
+
                                 <button onClick={async () => {
                                     const { SeededRNG } = namerenaCore;
                                     if (!SeededRNG) return alert("核心组件未加载，请检查 1_core.js");
@@ -1698,10 +1740,10 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 	                                    }
 	                                    if(list.length<2) return alert("至少2人");
 	                                    launchBattle(list, forcePuruisaishi, Math.max(1, Math.floor(Date.now() % 2147483646)));
-                                }} className="mt-6 w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 shadow-lg">
+                                }} className="mt-6 flex min-h-12 w-full items-center justify-center gap-2 rounded border border-cyan-200 bg-cyan-300 px-5 py-3 text-base font-black text-slate-950 transition-colors hover:bg-cyan-200 active:bg-cyan-400 md:ml-auto md:w-auto">
                                     <Icons.Play size={20} /> 开始战斗
                                 </button>
-                            </div>
+                            </section>
                         </div>
                     </div>
                 ) : battleUiMode === 'next' ? (
@@ -1711,6 +1753,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             displayLogs={displayLogs}
                             battleTurn={battleTurn}
                             battleState={battleState}
+                            battleRunId={battleRunId}
                             roundProgress={roundProgress}
                             aliveCount={aliveCount}
                             gameState={gameState}
@@ -1731,21 +1774,21 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             mvpOverlay={showMvp ? renderMVP() : null}
                         />
                         {isFullLogModalOpen ? (
-                            <div className="absolute inset-0 z-[90] flex min-h-0 flex-col bg-slate-950/95 backdrop-blur-sm animate-fade-in">
-                                <div className="flex shrink-0 justify-between border-b border-slate-800 bg-slate-900 p-4 shadow-md">
+                            <div className="absolute inset-0 z-[90] flex min-h-0 flex-col bg-[#080b0e]/98 backdrop-blur-sm animate-fade-in">
+                                <div className="flex shrink-0 justify-between border-b border-white/10 bg-[#0d1217] p-4">
                                     <div className="flex items-center gap-3">
-                                        <h3 className="flex items-center gap-2 text-lg font-bold text-white"><Icons.BookOpen size={20} className="text-cyan-400"/> 完整战报复盘</h3>
-                                        <span className="rounded bg-slate-800 px-2 py-1 font-mono text-xs font-bold text-slate-400 shadow-inner">共 {fullLogSnapshot.length} 个动作片段</span>
+                                        <h3 className="flex items-center gap-2 text-lg font-black text-white"><Icons.BookOpen size={19} className="text-cyan-300"/> 完整战报复盘</h3>
+                                        <span className="rounded border border-white/10 bg-[#11171d] px-2 py-1 font-mono text-xs font-bold text-slate-400">共 {fullLogSnapshot.length} 条日志</span>
                                     </div>
-                                    <button onClick={() => setIsFullLogModalOpen(false)} className="rounded-full p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white" aria-label="关闭完整战报"><Icons.X size={24}/></button>
+                                    <button onClick={() => setIsFullLogModalOpen(false)} className="grid h-9 w-9 place-items-center rounded border border-white/10 bg-[#11171d] text-slate-400 transition-colors hover:border-cyan-300 hover:text-white" aria-label="关闭完整战报"><Icons.X size={19}/></button>
                                 </div>
-                                <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain bg-slate-950/80 p-6 font-mono text-base shadow-inner">
+                                <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#080b0e] p-5 font-mono text-base">
                                     {fullLogSnapshot.slice((logPage-1)*LOGS_PER_PAGE, logPage*LOGS_PER_PAGE).map(renderLogText)}
                                 </div>
-                                <div className="flex shrink-0 justify-center gap-6 border-t border-slate-800 bg-slate-900 p-4 shadow-[0_-10px_20px_rgba(0,0,0,0.2)]">
-                                    <button disabled={logPage <= 1} onClick={() => setLogPage((page) => page - 1)} className="rounded-lg border border-slate-700 bg-slate-800 px-6 py-2 text-sm font-bold text-slate-300 transition hover:bg-slate-700 disabled:opacity-30">上一页</button>
-                                    <span className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-1.5 font-mono text-sm font-bold text-slate-400">Page <span className="text-cyan-400">{logPage}</span> / {Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))}</span>
-                                    <button disabled={logPage >= Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))} onClick={() => setLogPage((page) => page + 1)} className="rounded-lg border border-slate-700 bg-slate-800 px-6 py-2 text-sm font-bold text-slate-300 transition hover:bg-slate-700 disabled:opacity-30">下一页</button>
+                                <div className="flex shrink-0 justify-center gap-4 border-t border-white/10 bg-[#0d1217] p-4">
+                                    <button disabled={logPage <= 1} onClick={() => setLogPage((page) => page - 1)} className="rounded border border-white/15 bg-[#11171d] px-6 py-2 text-sm font-bold text-slate-300 transition-colors hover:border-cyan-300 hover:text-white disabled:opacity-30">上一页</button>
+                                    <span className="rounded border border-white/10 bg-[#080b0e] px-4 py-1.5 font-mono text-sm font-bold text-slate-400">Page <span className="text-cyan-300">{logPage}</span> / {Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))}</span>
+                                    <button disabled={logPage >= Math.max(1, Math.ceil(fullLogSnapshot.length / LOGS_PER_PAGE))} onClick={() => setLogPage((page) => page + 1)} className="rounded border border-white/15 bg-[#11171d] px-6 py-2 text-sm font-bold text-slate-300 transition-colors hover:border-cyan-300 hover:text-white disabled:opacity-30">下一页</button>
                                 </div>
                             </div>
                         ) : null}
