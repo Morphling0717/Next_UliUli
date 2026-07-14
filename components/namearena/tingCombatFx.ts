@@ -1,5 +1,8 @@
 import type { TingCombatEffectCue, TingCombatMotion } from '@/lib/namearena/combatEffects';
-import { getCombatActorMotionTiming } from '@/lib/namearena/combatActorMotion';
+import {
+  getCombatActorMotionTiming,
+  TING_SELF_DESTRUCT_TIMELINE,
+} from '@/lib/namearena/combatActorMotion';
 
 export type CombatFxPoint = { x: number; y: number };
 
@@ -29,7 +32,7 @@ const MOTION_DURATION: Record<TingCombatMotion, number> = {
   wail: 1080,
   bone_guard: 1100,
   blood_rite: 1040,
-  detonation: 1320,
+  detonation: TING_SELF_DESTRUCT_TIMELINE.effectDurationMs,
   rage: 920,
   puppet_ritual: 1320,
 };
@@ -373,13 +376,16 @@ function drawDetonation(
   progress: number,
   viewport: { width: number; height: number },
 ): void {
+  const chargeEnd = (
+    TING_SELF_DESTRUCT_TIMELINE.explosionDelayMs - TING_SELF_DESTRUCT_TIMELINE.effectDelayMs
+  ) / TING_SELF_DESTRUCT_TIMELINE.effectDurationMs;
   context.globalCompositeOperation = 'source-over';
-  const screenPulse = Math.sin(clamp((progress - 0.22) / 0.62) * Math.PI);
+  const screenPulse = Math.sin(clamp((progress - chargeEnd) / 0.58) * Math.PI);
   context.fillStyle = `rgba(82, 0, 18, ${screenPulse * 0.2})`;
   context.fillRect(0, 0, viewport.width, viewport.height);
   context.globalCompositeOperation = 'lighter';
 
-  const charge = clamp(progress / 0.2);
+  const charge = clamp(progress / chargeEnd);
   const chargeFade = 1 - charge * 0.38;
   drawRing(context, fx.to, 94 - charge * 66, ARTERIAL, 5, chargeFade * 0.9);
   drawRing(context, fx.to, 64 - charge * 42, BONE, 2, chargeFade * 0.74);
@@ -391,7 +397,7 @@ function drawDetonation(
       y: fx.to.y + Math.sin(angle) * radius,
     }, 2.4 + noise(fx.seed, 190 + index) * 2.6, index % 4 === 0 ? BONE : ARTERIAL, chargeFade);
   }
-  const blast = clamp((progress - 0.2) / 0.58);
+  const blast = clamp((progress - chargeEnd) / 0.52);
   if (blast <= 0) return;
   const radius = easeOutCubic(blast) * Math.min(190, Math.max(112, Math.hypot(fx.to.x - fx.from.x, fx.to.y - fx.from.y) * 0.55));
   const fade = clamp((1 - progress) / 0.34);

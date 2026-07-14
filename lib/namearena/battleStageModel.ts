@@ -18,6 +18,28 @@ export type StageLogGroup = {
   logs: StageLogEntry[];
 };
 
+export type StageManualFocus = {
+  fighterId: string;
+  focusCycleKey: string;
+};
+
+export function getStageFocusCycleKey(
+  log: StageLogEntry | undefined,
+  battleRunId: number,
+  battleTurn: number,
+  actorId?: string,
+): string {
+  const actionKey = log?.actionId ?? `turn-${log?.turn ?? battleTurn}`;
+  return `run-${battleRunId}:${actionKey}:actor-${actorId ?? log?.actorId ?? 'global'}`;
+}
+
+export function resolveStageManualFocusId(
+  manualFocus: StageManualFocus | null,
+  focusCycleKey: string,
+): string | null {
+  return manualFocus?.focusCycleKey === focusCycleKey ? manualFocus.fighterId : null;
+}
+
 export function shouldRenderFighterOnStage(fighter: Fighter): boolean {
   const defeated = fighter.isDead || fighter.isDeadAnnounced || fighter.currentHp <= 0;
   return !defeated || (!fighter.isNpc && !fighter.isSummon);
@@ -29,6 +51,14 @@ export function getStageFighterImage(fighter?: Fighter): string | undefined {
     return getSummonCardArt(fighter.summonBaseName ?? fighter.name).avatarPath;
   }
   return undefined;
+}
+
+export function getStageFinisherImage(fighter?: Fighter): string | undefined {
+  if (fighter?.isSummon && fighter.isAdvancedSummon) {
+    const art = getSummonCardArt(fighter.summonBaseName ?? fighter.name);
+    return art.cutinPath ?? art.avatarPath;
+  }
+  return getStageFighterImage(fighter);
 }
 
 function ringPositions(total: number): StagePosition[] {
@@ -93,6 +123,16 @@ export function createStagePositions(total: number, width: number, height: numbe
       y: rows === 1 ? (top + bottom) / 2 : top + ((bottom - top) * row) / (rows - 1),
     };
   });
+}
+
+export function createVisibleStagePositionMap(
+  fighters: readonly Fighter[],
+  width: number,
+  height: number,
+): Map<string, StagePosition> {
+  const visibleFighters = fighters.filter(shouldRenderFighterOnStage);
+  const positions = createStagePositions(visibleFighters.length, width, height);
+  return new Map(visibleFighters.map((fighter, index) => [fighter.id, positions[index] ?? { x: 50, y: 47 }]));
 }
 
 export function buildStageLogGroups(

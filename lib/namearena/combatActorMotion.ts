@@ -25,10 +25,24 @@ export type CombatActorMotionPlan = CombatActorMotionTiming & {
   frames: CombatActorMotionFrame[];
 };
 
+export const TING_SELF_DESTRUCT_TIMELINE = {
+  actorHoldMs: 700,
+  actorArriveMs: 1180,
+  effectDelayMs: 1200,
+  explosionDelayMs: 1600,
+  effectDurationMs: 1320,
+  returnStartMs: 2880,
+  durationMs: 3200,
+} as const;
+
 const MOTION_TIMINGS: Record<CombatActorMotion, CombatActorMotionTiming> = {
   stationary: { durationMs: 0, effectDelayMs: 0, impactDelayMs: 0 },
   melee_lunge: { durationMs: 620, effectDelayMs: 180, impactDelayMs: 205 },
-  self_destruct_cling: { durationMs: 2100, effectDelayMs: 1420, impactDelayMs: 1660 },
+  self_destruct_cling: {
+    durationMs: TING_SELF_DESTRUCT_TIMELINE.durationMs,
+    effectDelayMs: TING_SELF_DESTRUCT_TIMELINE.effectDelayMs,
+    impactDelayMs: TING_SELF_DESTRUCT_TIMELINE.explosionDelayMs,
+  },
 };
 
 export function getCombatActorMotionTiming(
@@ -103,19 +117,25 @@ export function createCombatActorMotionPlan(
 
   const jitterX = -ny * 5;
   const jitterY = nx * 5;
+  const frameOffset = (milliseconds: number) => milliseconds / timing.durationMs;
   return {
     ...timing,
     destination,
     frames: [
       { offset: 0, x: 0, y: 0 },
-      { offset: 0.44, x: 0, y: 0 },
-      { offset: 0.6, x: destination.x, y: destination.y, easing: 'cubic-bezier(0.08, 0.76, 0.16, 1)' },
-      { offset: 0.66, x: destination.x, y: destination.y },
-      { offset: 0.7, x: destination.x + jitterX, y: destination.y + jitterY },
-      { offset: 0.74, x: destination.x - jitterX * 0.8, y: destination.y - jitterY * 0.8 },
-      { offset: 0.78, x: destination.x + jitterX * 0.55, y: destination.y + jitterY * 0.55 },
-      { offset: 0.84, x: destination.x, y: destination.y },
-      { offset: 0.88, x: destination.x, y: destination.y },
+      { offset: frameOffset(TING_SELF_DESTRUCT_TIMELINE.actorHoldMs), x: 0, y: 0 },
+      {
+        offset: frameOffset(TING_SELF_DESTRUCT_TIMELINE.actorArriveMs),
+        x: destination.x,
+        y: destination.y,
+        easing: 'cubic-bezier(0.08, 0.76, 0.16, 1)',
+      },
+      { offset: frameOffset(1320), x: destination.x, y: destination.y },
+      { offset: frameOffset(1420), x: destination.x + jitterX, y: destination.y + jitterY },
+      { offset: frameOffset(1510), x: destination.x - jitterX * 0.8, y: destination.y - jitterY * 0.8 },
+      { offset: frameOffset(1580), x: destination.x + jitterX * 0.55, y: destination.y + jitterY * 0.55 },
+      { offset: frameOffset(TING_SELF_DESTRUCT_TIMELINE.explosionDelayMs), x: destination.x, y: destination.y },
+      { offset: frameOffset(TING_SELF_DESTRUCT_TIMELINE.returnStartMs), x: destination.x, y: destination.y },
       { offset: 1, x: 0, y: 0, easing: 'cubic-bezier(0.28, 0.02, 0.36, 1)' },
     ],
   };

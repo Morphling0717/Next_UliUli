@@ -8,7 +8,10 @@ import {
 } from '../../../lib/namearena/battleState';
 import { grantStatus } from '../../../lib/namearena/defenseStatus';
 import { cloneJobDefinition } from '../../../lib/namearena/combatState';
-import { createCombatActorMotionPlan } from '../../../lib/namearena/combatActorMotion';
+import {
+  createCombatActorMotionPlan,
+  TING_SELF_DESTRUCT_TIMELINE,
+} from '../../../lib/namearena/combatActorMotion';
 import { resolveCombatEffect } from '../../../lib/namearena/combatEffects';
 import {
   applyPermanentStatBuff,
@@ -25,7 +28,11 @@ import {
 import {
   buildStageLogGroups,
   createStagePositions,
+  createVisibleStagePositionMap,
+  getStageFinisherImage,
   getStageFighterImage,
+  getStageFocusCycleKey,
+  resolveStageManualFocusId,
   shouldRenderFighterOnStage,
 } from '../../../lib/namearena/battleStageModel';
 import {
@@ -167,6 +174,40 @@ export function runArchitectureCases(): string[] {
   }
 
   {
+    const firstAction = {
+      id: 'focus-log-a',
+      actionId: 'focus-action-a',
+      actorId: 'actor-a',
+      type: 'skill' as const,
+      text: '行动者甲发动技能。',
+    };
+    const sameActionFollowUp = {
+      ...firstAction,
+      id: 'focus-log-a-2',
+      text: '行动者甲结算技能。',
+    };
+    const nextAction = {
+      ...firstAction,
+      id: 'focus-log-b',
+      actionId: 'focus-action-b',
+      actorId: 'actor-b',
+      text: '行动者乙发动技能。',
+    };
+    const firstFocusKey = getStageFocusCycleKey(firstAction, 7, 11, firstAction.actorId);
+    const followUpFocusKey = getStageFocusCycleKey(sameActionFollowUp, 7, 11, sameActionFollowUp.actorId);
+    const nextFocusKey = getStageFocusCycleKey(nextAction, 7, 12, nextAction.actorId);
+    const manualFocus = { fighterId: 'inspected-fighter', focusCycleKey: firstFocusKey };
+    assert(firstFocusKey === followUpFocusKey, 'Logs from one actor action should share a detail-card focus cycle');
+    assert(resolveStageManualFocusId(manualFocus, followUpFocusKey) === 'inspected-fighter', 'Manual inspection should remain available during the current action');
+    assert(resolveStageManualFocusId(manualFocus, nextFocusKey) === null, 'Manual inspection must expire when the next actor action starts');
+    assert(
+      getStageFocusCycleKey(firstAction, 8, 11, firstAction.actorId) !== firstFocusKey,
+      'A new battle run must never restore a stale manual inspection',
+    );
+    cases.push('stage detail focus is temporary and resumes actor-following on the next action');
+  }
+
+  {
     const actorRect = { left: 100, top: 120, width: 160, height: 64 };
     const targetRect = { left: 700, top: 360, width: 160, height: 64 };
     const lunge = createCombatActorMotionPlan('melee_lunge', actorRect, targetRect);
@@ -177,6 +218,29 @@ export function runArchitectureCases(): string[] {
       const clingDistance = Math.hypot(cling.destination.x, cling.destination.y);
       assert(clingDistance > lungeDistance, 'Self-destruction should move closer to the target than an ordinary slash');
       assert(cling.effectDelayMs > lunge.effectDelayMs, 'Self-destruction should reserve time for its cut-in before charging');
+      const firstDestinationFrame = cling.frames.find((frame) => (
+        Math.abs(frame.x - cling.destination.x) < 0.01 && Math.abs(frame.y - cling.destination.y) < 0.01
+      ));
+      const destinationFrames = cling.frames.filter((frame) => (
+        Math.abs(frame.x - cling.destination.x) < 0.01 && Math.abs(frame.y - cling.destination.y) < 0.01
+      ));
+      const finalDestinationFrame = destinationFrames.at(-1);
+      assert(
+        Math.round((firstDestinationFrame?.offset ?? 0) * cling.durationMs) === TING_SELF_DESTRUCT_TIMELINE.actorArriveMs,
+        'Ting must reach the target before self-destruction charging begins',
+      );
+      assert(
+        cling.effectDelayMs >= TING_SELF_DESTRUCT_TIMELINE.actorArriveMs,
+        'Self-destruction charging must not begin before Ting reaches the target',
+      );
+      assert(
+        Math.round((finalDestinationFrame?.offset ?? 0) * cling.durationMs) >= cling.effectDelayMs + TING_SELF_DESTRUCT_TIMELINE.effectDurationMs,
+        'Ting must stay attached until every detonation frame has finished',
+      );
+      assert(
+        TING_SELF_DESTRUCT_TIMELINE.returnStartMs < cling.durationMs,
+        'Self-destruction must reserve a final return-to-origin phase',
+      );
       assert(lunge.frames.at(-1)?.x === 0 && lunge.frames.at(-1)?.y === 0, 'Melee movement must return to the layout origin');
       assert(cling.frames.at(-1)?.x === 0 && cling.frames.at(-1)?.y === 0, 'Self-destruction movement must return to the layout origin');
     }
@@ -339,6 +403,19 @@ export function runArchitectureCases(): string[] {
     assert(new Set(narrowLandscapePositions.map((position) => position.y.toFixed(2))).size === 4, 'A narrow landscape stage should arrange 12 compact units in four rows');
     const narrowDensePositions = createStagePositions(18, 355, 340);
     assert(new Set(narrowDensePositions.map((position) => position.y.toFixed(2))).size === 5, 'A narrow landscape stage should arrange 18 dense units in five rows');
+
+    const visiblePlayers = Array.from({ length: 13 }, (_, index) => makeFighter(`可见玩家${index + 1}@站位`));
+    const retiredSummons = Array.from({ length: 24 }, (_, index) => {
+      const fighter = makeFighter(`退场召唤物${index + 1}@站位`);
+      fighter.isSummon = true;
+      fighter.isDead = true;
+      fighter.currentHp = 0;
+      return fighter;
+    });
+    const visiblePositionMap = createVisibleStagePositionMap([...visiblePlayers, ...retiredSummons], 1200, 720);
+    assert(visiblePositionMap.size === visiblePlayers.length, 'Retired NPCs and summons must not reserve invisible battlefield slots');
+    assert(retiredSummons.every((fighter) => !visiblePositionMap.has(fighter.id)), 'Every retired summon should be absent from the visible position map');
+    assert(new Set([...visiblePositionMap.values()].map((position) => position.y.toFixed(2))).size > 6, 'Visible fighters should retain a full multi-ring layout even when battle history contains many retired summons');
     cases.push('stage retirement, log causality, and crowded layouts are deterministic');
   }
 
@@ -365,6 +442,8 @@ export function runArchitectureCases(): string[] {
       summon.isSummon = true;
       summon.isAdvancedSummon = true;
       assert(getStageFighterImage(summon) === art.avatarPath, `${name} should replace its battlefield emoji with the supplied avatar`);
+      assert(getStageFinisherImage(summon) === art.cutinPath, `${name} finishers should use the supplied transparent cut-in instead of the battlefield avatar`);
+      assert(getStageFinisherImage(summon) !== getStageFighterImage(summon), `${name} battlefield and finisher art must stay as separate assets`);
     });
     EXODIA_STAR_ORDER.forEach((name) => {
       const art = getSummonCardArt(name);

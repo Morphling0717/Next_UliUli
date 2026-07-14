@@ -22,11 +22,14 @@ import {
 } from "@/lib/namearena/combatEffects";
 import {
   buildStageLogGroups,
-  createStagePositions,
+  createVisibleStagePositionMap,
+  getStageFinisherImage,
   getStageFighterImage,
+  getStageFocusCycleKey,
+  resolveStageManualFocusId,
   shouldRenderFighterOnStage,
+  type StageManualFocus,
   type StageLogGroup,
-  type StagePosition,
 } from "@/lib/namearena/battleStageModel";
 import {
   EXODIA_STAR_ORDER,
@@ -485,7 +488,7 @@ export function NameArenaBattleStage({
   getResourceBadges,
   mvpOverlay,
 }: NameArenaBattleStageProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [manualFocus, setManualFocus] = useState<StageManualFocus | null>(null);
   const [popups, setPopups] = useState<Popup[]>([]);
   const [cinematic, setCinematic] = useState<Cinematic | null>(null);
   const [impactToken, setImpactToken] = useState(0);
@@ -523,18 +526,12 @@ export function NameArenaBattleStage({
   const developmentTingPreviewFrameRef = useRef(0);
 
   const stageFighters = useMemo(() => fighters.filter(shouldRenderFighterOnStage), [fighters]);
-  const layoutCapacity = fighters.length <= 10 ? 10 : Math.ceil(fighters.length / 6) * 6;
-  const densityPopulation = fighters.length;
+  const densityPopulation = stageFighters.length;
   const stageDensity = densityPopulation > 18 ? "crowded" : densityPopulation > 12 ? "dense" : densityPopulation > 6 ? "compact" : "normal";
-  const positions = useMemo(
-    () => createStagePositions(layoutCapacity, arenaSize.width, arenaSize.height),
-    [arenaSize.height, arenaSize.width, layoutCapacity],
+  const positionById = useMemo(
+    () => createVisibleStagePositionMap(fighters, arenaSize.width, arenaSize.height),
+    [arenaSize.height, arenaSize.width, fighters],
   );
-  const positionById = useMemo(() => {
-    const map = new Map<string, StagePosition>();
-    fighters.forEach((fighter, index) => map.set(fighter.id, positions[index] ?? { x: 50, y: 47 }));
-    return map;
-  }, [fighters, positions]);
   const fighterById = useMemo(() => new Map(fighters.map((fighter) => [fighter.id, fighter])), [fighters]);
   const stageFighterById = useMemo(() => new Map(stageFighters.map((fighter) => [fighter.id, fighter])), [stageFighters]);
   const logGroups = useMemo(() => buildStageLogGroups(displayLogs), [displayLogs]);
@@ -554,6 +551,8 @@ export function NameArenaBattleStage({
       .map((fighter) => fighter.id);
     return [...new Set(explicitTargets.length > 0 ? explicitTargets : hitTargets.length > 0 ? hitTargets : namedTargets)];
   }, [activeActorId, activeLog, fighterById, fighters]);
+  const focusCycleKey = getStageFocusCycleKey(activeLog, battleRunId, battleTurn, activeActorId);
+  const selectedId = resolveStageManualFocusId(manualFocus, focusCycleKey);
   const selectedFighter = stageFighterById.get(selectedId ?? "")
     ?? (actor && stageFighterById.has(actor.id) ? actor : undefined)
     ?? stageFighters.find((fighter) => !fighter.isDead)
@@ -562,6 +561,14 @@ export function NameArenaBattleStage({
   const selectedResources = selectedFighter ? getResourceBadges(selectedFighter) : [];
   const displayOrder = stageFighters;
   const shouldPreloadSummonAssets = fighters.some((fighter) => fighter.isGacha || fighter.isAdvancedSummon);
+
+  const selectFighterForCurrentAction = useCallback((fighterId: string) => {
+    setManualFocus((current) => (
+      current?.fighterId === fighterId && current.focusCycleKey === focusCycleKey
+        ? null
+        : { fighterId, focusCycleKey }
+    ));
+  }, [focusCycleKey]);
 
   useEffect(() => {
     if (!shouldPreloadSummonAssets) return;
@@ -744,6 +751,19 @@ export function NameArenaBattleStage({
     animation.oncancel = release;
   }, [prefersReducedMotion]);
 
+  const runAfterSelfDestructReturn = useCallback((fighterId: string, callback: () => void) => {
+    const runtime = fighterMotionAnimationsRef.current.get(fighterId);
+    if (!runtime || runtime.node.dataset.combatMotion !== "self_destruct_cling") {
+      callback();
+      return;
+    }
+    void runtime.animation.finished
+      .catch(() => undefined)
+      .then(() => {
+        if (runtime.node.isConnected) callback();
+      });
+  }, []);
+
   const spawnBurst = useCallback((fighterId: string, color: string, amount = 30, force = 4.5) => {
     const center = getNodeCenter(fighterId);
     if (!center) return;
@@ -811,8 +831,27 @@ export function NameArenaBattleStage({
           : 42;
     const horizontalMargin = Math.min(desiredMargin, arena.clientWidth * 0.18);
     const verticalMargin = Math.min(desiredMargin, arena.clientHeight * 0.18);
+    const actorNode = nodeRefs.current.get(actorId);
     const destinations = effectTargetIds
-      .map((targetId) => getNodeCenter(targetId))
+      .map((targetId) => {
+        const targetCenter = getNodeCenter(targetId);
+        const targetNode = nodeRefs.current.get(targetId);
+        if (
+          !targetCenter ||
+          cue.actorMotion !== "self_destruct_cling" ||
+          prefersReducedMotion ||
+          !actorNode ||
+          !targetNode
+        ) return targetCenter;
+        const plan = createCombatActorMotionPlan(
+          cue.actorMotion,
+          actorNode.getBoundingClientRect(),
+          targetNode.getBoundingClientRect(),
+        );
+        return plan
+          ? { x: from.x + plan.destination.x, y: from.y + plan.destination.y }
+          : targetCenter;
+      })
       .filter((point): point is { x: number; y: number } => Boolean(point))
       .map((point) => ({
         x: Math.max(horizontalMargin, Math.min(arena.clientWidth - horizontalMargin, point.x)),
@@ -1037,17 +1076,21 @@ export function NameArenaBattleStage({
 
     previousSnapshotRef.current = next;
     if (created.length === 0) return;
-    requestAnimationFrame(() => setPopups((current) => [...current, ...created].slice(-16)));
     created.forEach((popup) => {
-      const fighter = fighterById.get(popup.fighterId);
-      spawnBurst(popup.fighterId, popup.kind === "heal" ? "#7be36a" : popup.kind.includes("shield") ? "#46a8ff" : getFighterAccent(fighter), popup.kind === "defeat" ? 70 : 34, popup.kind === "defeat" ? 7 : 4.5);
-      const timer = window.setTimeout(() => {
-        popupTimersRef.current.delete(timer);
-        setPopups((current) => current.filter((item) => item.id !== popup.id));
-      }, prefersReducedMotion ? 40 : popup.kind === "defeat" ? 1450 : 1100);
-      popupTimersRef.current.add(timer);
+      const present = () => requestAnimationFrame(() => {
+        const fighter = fighterById.get(popup.fighterId);
+        setPopups((current) => [...current, popup].slice(-16));
+        spawnBurst(popup.fighterId, popup.kind === "heal" ? "#7be36a" : popup.kind.includes("shield") ? "#46a8ff" : getFighterAccent(fighter), popup.kind === "defeat" ? 70 : 34, popup.kind === "defeat" ? 7 : 4.5);
+        const timer = window.setTimeout(() => {
+          popupTimersRef.current.delete(timer);
+          setPopups((current) => current.filter((item) => item.id !== popup.id));
+        }, prefersReducedMotion ? 40 : popup.kind === "defeat" ? 1450 : 1100);
+        popupTimersRef.current.add(timer);
+      });
+      if (popup.kind === "heal") runAfterSelfDestructReturn(popup.fighterId, present);
+      else present();
     });
-  }, [fighterById, fighters, prefersReducedMotion, spawnBurst]);
+  }, [fighterById, fighters, prefersReducedMotion, runAfterSelfDestructReturn, spawnBurst]);
 
   useEffect(() => {
     if (!activeLog || mobileView === "logs" || developmentSummonPreviewRef.current || developmentTingPreviewRef.current) return;
@@ -1110,7 +1153,11 @@ export function NameArenaBattleStage({
       });
     } else if (activeLog.type === "heal" || activeLog.type === "buff") {
       const beneficiary = namedTargets[0] ?? currentActor?.id;
-      if (beneficiary) requestAnimationFrame(() => spawnBurst(beneficiary, activeLog.type === "heal" ? "#7be36a" : accent, 36, 4));
+      if (beneficiary) {
+        const present = () => requestAnimationFrame(() => spawnBurst(beneficiary, activeLog.type === "heal" ? "#7be36a" : accent, 36, 4));
+        if (activeLog.type === "heal") runAfterSelfDestructReturn(beneficiary, present);
+        else present();
+      }
     }
 
     const visualCue = activeLog.visualCue;
@@ -1140,7 +1187,7 @@ export function NameArenaBattleStage({
           name: finisher?.name ?? "终结技",
           kicker: `FINISHER // TURN ${activeLog.turn ?? battleTurn}`,
           title: getActionTitle(activeLog),
-          image: getStageFighterImage(finisher),
+          image: getStageFinisherImage(finisher),
           theme: combatEffect?.theme === "ting" ? "ting_blood" : undefined,
           targetName: targetIds[0] ? fighterById.get(targetIds[0])?.name : undefined,
         };
@@ -1156,7 +1203,7 @@ export function NameArenaBattleStage({
         glitchTimerRef.current = null;
       }, prefersReducedMotion ? 40 : 900);
     }
-  }, [activeLog, actor, battleTurn, clearFighterMotions, clearImpactTimers, fighterById, fighters, mobileView, playCinematic, playCombatImpact, playTingActorMotion, prefersReducedMotion, spawnBeam, spawnBurst, spawnTingEffect, targetIds]);
+  }, [activeLog, actor, battleTurn, clearFighterMotions, clearImpactTimers, fighterById, fighters, mobileView, playCinematic, playCombatImpact, playTingActorMotion, prefersReducedMotion, runAfterSelfDestructReturn, spawnBeam, spawnBurst, spawnTingEffect, targetIds]);
 
   useEffect(() => {
     if (!isAutoScroll) return;
@@ -1204,7 +1251,12 @@ export function NameArenaBattleStage({
       data-mobile-view={mobileView}
       data-density={stageDensity}
     >
-      <section ref={arenaRef} className={styles.arena} aria-label="名字大乱斗新战场">
+      <section
+        ref={arenaRef}
+        className={styles.arena}
+        aria-label="名字大乱斗新战场"
+        data-active-actor-id={activeActorId ?? ""}
+      >
         <div className={styles.backdrop} aria-hidden="true" />
         <div className={styles.grid} aria-hidden="true" />
         <div className={styles.vignette} aria-hidden="true" />
@@ -1227,7 +1279,13 @@ export function NameArenaBattleStage({
           <small>{roundProgress.acted}/{roundProgress.total}</small>
         </div>
 
-        <div className={styles.fighterLayer}>
+        <div
+          className={styles.fighterLayer}
+          data-stage-empty-surface="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setManualFocus(null);
+          }}
+        >
           {stageFighters.map((fighter) => {
             const position = positionById.get(fighter.id) ?? { x: 50, y: 47 };
             const accent = getFighterAccent(fighter);
@@ -1252,7 +1310,7 @@ export function NameArenaBattleStage({
                 type="button"
                 className={`${styles.fighter} ${isActive ? styles.active : ""} ${isTarget ? styles.target : ""} ${fighter.isHit ? styles.hit : ""} ${fighter.isDead ? styles.dead : ""} ${isDimmed ? styles.dimmed : ""} ${selectedFighter?.id === fighter.id ? styles.selected : ""}`}
                 style={{ "--x": `${position.x}%`, "--y": `${position.y}%`, "--accent": accent } as CSSProperties}
-                onClick={() => setSelectedId(fighter.id)}
+                onClick={() => selectFighterForCurrentAction(fighter.id)}
                 aria-label={`查看 ${fighter.displayName ?? fighter.name} 状态`}
                 aria-pressed={selectedFighter?.id === fighter.id}
               >
@@ -1298,7 +1356,13 @@ export function NameArenaBattleStage({
         </div>
 
         {selectedFighter ? (
-          <div className={styles.dossier} style={{ "--selected-accent": selectedAccent } as CSSProperties}>
+          <div
+            className={styles.dossier}
+            style={{ "--selected-accent": selectedAccent } as CSSProperties}
+            data-focus-mode={selectedId ? "manual" : "actor"}
+            data-focus-cycle={focusCycleKey}
+            data-focused-fighter-id={selectedFighter.id}
+          >
             <i />
             <div className={styles.dossierBody}>
               <div className={styles.dossierHeading}>
@@ -1442,7 +1506,7 @@ export function NameArenaBattleStage({
                   title={fighter.displayName ?? fighter.name}
                   aria-label={`聚焦 ${fighter.displayName ?? fighter.name}`}
                   onClick={() => {
-                    setSelectedId(fighter.id);
+                    selectFighterForCurrentAction(fighter.id);
                     setMobileView("arena");
                   }}
                   className={fighter.id === activeActorId ? styles.pulseActive : ""}
