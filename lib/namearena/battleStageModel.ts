@@ -47,7 +47,7 @@ export function shouldRenderFighterOnStage(fighter: Fighter): boolean {
 
 export function getStageFighterImage(fighter?: Fighter): string | undefined {
   if (fighter?.isSigua) return '/Model.webp';
-  if (fighter?.isSummon && fighter.isAdvancedSummon) {
+  if (fighter?.isSummon) {
     return getSummonCardArt(fighter.summonBaseName ?? fighter.name).avatarPath;
   }
   return undefined;

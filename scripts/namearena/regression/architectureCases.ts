@@ -431,6 +431,18 @@ export function runArchitectureCases(): string[] {
       assert(art.expectedPath.endsWith('.webp'), `${name} should expose its future card-art path`);
     });
     assert(new Set(SUMMON_CARD_ART_SLOTS.map((entry) => entry.expectedPath)).size === SUMMON_CARD_ART_SLOTS.length, 'Every summon and sealed component should own a distinct card-art path');
+    ['护主栗子球', '钟离', 'Saber', '萨姆', '巴哈姆特', '伊莫库', '史尔特尔', '史瓦罗'].forEach((name) => {
+      const art = getSummonCardArt(name);
+      assert(art.imagePath === art.expectedPath, `${name} should load its final ordinary summon card`);
+      assert(art.avatarPath?.endsWith('.webp'), `${name} should load a battlefield avatar`);
+      assert(art.cutinPath === undefined, `${name} must not receive an advanced-summon cut-in`);
+      const summon = makeFighter(`${name}@普通召唤头像测试`);
+      summon.name = name;
+      summon.summonBaseName = name;
+      summon.isSummon = true;
+      summon.isAdvancedSummon = false;
+      assert(getStageFighterImage(summon) === art.avatarPath, `${name} should replace its battlefield emoji with the supplied avatar`);
+    });
     ['青眼白龙', '青眼究极龙', '翼神龙', '黑暗大法师'].forEach((name) => {
       const art = getSummonCardArt(name);
       assert(art.imagePath === art.expectedPath, `${name} should load its final card image`);

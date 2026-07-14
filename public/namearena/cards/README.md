@@ -1,6 +1,6 @@
 # 名字大乱斗卡图槽位
 
-所有卡图使用约 `1:1.458` 的竖版比例并以 WebP 提供。已有正式资源的卡会完整显示原始卡面；尚未提供的普通召唤物继续显示独立占位卡。
+所有卡图使用约 `1:1.458` 的竖版比例并以 WebP 提供。已有正式资源的卡会完整显示原始卡面；尚未提供的召唤物继续显示独立占位卡。
 
 ## 召唤物
 
@@ -17,6 +17,10 @@
 - `summons/blue-eyes-ultimate-dragon.webp` - 青眼究极龙
 - `summons/winged-dragon-of-ra.webp` - 翼神龙
 - `summons/exodia-the-forbidden-one.webp` - 黑暗大法师
+
+## 战场头像
+
+护主栗子球、钟离、Saber、萨姆、巴哈姆特、伊莫库、史尔特尔和史瓦罗均使用 `avatar/<key>.webp` 替换战场 emoji。普通召唤物不配置 `monster_cutin`，因此不会误用高级召唤物的必杀立绘。
 
 ## 封印组件
 
