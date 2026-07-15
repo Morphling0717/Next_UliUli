@@ -1101,7 +1101,7 @@ type NameArenaGameProps = {
 };
 
 export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
-    const [inputNames, setInputNames] = useState('水人\n玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep');
+    const [inputNames, setInputNames] = useState('玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep\n柚子\n表情\n鸮');
     const [battleView, setBattleView] = useState<BattlePlaybackView<BattleLogEntry>>(
         () => createBattlePlaybackView<BattleLogEntry>(createBattleState(1, 0)),
     );
