@@ -6,7 +6,9 @@ import {
   isStatusType,
 } from './statusRules';
 import type {
+  BattleCombatEffectId,
   BattleEngineData,
+  BattleLogMetadata,
   DamageApplicationOptions,
   Fighter,
   GachaEntry,
@@ -28,7 +30,7 @@ const EXODIA_NORMAL_PIECE_CHANCES = [0.055, 0.11, 0.21, 0.38, 0.62] as const;
 const EXODIA_SMALL_PITY_PIECE_CHANCES = [0.09, 0.18, 0.36, 0.68, 1] as const;
 const EXODIA_MAJOR_PITY_PIECE_CHANCES = [0, 0.16, 0.46, 0.86, 1] as const;
 
-type LogFn = (type: string, text: string) => void;
+type LogFn = (type: string, text: string, metadata?: BattleLogMetadata) => void;
 
 type LuckDrawRuntime = {
   fighters?: Fighter[];
@@ -44,6 +46,44 @@ type SummonLifestealRuntime = {
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: LogFn;
 };
+
+export type GachaEffectOptions = {
+  source?: Fighter;
+  targets?: Fighter[];
+  links?: Array<{ sourceId: string; targetId: string }>;
+  label?: string;
+  count?: number;
+};
+
+export function gachaEffectMetadata(
+  effectId: BattleCombatEffectId,
+  source: Fighter,
+  targets: Fighter[] = [],
+  options: Omit<GachaEffectOptions, 'source' | 'targets'> = {},
+): BattleLogMetadata {
+  const targetIds = targets.map((target) => target.id);
+  return {
+    targetIds,
+    visualCue: {
+      kind: 'combat_fx',
+      effectId,
+      sourceId: source.id,
+      targetIds,
+      ...options,
+    },
+  };
+}
+
+function logGachaEffect(
+  ctx: SkillContext,
+  type: string,
+  text: string,
+  effectId: BattleCombatEffectId,
+  options: GachaEffectOptions = {},
+): void {
+  const { source = ctx.user, targets = [], ...cueOptions } = options;
+  ctx.log(type, text, gachaEffectMetadata(effectId, source, targets, cueOptions));
+}
 
 function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
   grantStatus(fighter, type, duration, sourceId);
@@ -222,7 +262,11 @@ export function grantGachaLuck(
     : after >= 3
       ? '下一次命运抽卡会强化'
       : `当前欧气 ${after}/${GACHA_LUCK_MAX}`;
-  log('buff', `🍀 ${fighter.name} 因${reason}积攒欧气 +${gained}！（${hint}）`);
+  log(
+    'buff',
+    `🍀 ${fighter.name} 因${reason}积攒欧气 +${gained}！（${hint}）`,
+    gachaEffectMetadata('gacha_luck_gain', fighter, [fighter], { count: after }),
+  );
   return gained;
 }
 
@@ -244,7 +288,11 @@ export function activateGachaSummonLifesteal(
   if (!isLuckEmperor(user)) return;
   user.gachaSummonLifestealPct = GACHA_SUMMON_LIFESTEAL_PCT;
   refreshStatus(user, GACHA_SUMMON_LIFESTEAL_STATUS, turns);
-  log('buff', `🧛 ${user.name} 抽到吸血牌！接下来 ${turns} 回合内，召唤物造成伤害的 ${Math.floor(GACHA_SUMMON_LIFESTEAL_PCT * 100)}% 会转化为治疗灌回本体！`);
+  log(
+    'buff',
+    `🧛 ${user.name} 抽到吸血牌！接下来 ${turns} 回合内，召唤物造成伤害的 ${Math.floor(GACHA_SUMMON_LIFESTEAL_PCT * 100)}% 会转化为治疗灌回本体！`,
+    gachaEffectMetadata('gacha_summon_lifesteal', user, [user]),
+  );
 }
 
 export function applyGachaSummonLifesteal(
@@ -270,9 +318,17 @@ export function applyGachaSummonLifesteal(
   const healPct = summoner.gachaSummonLifestealPct ?? GACHA_SUMMON_LIFESTEAL_PCT;
   const healed = healFighter(summoner, Math.floor(healBase * healPct));
   if (healed > 0) {
-    runtime.log('heal', `🧛 吸血牌回流！${attacker.name} 的伤害为 ${summoner.name} 恢复了 ${healed} 点生命！`);
+    runtime.log(
+      'heal',
+      `🧛 吸血牌回流！${attacker.name} 的伤害为 ${summoner.name} 恢复了 ${healed} 点生命！`,
+      gachaEffectMetadata('gacha_lifesteal_proc', attacker, [summoner]),
+    );
   } else {
-    runtime.log('info', `🧛 吸血牌回流触发，但 ${summoner.name} 生命已满，治疗溢出！`);
+    runtime.log(
+      'info',
+      `🧛 吸血牌回流触发，但 ${summoner.name} 生命已满，治疗溢出！`,
+      gachaEffectMetadata('gacha_lifesteal_proc', attacker, [summoner]),
+    );
   }
 }
 
@@ -290,7 +346,11 @@ export function triggerGachaDeathSave(
   refreshStatus(fighter, 'BKB', 2, 'gacha_death_charm');
   refreshStatus(fighter, 'REGEN', 3);
   syncHpPct(fighter);
-  log('buff', `👑 【欧皇护符】${fighter.name} 在致死瞬间强行改命，清除异常并锁住了 ${fighter.currentHp} 点生命！`);
+  log(
+    'buff',
+    `👑 【欧皇护符】${fighter.name} 在致死瞬间强行改命，清除异常并锁住了 ${fighter.currentHp} 点生命！`,
+    gachaEffectMetadata('gacha_death_save', fighter, [fighter]),
+  );
   grantGachaLuck(fighter, 3, log, '死里逃生');
   return true;
 }
@@ -384,7 +444,13 @@ function commandSummon(ctx: SkillContext, summon: Fighter, label: string): void 
     return;
   }
   const target = enemies[Math.floor(Math.random() * enemies.length)];
-  ctx.log('skill', `🎴 【${label}】${ctx.user.name} 命令 ${summon.name} 立刻压制 ${target.name}！`);
+  logGachaEffect(
+    ctx,
+    'skill',
+    `🎴 【${label}】${ctx.user.name} 命令 ${summon.name} 立刻压制 ${target.name}！`,
+    'gacha_summon_command',
+    { targets: [summon], label },
+  );
   ctx.executeSkillAction(null, summon, target, ctx.triggerDepth + 1);
 }
 
@@ -410,7 +476,13 @@ function grantExodiaPiece(ctx: SkillContext): void {
   const piece = missing[Math.floor(Math.random() * missing.length)];
   ctx.user.exodiaPieces = [...(ctx.user.exodiaPieces ?? []), piece];
   const count = ctx.user.exodiaPieces.length;
-  ctx.log('buff', `🧩 【封印组件】${ctx.user.name} 抽到了「${piece}」！（${count}/${EXODIA_PIECES.length}，不会重复）`);
+  logGachaEffect(
+    ctx,
+    'buff',
+    `🧩 【封印组件】${ctx.user.name} 抽到了「${piece}」！（${count}/${EXODIA_PIECES.length}，不会重复）`,
+    'gacha_exodia_piece',
+    { targets: [ctx.user], label: piece, count },
+  );
   if (count >= EXODIA_PIECES.length) {
     ctx.log('crit', `🧙‍♂️ 五张封印组件集齐！${ctx.user.name} 宣告被封印者降临！`);
     ctx.executeSummonSkill({
@@ -438,6 +510,10 @@ export const GACHA_ORDINARY_SUMMON_CARDS: GachaEntry[] = [
   { text: "🔥 {USER} 莱瓦汀！召唤「史尔特尔」！黄昏的尽头！", isSummon: true, summonName: '史尔特尔', summonJob: 'ARKNIGHTS_OP', stats: { hp: 800, atk: 125, spd: 32 } },
   { text: "🤖 {USER} 帮帮我，史瓦罗先生！召唤「克拉拉 & 史瓦罗」！", isSummon: true, summonName: '史瓦罗', summonJob: 'HSR_HUNTER', stats: { hp: 1800, atk: 60, def: 100 } },
 ];
+
+export const GACHA_ORDINARY_SUMMON_NAMES = GACHA_ORDINARY_SUMMON_CARDS
+  .map((card) => card.summonName)
+  .filter((name): name is string => Boolean(name));
 
 export const GACHA_BLUE_EYES_CARD: GachaEntry = {
   text: "🐲 {USER} 献祭两只普通召唤物！「青眼白龙」降临！强韧！无敌！最强！",
@@ -473,6 +549,7 @@ export const GACHA_BLUE_EYES_ULTIMATE_CARD: GachaEntry = {
 export const GACHA_EXODIA_PIECE_CARD: GachaEntry = {
   text: '🧩 {USER} 抽到了不会重复的封印组件，黑暗大法师的轮廓更近了一步！',
   tag: 'buff',
+  visualEffect: 'gacha_exodia_piece',
   onExecute: (ctx) => {
     grantExodiaPiece(ctx);
     return true;
@@ -482,6 +559,7 @@ export const GACHA_EXODIA_PIECE_CARD: GachaEntry = {
 export const GACHA_SUMMON_COMMAND_CARD: GachaEntry = {
   text: '🎴 {USER} 抽到「召唤指令」，让场上的召唤物立刻行动！',
   tag: 'buff',
+  visualEffect: 'gacha_summon_command',
   requiresAnyFriendlySummon: true,
   onExecute: (ctx) => {
     const summons = responsiveContextFriendlySummons(ctx)
@@ -499,6 +577,7 @@ export const GACHA_SUMMON_COMMAND_CARD: GachaEntry = {
 export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
   text: '⚔️ {USER} 抽到「全军进击」，普通召唤物一齐压上！',
   tag: 'special',
+  visualEffect: 'gacha_all_out_attack',
   requiresOrdinarySummon: true,
   onExecute: (ctx) => {
     const enemies = activeContextEnemies(ctx);
@@ -508,7 +587,13 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
       ctx.log('info', `⚔️ 【全军进击】${ctx.user.name} 试图发起协同攻击，但普通召唤物都被控制，无法压上！`);
       return true;
     }
-    ctx.log('skill', `⚔️ 【全军进击】${ctx.user.name} 命令 ${summons.length} 只普通召唤物发动协同攻击！`);
+    logGachaEffect(
+      ctx,
+      'skill',
+      `⚔️ 【全军进击】${ctx.user.name} 命令 ${summons.length} 只普通召唤物发动协同攻击！`,
+      'gacha_all_out_attack',
+      { targets: summons, count: summons.length },
+    );
     for (const summon of summons) {
       if (!isActiveCombatant(ctx.user) || !isActiveCombatant(summon)) continue;
       const activeTargets = enemies.filter((enemy) => isActiveCombatant(enemy));
@@ -521,9 +606,15 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
         ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 用随机恶作剧转移，原目标没有受伤；转移伤害已单独结算！`);
         continue;
       }
-      ctx.log(actualDmg > 0 ? 'skill' : 'info', actualDmg > 0
-        ? `⚔️ ${summon.name} 响应进击，命中 ${target.name}，实际造成 ${actualDmg} 点伤害！`
-        : `⚔️ ${summon.name} 的进击被 ${target.name} 化解，没有造成实际伤害！`);
+      logGachaEffect(
+        ctx,
+        actualDmg > 0 ? 'skill' : 'info',
+        actualDmg > 0
+          ? `⚔️ ${summon.name} 响应进击，命中 ${target.name}，实际造成 ${actualDmg} 点伤害！`
+          : `⚔️ ${summon.name} 的进击被 ${target.name} 化解，没有造成实际伤害！`,
+        'gacha_all_out_attack',
+        { source: summon, targets: [target] },
+      );
       ctx.flushDeferredDamageEvents?.();
       if (target.currentHp <= 0) {
         ctx.markDefeated(target, { message: `💀 【全军进击】${target.name} 被 ${summon.name} 击败！`, killer: summon });
@@ -536,6 +627,7 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
 export const GACHA_TRIBUTE_PREP_CARD: GachaEntry = {
   text: '🕯️ {USER} 抽到「献祭准备」，普通召唤物被仪式光芒保护！',
   tag: 'buff',
+  visualEffect: 'gacha_tribute_prep',
   requiresOrdinarySummon: true,
   onExecute: (ctx) => {
     const summons = activeContextOrdinarySummons(ctx);
@@ -543,7 +635,13 @@ export const GACHA_TRIBUTE_PREP_CARD: GachaEntry = {
       refreshStatus(summon, 'SPELL_BLOCK', 2, 'gacha_tribute_compensation');
       refreshStatus(summon, 'REGEN', 2);
     }
-    ctx.log('buff', `🕯️ 【献祭准备】${ctx.user.name} 为 ${summons.length} 只普通召唤物套上仪式护盾，并积攒欧气！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `🕯️ 【献祭准备】${ctx.user.name} 为 ${summons.length} 只普通召唤物套上仪式护盾，并积攒欧气！`,
+      'gacha_tribute_prep',
+      { targets: summons, count: summons.length },
+    );
     grantGachaLuck(ctx.user, 1, ctx.log, '献祭准备');
     return true;
   },
@@ -552,15 +650,27 @@ export const GACHA_TRIBUTE_PREP_CARD: GachaEntry = {
 export const GACHA_SUMMON_RECYCLE_CARD: GachaEntry = {
   text: '♻️ {USER} 抽到「召唤物回收」，将残血普通召唤物化作资源！',
   tag: 'buff',
+  visualEffect: 'gacha_summon_recycle',
   requiresOrdinarySummon: true,
   onExecute: (ctx) => {
     const victim = activeContextOrdinarySummons(ctx).sort((a, b) => a.hpPct - b.hpPct)[0];
     if (!victim) return false;
+    logGachaEffect(
+      ctx,
+      'skill',
+      `♻️ 【召唤物回收】${ctx.user.name} 展开回收阵，锁定 ${victim.name} 化作卡组资源！`,
+      'gacha_summon_recycle',
+      { targets: [victim], label: victim.name },
+    );
     ctx.markDefeated(victim, { message: `💀 【召唤物回收】${victim.name} 被 ${ctx.user.name} 回收为卡组资源！`, awardKill: false });
     victim.isDead = true;
     const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.18));
     const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
-    ctx.log(healed > 0 ? 'heal' : 'info', `♻️ 【召唤物回收】${ctx.user.name} 回收 ${victim.name}，${healText}，并获得 2 点欧气！`);
+    ctx.log(
+      healed > 0 ? 'heal' : 'info',
+      `♻️ 【召唤物回收】${ctx.user.name} 回收 ${victim.name}，${healText}，并获得 2 点欧气！`,
+      { targetIds: [ctx.user.id] },
+    );
     grantGachaLuck(ctx.user, 2, ctx.log, '召唤物回收');
     return true;
   },
@@ -569,6 +679,7 @@ export const GACHA_SUMMON_RECYCLE_CARD: GachaEntry = {
 export const GACHA_MONSTER_REBORN_CARD: GachaEntry = {
   text: '⚗️ {USER} 发动「死者苏生」，从墓地拉回一只普通召唤物！',
   tag: 'buff',
+  visualEffect: 'gacha_monster_reborn',
   onExecute: (ctx) => {
     const myTeamId = ctx.getTeamId(ctx.user);
     const target = ctx.fighters.find((fighter) =>
@@ -589,7 +700,13 @@ export const GACHA_MONSTER_REBORN_CARD: GachaEntry = {
     target.status = [];
     target.currentHp = Math.max(1, Math.floor(target.maxHp * 0.55));
     target.hpPct = target.currentHp / target.maxHp;
-    ctx.log('heal', `⚗️ 【死者苏生】${ctx.user.name} 将 ${target.name} 从墓地拉回战场，恢复到 ${target.currentHp} 点生命！`);
+    logGachaEffect(
+      ctx,
+      'heal',
+      `⚗️ 【死者苏生】${ctx.user.name} 将 ${target.name} 从墓地拉回战场，恢复到 ${target.currentHp} 点生命！`,
+      'gacha_monster_reborn',
+      { targets: [target], label: target.name },
+    );
     return true;
   },
 };
@@ -597,9 +714,16 @@ export const GACHA_MONSTER_REBORN_CARD: GachaEntry = {
 export const GACHA_ASH_BLOSSOM_CARD: GachaEntry = {
   text: '🌸 {USER} 抽到「灰流丽」，打断敌方关键行动！',
   tag: 'debuff',
+  visualEffect: 'gacha_ash_blossom',
   onExecute: (ctx) => {
     if (ctx.applyStatus(ctx.target, 'STUN', 2, { effectName: '灰流丽的打断效果' })) {
-      ctx.log('skill', `🌸 【灰流丽】${ctx.user.name} 无效了 ${ctx.target.name} 的下一次关键行动，使其眩晕！`);
+      logGachaEffect(
+        ctx,
+        'skill',
+        `🌸 【灰流丽】${ctx.user.name} 无效了 ${ctx.target.name} 的下一次关键行动，使其眩晕！`,
+        'gacha_ash_blossom',
+        { targets: [ctx.target] },
+      );
     }
     return true;
   },
@@ -608,10 +732,18 @@ export const GACHA_ASH_BLOSSOM_CARD: GachaEntry = {
 export const GACHA_MIRROR_FORCE_CARD: GachaEntry = {
   text: '🛡️ {USER} 覆盖「圣防护罩·镜之力」，召唤阵进入反击防线！',
   tag: 'buff',
+  visualEffect: 'gacha_mirror_force',
   onExecute: (ctx) => {
     refreshStatus(ctx.user, 'COUNTER', 2);
     for (const summon of activeContextFriendlySummons(ctx)) refreshStatus(summon, 'COUNTER', 2);
-    ctx.log('buff', `🛡️ 【圣防护罩·镜之力】${ctx.user.name} 与己方召唤物进入反击防线！`);
+    const protectedUnits = [ctx.user, ...activeContextFriendlySummons(ctx)];
+    logGachaEffect(
+      ctx,
+      'buff',
+      `🛡️ 【圣防护罩·镜之力】${ctx.user.name} 与己方召唤物进入反击防线！`,
+      'gacha_mirror_force',
+      { targets: protectedUnits, count: protectedUnits.length },
+    );
     return true;
   },
 };
@@ -619,6 +751,7 @@ export const GACHA_MIRROR_FORCE_CARD: GachaEntry = {
 export const GACHA_BLACK_LOTUS_CARD: GachaEntry = {
   text: '🌸 {USER} 发动「黑莲花」，为召唤物注入爆发魔力！',
   tag: 'buff',
+  visualEffect: 'gacha_black_lotus',
   requiresAnyFriendlySummon: true,
   onExecute: (ctx) => {
     const summons = activeContextFriendlySummons(ctx);
@@ -627,7 +760,13 @@ export const GACHA_BLACK_LOTUS_CARD: GachaEntry = {
       summon.mag = Math.floor(summon.mag * 1.18);
       summon.spd = Math.floor(summon.spd * 1.08);
     }
-    ctx.log('buff', `🌸 【黑莲花】${ctx.user.name} 为 ${summons.length} 只召唤物充能，攻击、魔力与速度提升！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `🌸 【黑莲花】${ctx.user.name} 为 ${summons.length} 只召唤物充能，攻击、魔力与速度提升！`,
+      'gacha_black_lotus',
+      { targets: summons, count: summons.length },
+    );
     return true;
   },
 };
@@ -635,6 +774,7 @@ export const GACHA_BLACK_LOTUS_CARD: GachaEntry = {
 export const GACHA_BLUE_EYES_BURST_CARD: GachaEntry = {
   text: '🐲 {USER} 抽到「毁灭爆裂疾风弹」，命令青眼白龙释放龙息！',
   tag: 'special',
+  visualEffect: 'gacha_blue_eyes_burst',
   requiresFriendlySummon: '青眼白龙',
   onExecute: (ctx) => {
     const blueEyes = contextFriendlySummonByBaseName(ctx, '青眼白龙');
@@ -644,7 +784,13 @@ export const GACHA_BLUE_EYES_BURST_CARD: GachaEntry = {
       return true;
     }
     const dmg = Math.floor(blueEyes.mag * 4.2 + blueEyes.atk * 2.1);
-    ctx.log('skill', `🐲 【毁灭爆裂疾风弹】${ctx.user.name} 翻开支援牌，${blueEyes.name} 向 ${ctx.target.name} 轰出白色龙息！`);
+    logGachaEffect(
+      ctx,
+      'skill',
+      `🐲 【毁灭爆裂疾风弹】${ctx.user.name} 翻开支援牌，${blueEyes.name} 向 ${ctx.target.name} 轰出白色龙息！`,
+      'gacha_blue_eyes_burst',
+      { source: blueEyes, targets: [ctx.target] },
+    );
     const actualDmg = damageFromSummon(ctx, blueEyes, ctx.target, dmg, '毁灭爆裂疾风弹', true, { deferOutcome: true });
     if (actualDmg > 0) ctx.log('crit', `🐲 白龙龙息贯穿 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`);
     finalizeSummonDamage(ctx, blueEyes, ctx.target, '毁灭爆裂疾风弹');
@@ -655,6 +801,7 @@ export const GACHA_BLUE_EYES_BURST_CARD: GachaEntry = {
 export const GACHA_TRUE_LIGHT_CARD: GachaEntry = {
   text: '💡 {USER} 发动「真之光」，守护青眼白龙！',
   tag: 'buff',
+  visualEffect: 'gacha_true_light',
   requiresFriendlySummon: '青眼白龙',
   onExecute: (ctx) => {
     const blueEyes = contextFriendlySummonByBaseName(ctx, '青眼白龙');
@@ -664,7 +811,13 @@ export const GACHA_TRUE_LIGHT_CARD: GachaEntry = {
     refreshStatus(blueEyes, 'REGEN', 3);
     const healed = blueEyes.hpPct <= 0.55 ? healFighter(blueEyes, Math.floor(blueEyes.maxHp * 0.22)) : 0;
     consumeGachaLuck(ctx.user, 1);
-    ctx.log('buff', `💡 【真之光】${ctx.user.name} 守护 ${blueEyes.name}，赋予真之光护壁、控制免疫与再生${healed > 0 ? `，并恢复 ${healed} 点生命` : ''}！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `💡 【真之光】${ctx.user.name} 守护 ${blueEyes.name}，赋予真之光护壁、控制免疫与再生${healed > 0 ? `，并恢复 ${healed} 点生命` : ''}！`,
+      'gacha_true_light',
+      { targets: [blueEyes] },
+    );
     return true;
   },
 };
@@ -672,6 +825,7 @@ export const GACHA_TRUE_LIGHT_CARD: GachaEntry = {
 export const GACHA_ANCIENT_CHANT_CARD: GachaEntry = {
   text: '☀️ {USER} 咏唱「古之咒文」，翼神龙的太阳神力开始升温！',
   tag: 'buff',
+  visualEffect: 'gacha_ancient_chant',
   requiresFriendlySummon: '翼神龙',
   onExecute: (ctx) => {
     const ra = contextFriendlySummonByBaseName(ctx, '翼神龙');
@@ -679,7 +833,13 @@ export const GACHA_ANCIENT_CHANT_CARD: GachaEntry = {
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
     refreshStatus(ra, 'SPELL_BLOCK', 2, 'gacha_ancient_chant');
     const healed = healFighter(ra, Math.floor(ra.maxHp * 0.18));
-    ctx.log('buff', `☀️ 【古之咒文】${ctx.user.name} 强化 ${ra.name}，太阳神力 ${ra.raChantBoost}/3，获得法术抵挡${healed > 0 ? `，恢复 ${healed} 点生命` : ''}！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `☀️ 【古之咒文】${ctx.user.name} 强化 ${ra.name}，太阳神力 ${ra.raChantBoost}/3，获得法术抵挡${healed > 0 ? `，恢复 ${healed} 点生命` : ''}！`,
+      'gacha_ancient_chant',
+      { targets: [ra], count: ra.raChantBoost },
+    );
     return true;
   },
 };
@@ -687,6 +847,7 @@ export const GACHA_ANCIENT_CHANT_CARD: GachaEntry = {
 export const GACHA_BLAZE_CANNON_CARD: GachaEntry = {
   text: '🔥 {USER} 发动「太阳神火焰加农」，命令翼神龙燃烧生命！',
   tag: 'special',
+  visualEffect: 'gacha_blaze_cannon',
   requiresFriendlySummon: '翼神龙',
   onExecute: (ctx) => {
     const ra = contextFriendlySummonByBaseName(ctx, '翼神龙');
@@ -701,7 +862,13 @@ export const GACHA_BLAZE_CANNON_CARD: GachaEntry = {
     const boost = ra.raChantBoost ?? 0;
     ra.raChantBoost = 0;
     const dmg = Math.floor(burnHp * (2.8 + boost * 0.75) + ra.mag * 3.0);
-    ctx.log('crit', `🔥 【太阳神火焰加农】${ra.name} 燃烧 ${burnHp} 点生命，向 ${ctx.target.name} 释放神炎！（古之咒文强化 ${boost} 层）`);
+    logGachaEffect(
+      ctx,
+      'crit',
+      `🔥 【太阳神火焰加农】${ra.name} 燃烧 ${burnHp} 点生命，向 ${ctx.target.name} 释放神炎！（古之咒文强化 ${boost} 层）`,
+      'gacha_blaze_cannon',
+      { source: ra, targets: [ctx.target], count: boost },
+    );
     const actualDmg = damageFromSummon(ctx, ra, ctx.target, dmg, '太阳神火焰加农', true, { deferOutcome: true });
     if (actualDmg > 0) ctx.log('crit', `🔥 神炎命中 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`);
     finalizeSummonDamage(ctx, ra, ctx.target, '太阳神火焰加农');
@@ -713,6 +880,7 @@ export const GACHA_BLAZE_CANNON_CARD: GachaEntry = {
 export const GACHA_RA_PHOENIX_CARD: GachaEntry = {
   text: '🔥 {USER} 唤醒「神不死鸟」，翼神龙将在致死时一场一次复燃！',
   tag: 'buff',
+  visualEffect: 'gacha_ra_phoenix',
   requiresFriendlySummon: '翼神龙',
   onExecute: (ctx) => {
     const ra = contextFriendlySummonByBaseName(ctx, '翼神龙');
@@ -723,7 +891,13 @@ export const GACHA_RA_PHOENIX_CARD: GachaEntry = {
     }
     refreshStatus(ra, GACHA_RA_PHOENIX_STATUS, 6);
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
-    ctx.log('buff', `🔥 【神不死鸟】${ctx.user.name} 点燃 ${ra.name} 的不死鸟形态：致死时将一场一次复燃反扑，并获得 1 层太阳神力！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `🔥 【神不死鸟】${ctx.user.name} 点燃 ${ra.name} 的不死鸟形态：致死时将一场一次复燃反扑，并获得 1 层太阳神力！`,
+      'gacha_ra_phoenix',
+      { targets: [ra] },
+    );
     return true;
   },
 };
@@ -731,18 +905,30 @@ export const GACHA_RA_PHOENIX_CARD: GachaEntry = {
 export const GACHA_RA_TRIBUTE_ASCENSION_CARD: GachaEntry = {
   text: '🛐 {USER} 发动「献祭升格」，将普通召唤物献给翼神龙！',
   tag: 'buff',
+  visualEffect: 'gacha_ra_tribute',
   requiresFriendlySummon: '翼神龙',
   requiresOrdinarySummon: true,
   onExecute: (ctx) => {
     const ra = contextFriendlySummonByBaseName(ctx, '翼神龙');
     const victim = activeContextOrdinarySummons(ctx).sort((a, b) => a.hpPct - b.hpPct)[0];
     if (!ra || !victim) return false;
+    logGachaEffect(
+      ctx,
+      'skill',
+      `🛐 【献祭升格】${ctx.user.name} 启动仪式，${victim.name} 正在化作 ${ra.name} 的太阳神力！`,
+      'gacha_ra_tribute',
+      { source: victim, targets: [ra], label: victim.name },
+    );
     ctx.markDefeated(victim, { message: `💀 【献祭升格】${victim.name} 化作 ${ra.name} 的太阳神力！`, awardKill: false });
     victim.isDead = true;
     const healed = healFighter(ra, Math.floor(ra.maxHp * 0.28));
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
     const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
-    ctx.log('buff', `🛐 【献祭升格】${ctx.user.name} 献祭 ${victim.name}，${ra.name} ${healText}，并获得 1 层太阳神力！`);
+    ctx.log(
+      'buff',
+      `🛐 【献祭升格】${ctx.user.name} 献祭 ${victim.name}，${ra.name} ${healText}，并获得 1 层太阳神力！`,
+      { targetIds: [ra.id] },
+    );
     return true;
   },
 };
@@ -750,6 +936,7 @@ export const GACHA_RA_TRIBUTE_ASCENSION_CARD: GachaEntry = {
 export const GACHA_SMALL_PITY_CARD: GachaEntry = {
   text: '🍀 {USER} 小保底歪了但没完全歪，保底光芒护住了自己！',
   tag: 'buff',
+  visualEffect: 'gacha_small_pity',
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, 3);
     cleanseLuckEmperor(ctx.user);
@@ -757,7 +944,13 @@ export const GACHA_SMALL_PITY_CARD: GachaEntry = {
     refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_small_pity');
     refreshStatus(ctx.user, 'REGEN', 3);
     const healText = healed > 0 ? `恢复了 ${healed} 点生命` : '生命已满，治疗溢出';
-    ctx.log('heal', `🍀 【小保底歪了但没完全歪】${ctx.user.name} 被保底光芒护住，${healText}，并获得法术抵挡与再生！`);
+    logGachaEffect(
+      ctx,
+      'heal',
+      `🍀 【小保底歪了但没完全歪】${ctx.user.name} 被保底光芒护住，${healText}，并获得法术抵挡与再生！`,
+      'gacha_small_pity',
+      { targets: [ctx.user], count: power },
+    );
     return true;
   },
 };
@@ -765,9 +958,16 @@ export const GACHA_SMALL_PITY_CARD: GachaEntry = {
 export const GACHA_CEILING_EXCHANGE_CARD: GachaEntry = {
   text: '💰 {USER} 发动「天井兑换」，把攒下来的欧气兑换成召唤师关键动作！',
   tag: 'buff',
+  visualEffect: 'gacha_ceiling_exchange',
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, GACHA_LUCK_MAX);
-    ctx.log('buff', `💰 【天井兑换】${ctx.user.name} 消耗 ${power} 点欧气检索关键召唤动作！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `💰 【天井兑换】${ctx.user.name} 消耗 ${power} 点欧气检索关键召唤动作！`,
+      'gacha_ceiling_exchange',
+      { targets: [ctx.user], count: power },
+    );
 
     if (canContextFuseBlueEyes(ctx)) {
       executeGachaSummonCard(ctx, GACHA_BLUE_EYES_ULTIMATE_CARD, '天井融合');
@@ -800,10 +1000,17 @@ export const GACHA_CEILING_EXCHANGE_CARD: GachaEntry = {
 export const GACHA_TEN_PULL_GOLD_CARD: GachaEntry = {
   text: '🌈 {USER} 十连金光！卡组展开，召唤阵连锁启动！',
   tag: 'buff',
+  visualEffect: 'gacha_ten_pull_gold',
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, GACHA_LUCK_MAX);
     const summonSlots = activeContextFriendlySummons(ctx).length <= 1 ? 2 : 1;
-    ctx.log('buff', `🌈 【十连金光】${ctx.user.name} 展开 ${summonSlots} 次召唤阵，并为召唤物充能！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `🌈 【十连金光】${ctx.user.name} 展开 ${summonSlots} 次召唤阵，并为召唤物充能！`,
+      'gacha_ten_pull_gold',
+      { targets: [ctx.user], count: summonSlots },
+    );
     for (let i = 0; i < summonSlots; i += 1) {
       const card = GACHA_ORDINARY_SUMMON_CARDS[Math.floor(Math.random() * GACHA_ORDINARY_SUMMON_CARDS.length)];
       if (card) executeGachaSummonCard(ctx, card, '十连召唤');
@@ -820,6 +1027,7 @@ export const GACHA_TEN_PULL_GOLD_CARD: GachaEntry = {
 export const GACHA_WHALE_REWRITE_CARD: GachaEntry = {
   text: '💳 {USER} 发动「氪金改命」，把这一回合从坏结局里买了回来！',
   tag: 'buff',
+  visualEffect: 'gacha_whale_rewrite',
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, 3);
     cleanseLuckEmperor(ctx.user);
@@ -828,7 +1036,13 @@ export const GACHA_WHALE_REWRITE_CARD: GachaEntry = {
     refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_whale_rewrite');
     refreshStatus(ctx.user, 'REGEN', 3);
     const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
-    ctx.log('buff', `💳 【氪金改命】${ctx.user.name} 清除异常，${healText}，并获得改命抗性、法术抵挡与再生！`);
+    logGachaEffect(
+      ctx,
+      'buff',
+      `💳 【氪金改命】${ctx.user.name} 清除异常，${healText}，并获得改命抗性、法术抵挡与再生！`,
+      'gacha_whale_rewrite',
+      { targets: [ctx.user], count: power },
+    );
     grantGachaLuck(ctx.user, 1, ctx.log, '氪金改命余波');
     return true;
   },
@@ -837,6 +1051,7 @@ export const GACHA_WHALE_REWRITE_CARD: GachaEntry = {
 export const GACHA_SUMMON_LIFESTEAL_CARD: GachaEntry = {
   text: '🧛 {USER} 抽到了吸血牌！召唤物的攻势开始回灌生命！',
   tag: 'buff',
+  visualEffect: 'gacha_summon_lifesteal',
   onExecute: (ctx: SkillContext) => {
     activateGachaSummonLifesteal(ctx.user, ctx.log, 4);
     grantGachaLuck(ctx.user, 1, ctx.log, '吸血牌余韵');
@@ -952,7 +1167,11 @@ export function resolveLuckEmperorSsrDraw(
   if (luck >= GACHA_LUCK_MAX) {
     const spent = consumeGachaLuck(user, GACHA_LUCK_MAX);
     user.gachaPityPower = Math.max(spent, GACHA_LUCK_MAX);
-    runtime.log('buff', `👑 大保底启动！${user.name} 消耗 ${spent} 点欧气，强行把命运抽卡改写成翻盘牌！`);
+    runtime.log(
+      'buff',
+      `👑 大保底启动！${user.name} 消耗 ${spent} 点欧气，强行把命运抽卡改写成翻盘牌！`,
+      gachaEffectMetadata('gacha_major_pity', user, [user], { count: spent }),
+    );
     if (missingPieces.length > 0 && shouldRevealExodiaPiece(user, EXODIA_MAJOR_PITY_PIECE_CHANCES)) return GACHA_EXODIA_PIECE_CARD;
     return chooseMajorPityEntry(runtime, user);
   }
@@ -960,7 +1179,11 @@ export function resolveLuckEmperorSsrDraw(
   if (luck >= 3) {
     const spent = consumeGachaLuck(user, 3);
     user.gachaPityPower = Math.max(spent, 3);
-    runtime.log('buff', `🍀 小保底启动！${user.name} 消耗 ${spent} 点欧气，让这次命运抽卡必定强化！`);
+    runtime.log(
+      'buff',
+      `🍀 小保底启动！${user.name} 消耗 ${spent} 点欧气，让这次命运抽卡必定强化！`,
+      gachaEffectMetadata('gacha_small_pity', user, [user], { count: spent }),
+    );
     if (missingPieces.length > 0 && shouldRevealExodiaPiece(user, EXODIA_SMALL_PITY_PIECE_CHANCES)) return GACHA_EXODIA_PIECE_CARD;
     return chooseEnhancedEntry(runtime, user, pool);
   }

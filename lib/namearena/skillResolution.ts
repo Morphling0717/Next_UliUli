@@ -1,4 +1,4 @@
-import type { BattleEngineData, Fighter, GachaEntry, SkillDefinition } from './types';
+import type { BattleEngineData, BattleLogMetadata, Fighter, GachaEntry, SkillDefinition } from './types';
 import {
   grantGachaLuck,
   isLuckEmperor,
@@ -12,7 +12,7 @@ export interface SkillResolutionRuntime {
   turnCount?: number;
   getTeamId?: (fighter: Fighter) => string;
   isActiveCombatant?: (fighter: Fighter) => boolean;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
 }
 
 export function resolveSkillDefinition(

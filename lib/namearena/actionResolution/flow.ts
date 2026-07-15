@@ -1,4 +1,6 @@
 import type {
+  BattleCombatEffectId,
+  BattleLogMetadata,
   DamageApplicationOptions,
   Fighter,
 } from '../types';
@@ -83,6 +85,23 @@ function canJokerRedirectSkillDamage(target: Fighter, skillTag: string, runtime:
   );
 }
 
+function combatEffectMetadata(
+  skill: { visualEffect?: BattleCombatEffectId },
+  source: Fighter,
+  targetIds: string[],
+): BattleLogMetadata | undefined {
+  if (!skill.visualEffect) return undefined;
+  return {
+    targetIds,
+    visualCue: {
+      kind: 'combat_fx',
+      effectId: skill.visualEffect,
+      sourceId: source.id,
+      targetIds,
+    },
+  };
+}
+
 export function executeSkillAction(
   runtime: ActionResolutionRuntime,
   skillId: string | null,
@@ -120,7 +139,7 @@ export function executeSkillAction(
     turnCount: runtime.turnCount,
     getTeamId: runtime.getTeamId,
     isActiveCombatant: runtime.isActiveCombatant,
-    log: (type, text) => runtime.log(type, text),
+    log: (type, text, metadata) => runtime.log(type, text, metadata),
   }, skillId, user);
   const incomingActionName = skill.name ?? '攻击';
   if (isIntercepted) {
@@ -133,7 +152,11 @@ export function executeSkillAction(
   }
 
   if (skill.triggerAgain && triggerDepth === 0) {
-    runtime.log('buff', formatText(skill.text ?? '').replace(/{USER}/g, user.name));
+    runtime.log(
+      'buff',
+      formatText(skill.text ?? '').replace(/{USER}/g, user.name),
+      combatEffectMetadata(skill, user, [user.id]),
+    );
     for (let i = 0; i < skill.triggerAgain; i++) executeSkillAction(runtime, skillId, user, null, triggerDepth + 1);
     return;
   }
@@ -174,6 +197,10 @@ export function executeSkillAction(
     flushDeferredDamageEvents,
     (type, text) => queuedPreResolutionLogs.push({ type, text }),
   );
+  const skillVisualTargets = skill.tag === runtime.skillTags.HEAL || skill.tag === runtime.skillTags.BUFF
+    ? [user.id]
+    : [target.id];
+  const skillVisualMetadata = combatEffectMetadata(skill, user, skillVisualTargets);
   const refundInterruptedGacha = (reason: string) => {
     if (!skill.isGacha) return;
     const changed =
@@ -294,7 +321,7 @@ export function executeSkillAction(
         user.name,
         target.name,
         preMitigationDmg,
-      ));
+      ), skillVisualMetadata);
     }
     runtime.log(logType, `${logType === 'crit' ? '💥 暴击！' : ''}🎭 ${user.name} 的【${incomingActionName}】锁定 ${target.name}，即将结算 ${preMitigationDmg} 点预估伤害！`);
   } else {
@@ -309,7 +336,11 @@ export function executeSkillAction(
     if (!msg.includes('{VAL}') && preMitigationDmg > 0 && skill.tag !== runtime.skillTags.BUFF && skill.tag !== runtime.skillTags.HEAL) {
       msg += ` (造成 {VAL} 点伤害)`;
     }
-    runtime.log(logType, (logType === 'crit' ? '💥 暴击！' : '') + msg.replace(/{USER}/g, user.name).replace(/{TARGET}/g, target.name).replace(/{VAL}/g, String(preMitigationDmg)));
+    runtime.log(
+      logType,
+      (logType === 'crit' ? '💥 暴击！' : '') + msg.replace(/{USER}/g, user.name).replace(/{TARGET}/g, target.name).replace(/{VAL}/g, String(preMitigationDmg)),
+      skillVisualMetadata,
+    );
   }
   flushQueuedPreResolutionLogs();
 

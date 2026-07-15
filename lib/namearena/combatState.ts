@@ -1,7 +1,7 @@
 import type { Fighter, JobDefinition, StatusEntry } from './types';
 
 export function cloneJobDefinition(job: JobDefinition): JobDefinition {
-  return JSON.parse(JSON.stringify(job)) as JobDefinition;
+  return { ...job, skills: [...job.skills] };
 }
 
 export function cloneStatuses(status: StatusEntry[] = []): StatusEntry[] {
@@ -69,4 +69,51 @@ export function cloneFighter(fighter: Fighter): Fighter {
 
 export function cloneFighters(fighters: Fighter[]): Fighter[] {
   return fighters.map(cloneFighter);
+}
+
+function snapshotValuesEqual(source: unknown, snapshot: unknown): boolean {
+  if (Object.is(source, snapshot)) return true;
+  if (
+    source === null ||
+    snapshot === null ||
+    typeof source !== 'object' ||
+    typeof snapshot !== 'object'
+  ) return false;
+
+  if (Array.isArray(source) || Array.isArray(snapshot)) {
+    if (!Array.isArray(source) || !Array.isArray(snapshot) || source.length !== snapshot.length) return false;
+    return source.every((value, index) => snapshotValuesEqual(value, snapshot[index]));
+  }
+
+  const sourceRecord = source as Record<string, unknown>;
+  const snapshotRecord = snapshot as Record<string, unknown>;
+  const sourceKeys = Object.keys(sourceRecord);
+  const snapshotKeys = Object.keys(snapshotRecord);
+  if (sourceKeys.length !== snapshotKeys.length) return false;
+  return sourceKeys.every((key) =>
+    Object.prototype.hasOwnProperty.call(snapshotRecord, key) &&
+    snapshotValuesEqual(sourceRecord[key], snapshotRecord[key]),
+  );
+}
+
+/**
+ * Builds an immutable playback frame while preserving unchanged fighter objects.
+ * This keeps per-log HP/status synchronization without deep-cloning the full roster.
+ */
+export function reconcileFighterSnapshots(
+  fighters: readonly Fighter[],
+  previous: Fighter[] = [],
+): Fighter[] {
+  const previousById = new Map(previous.map((fighter) => [fighter.id, fighter]));
+  let changed = fighters.length !== previous.length;
+  const next = fighters.map((fighter, index) => {
+    const candidate = previousById.get(fighter.id);
+    if (candidate && snapshotValuesEqual(fighter, candidate)) {
+      if (candidate !== previous[index]) changed = true;
+      return candidate;
+    }
+    changed = true;
+    return cloneFighter(fighter);
+  });
+  return changed ? next : previous;
 }

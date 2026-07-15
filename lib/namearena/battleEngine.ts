@@ -125,6 +125,7 @@ import {
   consumeGachaLuck,
   GACHA_LUCK_MAX,
   GACHA_RA_PHOENIX_STATUS,
+  gachaEffectMetadata,
   grantGachaLuck,
   isAdvancedSummonName,
   isLuckEmperor,
@@ -451,13 +452,19 @@ export class BattleEngine {
     if (index >= 0) this.actionStack.splice(index, 1);
   }
 
-  queueOrLogDamageEvent(target: Fighter, options: DamageApplicationOptions, type: string, text: string): void {
+  queueOrLogDamageEvent(
+    target: Fighter,
+    options: DamageApplicationOptions,
+    type: string,
+    text: string,
+    metadata?: BattleLogMetadata,
+  ): void {
     if (options.deferTransform) {
       target.pendingDamageEvents = target.pendingDamageEvents ?? [];
-      target.pendingDamageEvents.push({ type, text });
+      target.pendingDamageEvents.push({ type, text, metadata });
       return;
     }
-    this.log(type, text);
+    this.log(type, text, metadata);
   }
 
   queueOrRunDamageAction(target: Fighter, options: DamageApplicationOptions, action: () => void): void {
@@ -475,7 +482,7 @@ export class BattleEngine {
     while (needsTransformCheck || (fighter.pendingDamageEvents?.length ?? 0) > 0 || this.deferredDamageActions.has(fighter.id)) {
       const pendingEvents = fighter.pendingDamageEvents ?? [];
       delete fighter.pendingDamageEvents;
-      pendingEvents.forEach((event) => this.log(event.type, event.text));
+      pendingEvents.forEach((event) => this.log(event.type, event.text, event.metadata));
       if (needsTransformCheck || pendingEvents.length > 0) this.handleTransformations(fighter);
       needsTransformCheck = false;
 
@@ -545,7 +552,13 @@ export class BattleEngine {
     target.status = target.status.filter((status) => status.type !== GACHA_RA_PHOENIX_STATUS);
     target.currentHp = Math.max(1, Math.floor(target.maxHp * 0.32));
     this.syncHpPct(target);
-    this.queueOrLogDamageEvent(target, options, 'heal', `🔥 【神不死鸟】${target.name} 在致死瞬间化为太阳火焰复燃，恢复到 ${target.currentHp} 点生命！`);
+    this.queueOrLogDamageEvent(
+      target,
+      options,
+      'heal',
+      `🔥 【神不死鸟】${target.name} 在致死瞬间化为太阳火焰复燃，恢复到 ${target.currentHp} 点生命！`,
+      gachaEffectMetadata('summon_ra_rebirth', target, [target]),
+    );
 
     this.queueOrRunDamageAction(target, options, () => {
       const enemies = this.fighters.filter((fighter) =>
@@ -1092,25 +1105,25 @@ export class BattleEngine {
     this.grantTokusatsuHeavyDamageResonance(target, amount, source, options);
     if (isLuckEmperor(target) && amount > 0) {
       if (amount >= target.maxHp * 0.2) {
-        grantGachaLuck(target, 1, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), '承受重创');
+        grantGachaLuck(target, 1, (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata), '承受重创');
       }
       if (attacker?.isTing) {
         if (!hasStatus(target, GACHA_TRAP_GUARD_COOLDOWN)) {
           target.gachaTingGuardTrapReady = true;
         }
-        grantGachaLuck(target, 1, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), '被小汀针对');
+        grantGachaLuck(target, 1, (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata), '被小汀针对');
       }
     }
     applyGachaSummonLifesteal({
       fighters: this.fighters,
       isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
-      log: (type, text) => this.queueOrLogDamageEvent(target, options, type, text),
+      log: (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata),
     }, attacker, Math.min(hpBeforeDamage, amount));
     if (target.currentHp <= 0 && this.triggerRaPhoenix(target, options)) {
       if (target.isDead || target.isDeadAnnounced) options.targetDefeatedDuringDamage = true;
       return amount;
     }
-    if (target.currentHp <= 0 && triggerGachaDeathSave(target, (type, text) => this.queueOrLogDamageEvent(target, options, type, text), (fighter) => this.syncHpPct(fighter))) {
+    if (target.currentHp <= 0 && triggerGachaDeathSave(target, (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata), (fighter) => this.syncHpPct(fighter))) {
       options.suppressOnHitStatuses = true;
       return amount;
     }
@@ -1201,7 +1214,7 @@ export class BattleEngine {
     attacker: Fighter,
   ): number {
     let amount = incomingAmount;
-    const emit = (type: string, text: string) => this.log(type, text);
+    const emit = (type: string, text: string, metadata?: BattleLogMetadata) => this.log(type, text, metadata);
     const lethal = amount >= target.currentHp;
     const heavy = amount >= target.maxHp * 0.18;
 
@@ -1210,7 +1223,11 @@ export class BattleEngine {
       exodia.hasUsedExodiaGuard = true;
       refreshStatus(exodia, 'BKB', 2, 'exodia_seal_wall');
       refreshStatus(exodia, 'SPELL_BLOCK', 2, 'exodia_seal_wall');
-      emit('crit', `🧙‍♂️ 【封印护壁】黑暗大法师 展开禁忌封印，直接无效化 ${attacker.name} 对 ${target.name} 的致死伤害！`);
+      emit(
+        'crit',
+        `🧙‍♂️ 【封印护壁】黑暗大法师 展开禁忌封印，直接无效化 ${attacker.name} 对 ${target.name} 的致死伤害！`,
+        gachaEffectMetadata('summon_exodia_guard', exodia, [attacker]),
+      );
       target.gachaTingGuardTrapReady = false;
       return 0;
     }
@@ -1222,7 +1239,11 @@ export class BattleEngine {
       const reducedTo = Math.max(0, target.currentHp - 1);
       const blocked = Math.max(0, amount - reducedTo);
       amount = reducedTo;
-      emit('crit', `☀️ 【太阳神护主】翼神龙 燃烧神力替 ${target.name} 抹去 ${blocked} 点致死伤害，将其强行保在 1 点生命！`);
+      emit(
+        'crit',
+        `☀️ 【太阳神护主】翼神龙 燃烧神力替 ${target.name} 抹去 ${blocked} 点致死伤害，将其强行保在 1 点生命！`,
+        gachaEffectMetadata('summon_ra_guard', ra, [target]),
+      );
       if (burnCost > 0) this.applyGuardianDamage(ra, burnCost, attacker, '太阳神护主');
       const retaliation = Math.max(1, Math.floor(ra.mag * 2.1 + ra.atk * 0.9));
       const actualRetaliation = this.applyDamage(attacker, retaliation, 'skill', true, ra, {
@@ -1232,7 +1253,11 @@ export class BattleEngine {
       });
       if (actualRetaliation > 0 || (attacker.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(attacker);
       if (!hasStatus(attacker, 'BURN')) refreshStatus(attacker, 'BURN', 2);
-      emit('crit', `☀️ 【护主神炎】翼神龙 反灼 ${attacker.name}，实际造成 ${actualRetaliation} 点真实伤害！`);
+      emit(
+        'crit',
+        `☀️ 【护主神炎】翼神龙 反灼 ${attacker.name}，实际造成 ${actualRetaliation} 点真实伤害！`,
+        gachaEffectMetadata('summon_ra_flare', ra, [attacker]),
+      );
       if (attacker.currentHp <= 0 && !attacker.isDead && !attacker.isDeadAnnounced) {
         this.markDefeated(attacker, { message: `💀 【太阳神护主】${attacker.name} 被翼神龙的护主神炎反噬击倒！`, killer: ra });
       }
@@ -1247,7 +1272,11 @@ export class BattleEngine {
       ultimate.blueEyesUltimateStrain = (ultimate.blueEyesUltimateStrain ?? 0) + 1;
       refreshStatus(ultimate, GACHA_ULTIMATE_GUARD_COOLDOWN, 2);
       const guardDamage = Math.max(1, Math.floor(block * 0.85));
-      emit('buff', `🐉 【三首护主】青眼究极龙 第 ${ultimate.blueEyesUltimateGuardCount}/3 颗龙首替 ${target.name} 咬碎小汀攻势，分担 ${block} 点伤害！（融合负荷上升）`);
+      emit(
+        'buff',
+        `🐉 【三首护主】青眼究极龙 第 ${ultimate.blueEyesUltimateGuardCount}/3 颗龙首替 ${target.name} 咬碎小汀攻势，分担 ${block} 点伤害！（融合负荷上升）`,
+        gachaEffectMetadata('summon_ultimate_guard', ultimate, [attacker], { count: ultimate.blueEyesUltimateGuardCount }),
+      );
       this.applyGuardianDamage(ultimate, guardDamage, attacker, '三首护主');
       amount = Math.max(0, amount - block);
       target.gachaTingGuardTrapReady = false;
@@ -1259,7 +1288,11 @@ export class BattleEngine {
       const block = Math.max(1, Math.floor(amount * 0.22));
       refreshStatus(blueEyes, GACHA_BLUE_EYES_GUARD_COOLDOWN, 3);
       refreshStatus(blueEyes, 'SPELL_BLOCK', 1, 'blue_eyes_guard');
-      emit('buff', `🐲 【白龙护主】青眼白龙 振翼护在 ${target.name} 身前，削去 ${block} 点来自 ${attacker.name} 的伤害！`);
+      emit(
+        'buff',
+        `🐲 【白龙护主】青眼白龙 振翼护在 ${target.name} 身前，削去 ${block} 点来自 ${attacker.name} 的伤害！`,
+        gachaEffectMetadata('summon_blue_eyes_guard', blueEyes, [attacker]),
+      );
       this.applyGuardianDamage(blueEyes, Math.max(1, Math.floor(block * 0.8)), attacker, '白龙护主');
       amount = Math.max(0, amount - block);
       target.gachaTingGuardTrapReady = false;
@@ -1277,7 +1310,11 @@ export class BattleEngine {
       const spent = consumeGachaLuck(target, 1);
       target.gachaTingGuardTrapReady = false;
       refreshStatus(target, GACHA_TRAP_GUARD_COOLDOWN, 2);
-      emit('buff', `🪤 【护主陷阱】${target.name} ${spent > 0 ? `消耗 ${spent} 点欧气，` : ''}翻开预先覆盖的防御牌，呼叫替身挡刀！`);
+      emit(
+        'buff',
+        `🪤 【护主陷阱】${target.name} ${spent > 0 ? `消耗 ${spent} 点欧气，` : ''}翻开预先覆盖的防御牌，呼叫替身挡刀！`,
+        gachaEffectMetadata('gacha_guard_trap', target, [attacker]),
+      );
       this.executeSummonSkill(GACHA_TING_GUARD_TRAP_SUMMON, target, this.getTeamId(target));
       guard = this.activeOrdinaryFriendlySummons(target)
         .filter((summon) => getSummonBaseName(summon) === '护主栗子球')
@@ -1287,7 +1324,11 @@ export class BattleEngine {
     if (guard && Math.random() < (getSummonBaseName(guard) === '护主栗子球' ? 1 : 0.42)) {
       const isTrapGuard = getSummonBaseName(guard) === '护主栗子球';
       const block = Math.max(1, Math.floor(amount * (isTrapGuard ? 0.36 : 0.28)));
-      emit('buff', `🛡️ 【召唤物护主】${guard.name} 冲到 ${target.name} 身前，替召唤师分担 ${block} 点小汀伤害！`);
+      emit(
+        'buff',
+        `🛡️ 【召唤物护主】${guard.name} 冲到 ${target.name} 身前，替召唤师分担 ${block} 点小汀伤害！`,
+        gachaEffectMetadata('gacha_summon_guard', guard, [attacker]),
+      );
       this.applyGuardianDamage(guard, block, attacker, '召唤物护主');
       amount = Math.max(0, amount - block);
       target.gachaTingGuardTrapReady = false;
@@ -1299,7 +1340,7 @@ export class BattleEngine {
 
   markDefeated(target: Fighter, options: DefeatOptions = {}): boolean {
     if (target.isDead || target.isDeadAnnounced) return false;
-    if (triggerGachaDeathSave(target, (type, text) => this.log(type, text), (fighter) => this.syncHpPct(fighter))) return false;
+    if (triggerGachaDeathSave(target, (type, text, metadata) => this.log(type, text, metadata), (fighter) => this.syncHpPct(fighter))) return false;
 
     if (options.setHpZero ?? true) setCurrentHp(target, 0);
     if (options.message) this.log(options.logType ?? 'death', options.message);
@@ -1518,7 +1559,16 @@ export class BattleEngine {
       actor.isActing = true;
       this.handleSpinalSwordDrop(actor, spinalSwordRef);
 
-      this.log('skill', `👑 【欧气爆发】${actor.name} 欧气满溢，强行插队获得一次命运抽卡机会！`);
+      this.log('skill', `👑 【欧气爆发】${actor.name} 欧气满溢，强行插队获得一次命运抽卡机会！`, {
+        targetIds: [actor.id],
+        visualCue: {
+          kind: 'combat_fx',
+          effectId: 'gacha_instant_action',
+          sourceId: actor.id,
+          targetIds: [actor.id],
+          count: actor.gachaLuck ?? 0,
+        },
+      });
       const skillId = actor.jobData.skills.includes('destiny_draw') ? 'destiny_draw' : this.selectSkill(actor);
       this.executeSkillAction(skillId, actor);
       this.advanceBunnyStyleClock(actor);
@@ -1811,7 +1861,7 @@ export class BattleEngine {
       turnCount: this.turnCount,
       getTeamId: (fighter) => this.getTeamId(fighter),
       isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
-      log: (type, text) => this.log(type, text),
+      log: (type, text, metadata) => this.log(type, text, metadata),
     }, skillId, user);
   }
 
@@ -2038,7 +2088,7 @@ export class BattleEngine {
     }
 
     if (isLuckEmperor(actor) && actor.hpPct <= 0.35) {
-      grantGachaLuck(actor, 1, (type, text) => this.log(type, text), '残血仍然行动');
+      grantGachaLuck(actor, 1, (type, text, metadata) => this.log(type, text, metadata), '残血仍然行动');
     }
 
     const skId = this.selectSkill(actor);

@@ -16,13 +16,15 @@ import {
 } from "@/lib/namearena/combatActorMotion";
 import { getBattlePhase } from "@/lib/namearena/battlePresentation";
 import {
+  GACHA_COMBAT_EFFECT_IDS,
   resolveCombatEffect,
+  type CombatEffectCue,
   type CombatImpactTheme,
+  type GachaCombatEffectCue,
   type TingCombatEffectCue,
 } from "@/lib/namearena/combatEffects";
 import {
-  buildStageLogGroups,
-  createVisibleStagePositionMap,
+  createStagePositionMap,
   getStageFinisherImage,
   getStageFighterImage,
   getStageFocusCycleKey,
@@ -30,20 +32,37 @@ import {
   shouldRenderFighterOnStage,
   type StageManualFocus,
   type StageLogGroup,
+  type StagePosition,
 } from "@/lib/namearena/battleStageModel";
 import {
   EXODIA_STAR_ORDER,
   getSummonCardArt,
   orderExodiaMaterials,
-  SUMMON_CARD_ART_SLOTS,
 } from "@/lib/namearena/summonCardArt";
-import type { BattleEvent, BattleFormIdentity, BattleState, Fighter } from "@/lib/namearena/types";
+import { StageAnimationScheduler } from "@/lib/namearena/stageAnimationScheduler";
+import {
+  collectStageAssetManifest,
+  preloadStageAssetManifest,
+  type StageAssetManifest,
+} from "@/lib/namearena/stageAssetPreloader";
+import type {
+  BattleEvent,
+  BattleCombatEffectId,
+  BattleFormIdentity,
+  Fighter,
+  SummonCinematicKind,
+} from "@/lib/namearena/types";
 import styles from "./NameArenaBattleStage.module.css";
 import {
   createTingCombatFx,
   drawTingCombatFx,
   type TingCombatFx,
 } from "./tingCombatFx";
+import {
+  createGachaCombatFx,
+  drawGachaCombatFx,
+  type GachaCombatFx,
+} from "./gachaCombatFx";
 
 export type ArenaBattleLogEntry = Pick<BattleEvent, "type" | "text"> &
   Partial<Omit<BattleEvent, "type" | "text">>;
@@ -66,8 +85,8 @@ type RoundProgress = {
 type NameArenaBattleStageProps = {
   fighters: Fighter[];
   displayLogs: ArenaBattleLogEntry[];
+  logGroups: StageLogGroup[];
   battleTurn: number;
-  battleState: BattleState;
   battleRunId: number;
   roundProgress: RoundProgress;
   aliveCount: number;
@@ -99,7 +118,8 @@ type FinisherCinematic = {
   kicker: string;
   title: string;
   image?: string;
-  theme?: "ting_blood";
+  accent?: string;
+  theme?: "ting_blood" | "gacha_dragon" | "gacha_solar" | "gacha_void" | "gacha_summon";
   targetName?: string;
 };
 type TransformationCinematic = {
@@ -113,7 +133,7 @@ type TransformationCinematic = {
 };
 type SummonCardCinematic = {
   kind: "summon_card";
-  summonKind: "tribute" | "fusion" | "exodia";
+  summonKind: SummonCinematicKind;
   summonerId: string;
   summonId: string;
   summonName: string;
@@ -141,6 +161,23 @@ type Beam = {
   maxLife: number;
   color: string;
 };
+
+const FX_CANVAS_MAX_DPR = 1.5;
+const MAX_GENERIC_PARTICLES = 260;
+const MAX_GENERIC_BEAMS = 18;
+const MAX_CHARACTER_FX = 32;
+
+function keepNewest<T>(items: T[], limit: number) {
+  if (items.length > limit) items.splice(0, items.length - limit);
+}
+
+function keepNewestSet<T>(items: Set<T>, limit: number) {
+  while (items.size > limit) {
+    const oldest = items.values().next().value as T | undefined;
+    if (oldest === undefined) break;
+    items.delete(oldest);
+  }
+}
 type FighterMotionRuntime = {
   node: HTMLButtonElement;
   animation: Animation;
@@ -232,6 +269,7 @@ function getLogGroupTone(group: StageLogGroup) {
 }
 
 function summonCinematicLabel(kind: SummonCardCinematic["summonKind"]) {
+  if (kind === "reveal") return { code: "CARD REVEAL", title: "召唤展开" };
   if (kind === "fusion") return { code: "FUSION SUMMON", title: "融合召唤" };
   if (kind === "exodia") return { code: "THE FORBIDDEN ONE", title: "封印解除" };
   return { code: "TRIBUTE SUMMON", title: "上位召唤" };
@@ -246,6 +284,12 @@ function readDevelopmentSummonPreview(): SummonCardCinematic | null {
     summonKind: "tribute",
     summonName: "青眼白龙",
     materials: ["史尔特尔", "史瓦罗"],
+  };
+  if (preview === "zhongli") return {
+    ...base,
+    summonKind: "reveal",
+    summonName: "钟离",
+    materials: [],
   };
   if (preview === "ultimate") return {
     ...base,
@@ -286,6 +330,38 @@ function readDevelopmentTingPreview(): string | null {
   if (process.env.NODE_ENV === "production" || typeof window === "undefined") return null;
   const preview = new URLSearchParams(window.location.search).get("namearenaTingFxPreview");
   return preview && DEVELOPMENT_TING_PREVIEW_SKILLS.has(preview) ? preview : null;
+}
+
+function readDevelopmentGachaPreview(): BattleCombatEffectId | null {
+  if (process.env.NODE_ENV === "production" || typeof window === "undefined") return null;
+  const preview = new URLSearchParams(window.location.search).get("namearenaGachaFxPreview");
+  return preview && GACHA_COMBAT_EFFECT_IDS.includes(preview as BattleCombatEffectId)
+    ? preview as BattleCombatEffectId
+    : null;
+}
+
+function readDevelopmentFinisherPreview(): FinisherCinematic | null {
+  if (process.env.NODE_ENV === "production" || typeof window === "undefined") return null;
+  const preview = new URLSearchParams(window.location.search).get("namearenaFinisherPreview");
+  const previews: Record<string, { name: string; title: string; theme: NonNullable<FinisherCinematic["theme"]> }> = {
+    "blue-eyes": { name: "青眼白龙", title: "毁灭的爆裂疾风弹", theme: "gacha_dragon" },
+    ultimate: { name: "青眼究极龙", title: "究极爆裂疾风弹", theme: "gacha_dragon" },
+    ra: { name: "翼神龙", title: "太阳神火焰加农", theme: "gacha_solar" },
+    exodia: { name: "黑暗大法师", title: "Exodia Obliterate", theme: "gacha_void" },
+  };
+  const selected = preview ? previews[preview] : undefined;
+  if (!selected) return null;
+  const art = getSummonCardArt(selected.name);
+  return {
+    kind: "finisher",
+    name: selected.name,
+    kicker: "FINISHER // EFFECT PREVIEW",
+    title: selected.title,
+    image: art.cutinPath ?? art.avatarPath,
+    accent: art.accent,
+    theme: selected.theme,
+    targetName: "特效测试目标",
+  };
 }
 
 function RitualCard({
@@ -348,7 +424,9 @@ function SummonRitualCinematic({
 }) {
   const label = summonCinematicLabel(cinematic.summonKind);
   const isRa = cinematic.summonName === "翼神龙";
-  const requiredMaterialCount = cinematic.summonKind === "exodia"
+  const requiredMaterialCount = cinematic.summonKind === "reveal"
+    ? 0
+    : cinematic.summonKind === "exodia"
     ? 5
     : cinematic.summonKind === "fusion" || isRa
       ? 3
@@ -381,6 +459,17 @@ function SummonRitualCinematic({
         <strong>{label.title}</strong>
         <small>{cinematic.summonName}</small>
       </div>
+
+      {cinematic.summonKind === "reveal" ? (
+        <div className={styles.revealRitual}>
+          <div className={styles.revealDeck} aria-hidden="true"><i /><i /><i /></div>
+          <div className={styles.revealTrail} aria-hidden="true"><i /><i /><i /></div>
+          <div className={styles.revealResultCard}>
+            <RitualCard name={cinematic.summonName} role="result" imageOverride={cinematic.cardImage} />
+          </div>
+          <div className={styles.revealSeal} aria-hidden="true"><i /><i /></div>
+        </div>
+      ) : null}
 
       {cinematic.summonKind === "tribute" ? (
         <div className={styles.tributeRitual} data-material-count={materials.length}>
@@ -468,9 +557,461 @@ function colorWithAlpha(color: string, alpha: number) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
+type StageFighterCardProps = {
+  fighter: Fighter;
+  position: StagePosition;
+  isActive: boolean;
+  isTarget: boolean;
+  isDimmed: boolean;
+  isSelected: boolean;
+  visibleStatusCount: number;
+  getStatusBadges: (fighter: Fighter) => NameArenaStageBadge[];
+  onSelect: (fighterId: string) => void;
+  registerNode: (fighterId: string, node: HTMLButtonElement | null) => void;
+};
+
+const StageFighterCard = React.memo(function StageFighterCard({
+  fighter,
+  position,
+  isActive,
+  isTarget,
+  isDimmed,
+  isSelected,
+  visibleStatusCount,
+  getStatusBadges,
+  onSelect,
+  registerNode,
+}: StageFighterCardProps) {
+  const setNodeRef = useCallback((node: HTMLButtonElement | null) => {
+    registerNode(fighter.id, node);
+  }, [fighter.id, registerNode]);
+  const accent = getFighterAccent(fighter);
+  const shield = getShield(fighter);
+  const hpPercent = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (fighter.currentHp / fighter.maxHp) * 100)) : 0;
+  const shieldPercent = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (shield / fighter.maxHp) * 100)) : 0;
+  const allStatusBadges = getStatusBadges(fighter);
+  const statusBadges = allStatusBadges.slice(0, visibleStatusCount);
+  const hiddenStatusCount = Math.max(0, allStatusBadges.length - statusBadges.length);
+  const image = getStageFighterImage(fighter);
+
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      className={`${styles.fighter} ${isActive ? styles.active : ""} ${isTarget ? styles.target : ""} ${fighter.isHit ? styles.hit : ""} ${fighter.isDead ? styles.dead : ""} ${isDimmed ? styles.dimmed : ""} ${isSelected ? styles.selected : ""}`}
+      style={{ "--x": `${position.x}%`, "--y": `${position.y}%`, "--accent": accent } as CSSProperties}
+      onClick={() => onSelect(fighter.id)}
+      aria-label={`查看 ${fighter.displayName ?? fighter.name} 状态`}
+      aria-pressed={isSelected}
+    >
+      <span className={styles.portrait}>
+        {image ? <Image src={image} alt="" fill sizes="54px" unoptimized={image.startsWith("/namearena/cards/")} /> : <span className={styles.emblem}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>}
+        {fighter.teamId ? <span className={styles.teamBadge} style={{ "--team-color": fighter.color } as CSSProperties}>{fighter.teamId}</span> : null}
+        <span className={styles.phase}>{getPhaseLabel(fighter)}</span>
+      </span>
+      <span className={styles.unitHud}>
+        <span className={styles.unitName}>
+          <span title={fighter.displayName ?? fighter.name}>{fighter.displayName ?? fighter.name}</span>
+          <small>{fighter.currentHp}/{fighter.maxHp}</small>
+        </span>
+        <span className={styles.hpBar} style={{ "--bar-value": `${hpPercent}%` } as CSSProperties}><i /></span>
+        <span className={styles.shieldBar} style={{ "--bar-value": `${shieldPercent}%` } as CSSProperties}><i /></span>
+        <span className={styles.unitBadges}>
+          {statusBadges.map((badge) => <span key={badge.key} title={badge.detail}>{badge.icon} {badge.label}</span>)}
+          {hiddenStatusCount > 0 ? (
+            <span className={styles.moreBadge} title={allStatusBadges.slice(visibleStatusCount).map((badge) => badge.label).join("、")}>+{hiddenStatusCount}</span>
+          ) : null}
+          {fighter.isDead ? <span className={styles.koBadge}>已退场</span> : null}
+        </span>
+      </span>
+    </button>
+  );
+});
+
+type StageFighterLayerProps = {
+  fighters: Fighter[];
+  positionById: Map<string, StagePosition>;
+  activeActorId?: string;
+  targetIdSet: Set<string>;
+  selectedFighterId?: string;
+  visibleStatusCount: number;
+  getStatusBadges: (fighter: Fighter) => NameArenaStageBadge[];
+  onSelect: (fighterId: string) => void;
+  onClearFocus: () => void;
+  registerNode: (fighterId: string, node: HTMLButtonElement | null) => void;
+};
+
+const StageFighterLayer = React.memo(function StageFighterLayer({
+  fighters,
+  positionById,
+  activeActorId,
+  targetIdSet,
+  selectedFighterId,
+  visibleStatusCount,
+  getStatusBadges,
+  onSelect,
+  onClearFocus,
+  registerNode,
+}: StageFighterLayerProps) {
+  return (
+    <div
+      className={styles.fighterLayer}
+      data-stage-empty-surface="true"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClearFocus();
+      }}
+    >
+      {fighters.map((fighter) => {
+        const position = positionById.get(fighter.id) ?? { x: 50, y: 47 };
+        const isTarget = targetIdSet.has(fighter.id);
+        const isActive = fighter.id === activeActorId || Boolean(fighter.isActing);
+        return (
+          <StageFighterCard
+            key={fighter.id}
+            fighter={fighter}
+            position={position}
+            isActive={isActive}
+            isTarget={isTarget}
+            isDimmed={Boolean(activeActorId && !isActive && !isTarget)}
+            isSelected={selectedFighterId === fighter.id}
+            visibleStatusCount={visibleStatusCount}
+            getStatusBadges={getStatusBadges}
+            onSelect={onSelect}
+            registerNode={registerNode}
+          />
+        );
+      })}
+    </div>
+  );
+});
+
+const StageActionBanner = React.memo(function StageActionBanner({
+  activeLog,
+  battleTurn,
+  accent,
+}: {
+  activeLog?: ArenaBattleLogEntry;
+  battleTurn: number;
+  accent: string;
+}) {
+  const title = getActionTitle(activeLog);
+  const subtitle = activeLog?.text ?? "等待战斗事件";
+  return (
+    <div className={styles.actionBanner} style={{ "--event-accent": accent } as CSSProperties}>
+      <span>{`${activeLog?.type?.toUpperCase() ?? "ARENA"} // EVENT ${String(activeLog?.sequence ?? battleTurn).padStart(3, "0")}`}</span>
+      <strong>{title}</strong>
+      <small title={subtitle}>{subtitle}</small>
+    </div>
+  );
+});
+
+const StageRoundOrbit = React.memo(function StageRoundOrbit({
+  number,
+  acted,
+  total,
+}: Pick<RoundProgress, "number" | "acted" | "total">) {
+  return (
+    <div className={styles.roundOrbit} aria-hidden="true">
+      <span>ROUND</span>
+      <b>{String(number).padStart(2, "0")}</b>
+      <small>{acted}/{total}</small>
+    </div>
+  );
+});
+
+const StagePopupLayer = React.memo(function StagePopupLayer({
+  popups,
+  positionById,
+}: {
+  popups: Popup[];
+  positionById: Map<string, StagePosition>;
+}) {
+  return (
+    <div className={styles.popupLayer} aria-hidden="true">
+      {popups.map((popup) => {
+        const position = positionById.get(popup.fighterId) ?? { x: 50, y: 47 };
+        return (
+          <span
+            key={popup.id}
+            className={`${styles.popup} ${styles[popup.kind]}`}
+            style={{ left: `${position.x}%`, top: `${position.y}%` }}
+            data-label={popup.label}
+          >
+            {popup.value}
+          </span>
+        );
+      })}
+    </div>
+  );
+});
+
+const StageDossier = React.memo(function StageDossier({
+  fighter,
+  statuses,
+  resources,
+  accent,
+  isManualFocus,
+  focusCycleKey,
+}: {
+  fighter?: Fighter;
+  statuses: NameArenaStageBadge[];
+  resources: NameArenaStageBadge[];
+  accent: string;
+  isManualFocus: boolean;
+  focusCycleKey: string;
+}) {
+  if (!fighter) return null;
+  return (
+    <div
+      className={styles.dossier}
+      style={{ "--selected-accent": accent } as CSSProperties}
+      data-focus-mode={isManualFocus ? "manual" : "actor"}
+      data-focus-cycle={focusCycleKey}
+      data-focused-fighter-id={fighter.id}
+    >
+      <i />
+      <div className={styles.dossierBody}>
+        <div className={styles.dossierHeading}>
+          <div>
+            <span>{fighter.jobData?.name ?? "未知职业"}</span>
+            <strong>{fighter.displayName ?? fighter.name}</strong>
+            <small className={styles.dossierVital}>生命 {fighter.currentHp.toLocaleString()} / {fighter.maxHp.toLocaleString()}</small>
+          </div>
+          <dl>
+            <div><dt>攻</dt><dd>{fighter.atk}</dd></div>
+            <div><dt>防</dt><dd>{fighter.def}</dd></div>
+            <div><dt>速</dt><dd>{fighter.spd}</dd></div>
+            <div><dt>敏</dt><dd>{fighter.agl}</dd></div>
+            <div><dt>魔</dt><dd>{fighter.mag}</dd></div>
+            <div><dt>抗</dt><dd>{fighter.res}</dd></div>
+            <div><dt>智</dt><dd>{fighter.wis}</dd></div>
+            <div><dt>暴</dt><dd>{Math.round(fighter.critRate * 100)}%</dd></div>
+            <div><dt>盾</dt><dd>{getShield(fighter)}</dd></div>
+          </dl>
+        </div>
+        <div className={styles.dossierBadges}>
+          {[...statuses, ...resources].map((badge) => (
+            <span key={badge.key} data-tone={badge.tone} title={badge.detail}>{badge.icon} {badge.label}</span>
+          ))}
+          {statuses.length + resources.length === 0 ? <small>当前没有额外状态或资源</small> : null}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const StageArenaFooter = React.memo(function StageArenaFooter({
+  threat,
+  actorName,
+  actorAccent,
+  battleTurn,
+  roundNumber,
+}: {
+  threat: number;
+  actorName: string;
+  actorAccent: string;
+  battleTurn: number;
+  roundNumber: number;
+}) {
+  return (
+    <div className={styles.arenaFooter}>
+      <div className={styles.threat}>
+        <span>战场烈度</span>
+        <div><i style={{ width: `${threat}%` }} /></div>
+        <b>{threat >= 90 ? "极危" : threat >= 70 ? "激战" : "交战"}</b>
+      </div>
+      <div className={styles.currentActor}>
+        <span>当前镜头</span>
+        <b style={{ color: actorAccent }}>{actorName}</b>
+        <small>T{battleTurn} / R{roundNumber}</small>
+      </div>
+    </div>
+  );
+});
+
+const StagePulseButton = React.memo(function StagePulseButton({
+  fighter,
+  isActive,
+  onSelect,
+}: {
+  fighter: Fighter;
+  isActive: boolean;
+  onSelect: (fighterId: string) => void;
+}) {
+  const image = getStageFighterImage(fighter);
+  return (
+    <button
+      type="button"
+      title={fighter.displayName ?? fighter.name}
+      aria-label={`聚焦 ${fighter.displayName ?? fighter.name}`}
+      onClick={() => onSelect(fighter.id)}
+      className={isActive ? styles.pulseActive : ""}
+      style={{ "--pulse-accent": getFighterAccent(fighter) } as CSSProperties}
+    >
+      {image ? (
+        <Image src={image} alt="" fill sizes="34px" unoptimized={image.startsWith("/namearena/cards/")} />
+      ) : (
+        <span className={styles.pulseGlyph}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>
+      )}
+    </button>
+  );
+});
+
+const StagePulseStrip = React.memo(function StagePulseStrip({
+  fighters,
+  activeActorId,
+  onSelect,
+}: {
+  fighters: Fighter[];
+  activeActorId?: string;
+  onSelect: (fighterId: string) => void;
+}) {
+  return (
+    <div className={styles.pulseStrip} aria-label="场上单位">
+      <div className={styles.pulseList}>
+        {fighters.slice(0, 12).map((fighter) => (
+          <StagePulseButton
+            key={fighter.id}
+            fighter={fighter}
+            isActive={fighter.id === activeActorId}
+            onSelect={onSelect}
+          />
+        ))}
+      </div>
+      {fighters.length > 12 ? <span className={styles.pulseMore}>+{fighters.length - 12}</span> : null}
+    </div>
+  );
+});
+
+const StageLogGroupCard = React.memo(function StageLogGroupCard({
+  group,
+  turn,
+  round,
+  actorAccent,
+  namePattern,
+  nameAccentByName,
+}: {
+  group: StageLogGroup;
+  turn: number;
+  round: number;
+  actorAccent: string;
+  namePattern: RegExp | null;
+  nameAccentByName: Map<string, string>;
+}) {
+  const latest = group.logs[group.logs.length - 1];
+  const tone = getLogGroupTone(group);
+  const renderText = (text: string) => {
+    if (!namePattern) return text;
+    return text.split(namePattern).map((part, index) => {
+      const accent = nameAccentByName.get(part);
+      if (!accent) return <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>;
+      return <strong key={`${part}-${index}`} style={{ color: accent }}>{part}</strong>;
+    });
+  };
+  return (
+    <article className={styles.logGroup} data-tone={tone} style={{ "--log-accent": actorAccent } as CSSProperties}>
+      <header>
+        <div>
+          <span>{TYPE_LABELS[latest.type] ?? "事件"}</span>
+          <strong>{group.skillName || getActionTitle(latest)}{group.partCount > 1 ? ` · ${group.part}/${group.partCount}` : ""}</strong>
+        </div>
+        <time>T{turn} · R{round}</time>
+      </header>
+      {group.logs.map((log, index) => <p key={log.id ?? `${group.key}-${index}`}>{renderText(log.text)}</p>)}
+    </article>
+  );
+});
+
+type StageFeedPanelProps = {
+  feedRef: React.RefObject<HTMLDivElement>;
+  fighters: Fighter[];
+  activeActorId?: string;
+  logGroups: StageLogGroup[];
+  battleTurn: number;
+  roundNumber: number;
+  gameState: "FIGHTING" | "END";
+  isAutoScroll: boolean;
+  namePattern: RegExp | null;
+  nameAccentByName: Map<string, string>;
+  fighterAccentById: Map<string, string>;
+  onSelectFighter: (fighterId: string) => void;
+  onToggleAutoScroll: () => void;
+  onReset: () => void;
+  onOpenFullLog: () => void;
+  onDownloadLogs: () => void;
+  onDownloadReplay: () => void;
+};
+
+const StageFeedPanel = React.memo(function StageFeedPanel({
+  feedRef,
+  fighters,
+  activeActorId,
+  logGroups,
+  battleTurn,
+  roundNumber,
+  gameState,
+  isAutoScroll,
+  namePattern,
+  nameAccentByName,
+  fighterAccentById,
+  onSelectFighter,
+  onToggleAutoScroll,
+  onReset,
+  onOpenFullLog,
+  onDownloadLogs,
+  onDownloadReplay,
+}: StageFeedPanelProps) {
+  return (
+    <aside className={styles.feed} aria-label="实时战斗记录">
+      <header className={styles.feedHeader}>
+        <div>
+          <span>COMBAT FEED // LIVE</span>
+          <strong>实时战斗记录</strong>
+        </div>
+        <div className={styles.feedActions}>
+          {gameState === "END" ? (
+            <>
+              <button type="button" onClick={onOpenFullLog} title="打开完整战报">战报</button>
+              <button type="button" onClick={onDownloadLogs} title="导出 TXT 战斗日志">TXT</button>
+              <button type="button" onClick={onDownloadReplay} title="导出 JSON 回放">JSON</button>
+            </>
+          ) : (
+            <button type="button" onClick={onToggleAutoScroll} title={isAutoScroll ? "暂停自动跟随" : "恢复自动跟随"}>{isAutoScroll ? "暂停" : "跟随"}</button>
+          )}
+          <button type="button" onClick={onReset} title="重置大厅" aria-label="重置大厅">↻</button>
+        </div>
+      </header>
+
+      <StagePulseStrip fighters={fighters} activeActorId={activeActorId} onSelect={onSelectFighter} />
+
+      <div ref={feedRef} className={styles.feedScroll}>
+        {logGroups.map((group) => (
+          <StageLogGroupCard
+            key={group.key}
+            group={group}
+            turn={group.turn ?? battleTurn}
+            round={group.largeRound ?? roundNumber}
+            actorAccent={group.actorId ? fighterAccentById.get(group.actorId) ?? "#9aa8b4" : "#9aa8b4"}
+            namePattern={namePattern}
+            nameAccentByName={nameAccentByName}
+          />
+        ))}
+      </div>
+
+      <footer className={styles.feedFooter}>
+        <span><i data-tone="skill" />技能</span>
+        <span><i data-tone="death" />击杀</span>
+        <span><i data-tone="heal" />恢复</span>
+        <b>● 快照同步</b>
+      </footer>
+    </aside>
+  );
+});
+
 export function NameArenaBattleStage({
   fighters,
   displayLogs,
+  logGroups,
   battleTurn,
   battleRunId,
   roundProgress,
@@ -496,8 +1037,8 @@ export function NameArenaBattleStage({
   const [impactTheme, setImpactTheme] = useState<"generic" | CombatImpactTheme>("generic");
   const [isGlitching, setIsGlitching] = useState(false);
   const [arenaSize, setArenaSize] = useState({ width: 1200, height: 720 });
-  const [fxVersion, setFxVersion] = useState(0);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [isPageVisible, setIsPageVisible] = useState(true);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const arenaRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -507,13 +1048,13 @@ export function NameArenaBattleStage({
   const particlesRef = useRef<Particle[]>([]);
   const beamsRef = useRef<Beam[]>([]);
   const tingCombatFxRef = useRef<TingCombatFx[]>([]);
+  const gachaCombatFxRef = useRef<GachaCombatFx[]>([]);
+  const wakeFxLoopRef = useRef<() => void>(() => {});
+  const stopFxLoopRef = useRef<() => void>(() => {});
+  const stageFxSuspendedRef = useRef(false);
+  const [animationScheduler] = useState(() => new StageAnimationScheduler());
   const combatFxSequenceRef = useRef(0);
-  const popupTimersRef = useRef(new Set<number>());
   const popupSequenceRef = useRef(0);
-  const cinematicTimerRef = useRef<number | null>(null);
-  const impactDelayTimerRef = useRef<number | null>(null);
-  const impactTimerRef = useRef<number | null>(null);
-  const glitchTimerRef = useRef<number | null>(null);
   const fighterMotionAnimationsRef = useRef(new Map<string, FighterMotionRuntime>());
   const lastProcessedVisualEventKeyRef = useRef<string | null>(null);
   const lastVisualActionKeyRef = useRef<string | null>(null);
@@ -522,19 +1063,20 @@ export function NameArenaBattleStage({
   const developmentSummonPreviewRef = useRef<SummonCardCinematic | null>(null);
   const developmentTingPreviewRef = useRef<string | null>(null);
   const developmentTingPreviewPlayedRef = useRef(false);
-  const developmentTingPreviewTimerRef = useRef<number | null>(null);
-  const developmentTingPreviewFrameRef = useRef(0);
+  const developmentGachaPreviewRef = useRef<BattleCombatEffectId | null>(null);
+  const developmentGachaPreviewPlayedRef = useRef(false);
+  const developmentFinisherPreviewRef = useRef<FinisherCinematic | null>(null);
 
   const stageFighters = useMemo(() => fighters.filter(shouldRenderFighterOnStage), [fighters]);
+  const stageRosterKey = stageFighters.map((fighter) => fighter.id).join("\u001f");
   const densityPopulation = stageFighters.length;
   const stageDensity = densityPopulation > 18 ? "crowded" : densityPopulation > 12 ? "dense" : densityPopulation > 6 ? "compact" : "normal";
   const positionById = useMemo(
-    () => createVisibleStagePositionMap(fighters, arenaSize.width, arenaSize.height),
-    [arenaSize.height, arenaSize.width, fighters],
+    () => createStagePositionMap(stageRosterKey ? stageRosterKey.split("\u001f") : [], arenaSize.width, arenaSize.height),
+    [arenaSize.height, arenaSize.width, stageRosterKey],
   );
   const fighterById = useMemo(() => new Map(fighters.map((fighter) => [fighter.id, fighter])), [fighters]);
   const stageFighterById = useMemo(() => new Map(stageFighters.map((fighter) => [fighter.id, fighter])), [stageFighters]);
-  const logGroups = useMemo(() => buildStageLogGroups(displayLogs), [displayLogs]);
   const activeLog = displayLogs[displayLogs.length - 1];
 
   const actor = useMemo(() => {
@@ -551,46 +1093,77 @@ export function NameArenaBattleStage({
       .map((fighter) => fighter.id);
     return [...new Set(explicitTargets.length > 0 ? explicitTargets : hitTargets.length > 0 ? hitTargets : namedTargets)];
   }, [activeActorId, activeLog, fighterById, fighters]);
+  const targetIdSet = useMemo(() => new Set(targetIds), [targetIds]);
   const focusCycleKey = getStageFocusCycleKey(activeLog, battleRunId, battleTurn, activeActorId);
+  const focusCycleKeyRef = useRef(focusCycleKey);
   const selectedId = resolveStageManualFocusId(manualFocus, focusCycleKey);
   const selectedFighter = stageFighterById.get(selectedId ?? "")
     ?? (actor && stageFighterById.has(actor.id) ? actor : undefined)
     ?? stageFighters.find((fighter) => !fighter.isDead)
     ?? stageFighters[0];
-  const selectedStatuses = selectedFighter ? getStatusBadges(selectedFighter) : [];
-  const selectedResources = selectedFighter ? getResourceBadges(selectedFighter) : [];
+  const selectedStatuses = useMemo(
+    () => selectedFighter ? getStatusBadges(selectedFighter) : [],
+    [getStatusBadges, selectedFighter],
+  );
+  const selectedResources = useMemo(
+    () => selectedFighter ? getResourceBadges(selectedFighter) : [],
+    [getResourceBadges, selectedFighter],
+  );
   const displayOrder = stageFighters;
-  const shouldPreloadSummonAssets = fighters.some((fighter) => fighter.isGacha || fighter.isAdvancedSummon);
+  const paletteKey = JSON.stringify(fighters.map((fighter) => [
+    fighter.id,
+    fighter.name,
+    getFighterAccent(fighter),
+  ]));
+  const { namePattern, nameAccentByName, fighterAccentById } = useMemo(() => {
+    const entries = JSON.parse(paletteKey) as Array<[string, string, string]>;
+    const orderedNames = entries.map(([, name]) => name).filter(Boolean).sort((a, b) => b.length - a.length);
+    return {
+      namePattern: orderedNames.length > 0 ? new RegExp(`(${orderedNames.map(escapeRegExp).join("|")})`, "g") : null,
+      nameAccentByName: new Map(entries.map(([, name, accent]) => [name, accent])),
+      fighterAccentById: new Map(entries.map(([id, , accent]) => [id, accent])),
+    };
+  }, [paletteKey]);
+  const assetManifestKey = JSON.stringify(collectStageAssetManifest(fighters));
+  const visibleStatusCount = densityPopulation > 6 ? 1 : 2;
+  const stageFxSuspended = !isPageVisible || mobileView === "logs" || cinematic !== null;
 
-  const selectFighterForCurrentAction = useCallback((fighterId: string) => {
-    setManualFocus((current) => (
-      current?.fighterId === fighterId && current.focusCycleKey === focusCycleKey
-        ? null
-        : { fighterId, focusCycleKey }
-    ));
+  useEffect(() => {
+    focusCycleKeyRef.current = focusCycleKey;
   }, [focusCycleKey]);
 
   useEffect(() => {
-    if (!shouldPreloadSummonAssets) return;
-    const sources = new Set(
-      SUMMON_CARD_ART_SLOTS.flatMap((art) => [art.imagePath, art.cutinPath, art.avatarPath])
-        .filter((source): source is string => Boolean(source)),
-    );
-    const preloads = [...sources].map((source) => {
-      const image = new window.Image();
-      image.decoding = "async";
-      image.src = source;
-      return image;
-    });
-    return () => preloads.forEach((image) => image.removeAttribute("src"));
-  }, [shouldPreloadSummonAssets]);
+    stageFxSuspendedRef.current = stageFxSuspended;
+  }, [stageFxSuspended]);
+
+  const selectFighterForCurrentAction = useCallback((fighterId: string) => {
+    const currentFocusCycleKey = focusCycleKeyRef.current;
+    setManualFocus((current) => (
+      current?.fighterId === fighterId && current.focusCycleKey === currentFocusCycleKey
+        ? null
+        : { fighterId, focusCycleKey: currentFocusCycleKey }
+    ));
+  }, []);
+
+  const clearManualFocus = useCallback(() => setManualFocus(null), []);
+  const selectFighterFromFeed = useCallback((fighterId: string) => {
+    selectFighterForCurrentAction(fighterId);
+    setMobileView("arena");
+  }, [selectFighterForCurrentAction, setMobileView]);
+
+  const registerFighterNode = useCallback((fighterId: string, node: HTMLButtonElement | null) => {
+    if (node) nodeRefs.current.set(fighterId, node);
+    else nodeRefs.current.delete(fighterId);
+  }, []);
+
+  useEffect(() => {
+    const manifest = JSON.parse(assetManifestKey) as StageAssetManifest;
+    return preloadStageAssetManifest(manifest);
+  }, [assetManifestKey]);
 
   const clearImpactTimers = useCallback(() => {
-    if (impactDelayTimerRef.current !== null) window.clearTimeout(impactDelayTimerRef.current);
-    if (impactTimerRef.current !== null) window.clearTimeout(impactTimerRef.current);
-    impactDelayTimerRef.current = null;
-    impactTimerRef.current = null;
-  }, []);
+    animationScheduler.cancel("impact");
+  }, [animationScheduler]);
 
   const clearFighterMotions = useCallback(() => {
     const motions = [...fighterMotionAnimationsRef.current.values()];
@@ -608,84 +1181,73 @@ export function NameArenaBattleStage({
     duration: number,
     delay = 0,
   ) => {
-    clearImpactTimers();
+    const generation = animationScheduler.begin("impact");
     const show = () => {
-      impactDelayTimerRef.current = null;
+      if (stageFxSuspendedRef.current || document.hidden) return;
       setImpactToken((value) => value + 1);
       setImpactTheme(theme);
       setShowImpact(true);
-      impactTimerRef.current = window.setTimeout(() => {
+      animationScheduler.after("impact", prefersReducedMotion ? 40 : duration, () => {
         setShowImpact(false);
-        impactTimerRef.current = null;
-      }, prefersReducedMotion ? 40 : duration);
+      }, generation);
     };
     if (!prefersReducedMotion && delay > 0) {
-      impactDelayTimerRef.current = window.setTimeout(show, delay);
+      animationScheduler.after("impact", delay, show, generation);
     } else {
       show();
     }
-  }, [clearImpactTimers, prefersReducedMotion]);
+  }, [animationScheduler, prefersReducedMotion]);
 
   useEffect(() => {
+    animationScheduler.reset();
     previousSnapshotRef.current.clear();
     lastProcessedVisualEventKeyRef.current = null;
     lastVisualActionKeyRef.current = null;
     animatedAttackActionKeysRef.current.clear();
     lastFinisherKeyRef.current = null;
-    popupTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    popupTimersRef.current.clear();
-    if (cinematicTimerRef.current !== null) window.clearTimeout(cinematicTimerRef.current);
     clearImpactTimers();
     clearFighterMotions();
-    if (glitchTimerRef.current !== null) window.clearTimeout(glitchTimerRef.current);
-    if (developmentTingPreviewTimerRef.current !== null) window.clearTimeout(developmentTingPreviewTimerRef.current);
-    cancelAnimationFrame(developmentTingPreviewFrameRef.current);
-    cinematicTimerRef.current = null;
-    impactTimerRef.current = null;
-    glitchTimerRef.current = null;
-    developmentTingPreviewTimerRef.current = null;
-    developmentTingPreviewFrameRef.current = 0;
     beamsRef.current = [];
     particlesRef.current = [];
     tingCombatFxRef.current = [];
+    gachaCombatFxRef.current = [];
     combatFxSequenceRef.current = 0;
     developmentSummonPreviewRef.current = readDevelopmentSummonPreview();
     developmentTingPreviewRef.current = readDevelopmentTingPreview();
     developmentTingPreviewPlayedRef.current = false;
-    const frame = requestAnimationFrame(() => {
-      setCinematic(developmentSummonPreviewRef.current);
+    developmentGachaPreviewRef.current = readDevelopmentGachaPreview();
+    developmentGachaPreviewPlayedRef.current = false;
+    developmentFinisherPreviewRef.current = readDevelopmentFinisherPreview();
+    const generation = animationScheduler.begin("battle-init");
+    animationScheduler.frame("battle-init", () => {
+      setCinematic(developmentSummonPreviewRef.current ?? developmentFinisherPreviewRef.current);
       setShowImpact(false);
       setImpactTheme("generic");
       setIsGlitching(false);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [battleRunId, clearFighterMotions, clearImpactTimers]);
+    }, generation);
+    return () => animationScheduler.cancel("battle-init");
+  }, [animationScheduler, battleRunId, clearFighterMotions, clearImpactTimers]);
 
   const playCinematic = useCallback((next: Cinematic, duration: number) => {
-    if (cinematicTimerRef.current !== null) window.clearTimeout(cinematicTimerRef.current);
+    const generation = animationScheduler.begin("cinematic");
+    stageFxSuspendedRef.current = true;
+    setShowImpact(false);
     setCinematic(next);
-    cinematicTimerRef.current = window.setTimeout(() => {
+    animationScheduler.after("cinematic", prefersReducedMotion ? 80 : duration, () => {
       setCinematic((current) => current === next ? null : current);
-      cinematicTimerRef.current = null;
-    }, prefersReducedMotion ? 80 : duration);
-  }, [prefersReducedMotion]);
+    }, generation);
+  }, [animationScheduler, prefersReducedMotion]);
 
   const stopCinematic = useCallback(() => {
-    if (cinematicTimerRef.current !== null) window.clearTimeout(cinematicTimerRef.current);
-    cinematicTimerRef.current = null;
+    animationScheduler.cancel("cinematic");
     setCinematic(null);
-  }, []);
+  }, [animationScheduler]);
 
   useEffect(() => () => {
-    if (cinematicTimerRef.current !== null) window.clearTimeout(cinematicTimerRef.current);
+    animationScheduler.reset();
     clearImpactTimers();
     clearFighterMotions();
-    if (glitchTimerRef.current !== null) window.clearTimeout(glitchTimerRef.current);
-    if (developmentTingPreviewTimerRef.current !== null) window.clearTimeout(developmentTingPreviewTimerRef.current);
-    cancelAnimationFrame(developmentTingPreviewFrameRef.current);
-    popupTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    popupTimersRef.current.clear();
-  }, [clearFighterMotions, clearImpactTimers]);
+  }, [animationScheduler, clearFighterMotions, clearImpactTimers]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -694,6 +1256,30 @@ export function NameArenaBattleStage({
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
+
+  useEffect(() => {
+    const update = () => setIsPageVisible(!document.hidden);
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+
+  useEffect(() => {
+    const generation = animationScheduler.begin("suspension");
+    if (!stageFxSuspended) {
+      wakeFxLoopRef.current();
+      return () => animationScheduler.cancel("suspension");
+    }
+    stopFxLoopRef.current();
+    particlesRef.current = [];
+    beamsRef.current = [];
+    tingCombatFxRef.current = [];
+    gachaCombatFxRef.current = [];
+    clearImpactTimers();
+    clearFighterMotions();
+    animationScheduler.frame("suspension", () => setShowImpact(false), generation);
+    return () => animationScheduler.cancel("suspension");
+  }, [animationScheduler, clearFighterMotions, clearImpactTimers, stageFxSuspended]);
 
   const getNodeCenter = useCallback((fighterId: string) => {
     const arena = arenaRef.current;
@@ -707,12 +1293,12 @@ export function NameArenaBattleStage({
     };
   }, []);
 
-  const playTingActorMotion = useCallback((
-    cue: TingCombatEffectCue,
+  const playCombatActorMotion = useCallback((
+    cue: CombatEffectCue,
     actorId: string,
     targetId?: string,
   ) => {
-    if (cue.actorMotion === "stationary" || !targetId || prefersReducedMotion) return;
+    if (cue.actorMotion === "stationary" || !targetId || prefersReducedMotion || stageFxSuspendedRef.current || document.hidden) return;
     const actorNode = nodeRefs.current.get(actorId);
     const targetNode = nodeRefs.current.get(targetId);
     if (!actorNode || !targetNode || typeof actorNode.animate !== "function") return;
@@ -765,9 +1351,12 @@ export function NameArenaBattleStage({
   }, []);
 
   const spawnBurst = useCallback((fighterId: string, color: string, amount = 30, force = 4.5) => {
+    if (stageFxSuspendedRef.current || document.hidden) return;
     const center = getNodeCenter(fighterId);
     if (!center) return;
-    for (let index = 0; index < amount; index += 1) {
+    const available = Math.max(0, MAX_GENERIC_PARTICLES - particlesRef.current.length);
+    const particleCount = Math.min(amount, available);
+    for (let index = 0; index < particleCount; index += 1) {
       const angle = Math.random() * Math.PI * 2;
       const velocity = 0.8 + Math.random() * force;
       particlesRef.current.push({
@@ -781,10 +1370,11 @@ export function NameArenaBattleStage({
         color,
       });
     }
-    setFxVersion((version) => version + 1);
+    wakeFxLoopRef.current();
   }, [getNodeCenter]);
 
   const spawnBeam = useCallback((actorId: string, targetId: string, color: string) => {
+    if (stageFxSuspendedRef.current || document.hidden) return;
     const from = getNodeCenter(actorId);
     const to = getNodeCenter(targetId);
     if (!from || !to) return;
@@ -798,8 +1388,10 @@ export function NameArenaBattleStage({
       maxLife: 520,
       color,
     });
-    for (let index = 0; index < 22; index += 1) {
-      const ratio = index / 22;
+    keepNewest(beamsRef.current, MAX_GENERIC_BEAMS);
+    const particleCount = Math.min(22, Math.max(0, MAX_GENERIC_PARTICLES - particlesRef.current.length));
+    for (let index = 0; index < particleCount; index += 1) {
+      const ratio = particleCount > 0 ? index / particleCount : 0;
       particlesRef.current.push({
         x: from.x + (to.x - from.x) * ratio,
         y: from.y + (to.y - from.y) * ratio,
@@ -811,7 +1403,7 @@ export function NameArenaBattleStage({
         color,
       });
     }
-    setFxVersion((version) => version + 1);
+    wakeFxLoopRef.current();
   }, [getNodeCenter]);
 
   const spawnTingEffect = useCallback((
@@ -819,6 +1411,7 @@ export function NameArenaBattleStage({
     actorId: string,
     effectTargetIds: string[],
   ) => {
+    if (stageFxSuspendedRef.current || document.hidden) return;
     const from = getNodeCenter(actorId);
     const arena = arenaRef.current;
     if (!from || !arena) return;
@@ -865,7 +1458,39 @@ export function NameArenaBattleStage({
       prefersReducedMotion,
     );
     tingCombatFxRef.current.push(...effects);
-    setFxVersion((version) => version + 1);
+    keepNewest(tingCombatFxRef.current, MAX_CHARACTER_FX);
+    wakeFxLoopRef.current();
+  }, [getNodeCenter, prefersReducedMotion]);
+
+  const spawnGachaEffect = useCallback((
+    cue: GachaCombatEffectCue,
+    sourceId: string,
+    effectTargetIds: string[],
+    metadata: { label?: string; count?: number } = {},
+  ) => {
+    if (stageFxSuspendedRef.current || document.hidden) return;
+    const from = getNodeCenter(sourceId);
+    const arena = arenaRef.current;
+    if (!from || !arena) return;
+    const margin = Math.min(92, arena.clientWidth * 0.15, arena.clientHeight * 0.2);
+    const destinations = effectTargetIds
+      .map((targetId) => getNodeCenter(targetId))
+      .filter((point): point is { x: number; y: number } => Boolean(point))
+      .map((point) => ({
+        x: Math.max(margin, Math.min(arena.clientWidth - margin, point.x)),
+        y: Math.max(margin, Math.min(arena.clientHeight - margin, point.y)),
+      }));
+    const effects = createGachaCombatFx(
+      cue,
+      from,
+      destinations,
+      ++combatFxSequenceRef.current,
+      prefersReducedMotion,
+      metadata,
+    );
+    gachaCombatFxRef.current.push(...effects);
+    keepNewest(gachaCombatFxRef.current, MAX_CHARACTER_FX);
+    wakeFxLoopRef.current();
   }, [getNodeCenter, prefersReducedMotion]);
 
   useEffect(() => {
@@ -909,12 +1534,11 @@ export function NameArenaBattleStage({
     if (!cue) return;
     developmentTingPreviewPlayedRef.current = true;
 
-    developmentTingPreviewTimerRef.current = window.setTimeout(() => {
-      developmentTingPreviewTimerRef.current = null;
-      developmentTingPreviewFrameRef.current = requestAnimationFrame(() => {
-        developmentTingPreviewFrameRef.current = 0;
-        playTingActorMotion(cue, previewActor.id, previewTarget.id);
-        spawnTingEffect(cue, previewActor.id, [previewTarget.id]);
+    const generation = animationScheduler.begin("preview:ting");
+    animationScheduler.after("preview:ting", prefersReducedMotion ? 0 : 220, () => {
+      animationScheduler.frame("preview:ting", () => {
+        playCombatActorMotion(cue, previewActor.id, previewTarget.id);
+        if (cue.theme === "ting") spawnTingEffect(cue, previewActor.id, [previewTarget.id]);
         const timing = getCombatActorMotionTiming(cue.actorMotion, prefersReducedMotion);
         playCombatImpact(
           cue.impact,
@@ -933,9 +1557,69 @@ export function NameArenaBattleStage({
             targetName: previewTarget.name,
           }, 2100);
         }
-      });
-    }, prefersReducedMotion ? 0 : 220);
-  }, [arenaSize.height, arenaSize.width, getNodeCenter, playCinematic, playCombatImpact, playTingActorMotion, prefersReducedMotion, spawnTingEffect, stageFighters]);
+      }, generation);
+    }, generation);
+    return () => animationScheduler.cancel("preview:ting");
+  }, [animationScheduler, arenaSize.height, arenaSize.width, getNodeCenter, playCinematic, playCombatActorMotion, playCombatImpact, prefersReducedMotion, spawnTingEffect, stageFighters]);
+
+  useEffect(() => {
+    const effectId = developmentGachaPreviewRef.current;
+    if (!effectId || developmentGachaPreviewPlayedRef.current) return;
+    const arena = arenaRef.current;
+    if (
+      !arena ||
+      Math.abs(arena.clientWidth - arenaSize.width) > 2 ||
+      Math.abs(arena.clientHeight - arenaSize.height) > 2
+    ) return;
+    const previewActor = stageFighters.find((fighter) => fighter.isGacha && !fighter.isDead);
+    const previewTarget = stageFighters.find((fighter) => fighter.id !== previewActor?.id && !fighter.isDead);
+    const previewFrom = previewActor ? getNodeCenter(previewActor.id) : null;
+    const previewTo = previewTarget ? getNodeCenter(previewTarget.id) : null;
+    if (!previewActor || !previewTarget || !previewFrom || !previewTo) return;
+    const previewEvent: ArenaBattleLogEntry = {
+      type: "skill",
+      text: `${previewActor.name}触发开发特效 ${effectId}。`,
+      skillId: "gacha_effect_preview",
+      skillName: effectId,
+      presentation: "skill",
+      actorId: previewActor.id,
+      targetIds: [previewTarget.id],
+      visualCue: {
+        kind: "combat_fx",
+        effectId,
+        sourceId: previewActor.id,
+        targetIds: [previewTarget.id],
+        label: effectId === "gacha_exodia_piece" ? "被封印者的右腕" : undefined,
+        count: effectId === "gacha_exodia_piece" ? 3 : undefined,
+      },
+    };
+    const cue = resolveCombatEffect(previewEvent);
+    if (!cue || cue.theme !== "gacha") return;
+    developmentGachaPreviewPlayedRef.current = true;
+
+    const generation = animationScheduler.begin("preview:gacha");
+    animationScheduler.after("preview:gacha", prefersReducedMotion ? 0 : 220, () => {
+      animationScheduler.frame("preview:gacha", () => {
+        gachaCombatFxRef.current.push(...createGachaCombatFx(
+          cue,
+          previewFrom,
+          [previewTo],
+          ++combatFxSequenceRef.current,
+          prefersReducedMotion,
+          {
+            label: previewEvent.visualCue?.kind === "combat_fx" ? previewEvent.visualCue.label : undefined,
+            count: previewEvent.visualCue?.kind === "combat_fx" ? previewEvent.visualCue.count : undefined,
+          },
+        ));
+        keepNewest(gachaCombatFxRef.current, MAX_CHARACTER_FX);
+        wakeFxLoopRef.current();
+        if (cue.stageImpact) {
+          playCombatImpact(cue.impact, 680, getCombatActorMotionTiming(cue.actorMotion, prefersReducedMotion).impactDelayMs);
+        }
+      }, generation);
+    }, generation);
+    return () => animationScheduler.cancel("preview:gacha");
+  }, [animationScheduler, arenaSize.height, arenaSize.width, getNodeCenter, playCombatImpact, prefersReducedMotion, stageFighters]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -946,8 +1630,24 @@ export function NameArenaBattleStage({
     let animationFrame = 0;
     let previousTime = performance.now();
 
+    const hasActiveEffects = () =>
+      particlesRef.current.length > 0 ||
+      beamsRef.current.length > 0 ||
+      tingCombatFxRef.current.length > 0 ||
+      gachaCombatFxRef.current.length > 0;
+
+    const clearCanvas = () => {
+      context.clearRect(0, 0, arena.clientWidth, arena.clientHeight);
+    };
+
+    const stop = () => {
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
+      clearCanvas();
+    };
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, FX_CANVAS_MAX_DPR);
       canvas.width = Math.max(1, Math.floor(arena.clientWidth * dpr));
       canvas.height = Math.max(1, Math.floor(arena.clientHeight * dpr));
       canvas.style.width = `${arena.clientWidth}px`;
@@ -962,12 +1662,13 @@ export function NameArenaBattleStage({
     resize();
 
     const draw = (time: number) => {
+      animationFrame = 0;
       if (
         document.hidden ||
-        (particlesRef.current.length === 0 && beamsRef.current.length === 0 && tingCombatFxRef.current.length === 0)
+        stageFxSuspendedRef.current ||
+        !hasActiveEffects()
       ) {
-        context.clearRect(0, 0, arena.clientWidth, arena.clientHeight);
-        animationFrame = 0;
+        clearCanvas();
         return;
       }
       const delta = Math.min(34, Math.max(8, time - previousTime));
@@ -977,6 +1678,13 @@ export function NameArenaBattleStage({
 
       tingCombatFxRef.current = tingCombatFxRef.current.filter((effect) =>
         drawTingCombatFx(context, effect, delta, {
+          width: arena.clientWidth,
+          height: arena.clientHeight,
+        }),
+      );
+
+      gachaCombatFxRef.current = gachaCombatFxRef.current.filter((effect) =>
+        drawGachaCombatFx(context, effect, delta, {
           width: arena.clientWidth,
           height: arena.clientHeight,
         }),
@@ -1014,16 +1722,31 @@ export function NameArenaBattleStage({
       });
 
       context.globalCompositeOperation = "source-over";
-      if (particlesRef.current.length > 0 || beamsRef.current.length > 0 || tingCombatFxRef.current.length > 0) {
+      if (hasActiveEffects()) {
         animationFrame = requestAnimationFrame(draw);
       }
     };
-    animationFrame = requestAnimationFrame(draw);
+
+    const wake = () => {
+      if (animationFrame || document.hidden || stageFxSuspendedRef.current || !hasActiveEffects()) return;
+      previousTime = performance.now();
+      animationFrame = requestAnimationFrame(draw);
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) stop();
+      else wake();
+    };
+    wakeFxLoopRef.current = wake;
+    stopFxLoopRef.current = stop;
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       observer.disconnect();
-      cancelAnimationFrame(animationFrame);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      stop();
+      wakeFxLoopRef.current = () => {};
+      stopFxLoopRef.current = () => {};
     };
-  }, [fxVersion]);
+  }, []);
 
   useEffect(() => {
     const previous = previousSnapshotRef.current;
@@ -1077,67 +1800,87 @@ export function NameArenaBattleStage({
     previousSnapshotRef.current = next;
     if (created.length === 0) return;
     created.forEach((popup) => {
-      const present = () => requestAnimationFrame(() => {
+      const scope = `popup:${popup.id}`;
+      const generation = animationScheduler.begin(scope);
+      const present = () => animationScheduler.frame(scope, () => {
         const fighter = fighterById.get(popup.fighterId);
         setPopups((current) => [...current, popup].slice(-16));
         spawnBurst(popup.fighterId, popup.kind === "heal" ? "#7be36a" : popup.kind.includes("shield") ? "#46a8ff" : getFighterAccent(fighter), popup.kind === "defeat" ? 70 : 34, popup.kind === "defeat" ? 7 : 4.5);
-        const timer = window.setTimeout(() => {
-          popupTimersRef.current.delete(timer);
+        animationScheduler.after(scope, prefersReducedMotion ? 40 : popup.kind === "defeat" ? 1450 : 1100, () => {
           setPopups((current) => current.filter((item) => item.id !== popup.id));
-        }, prefersReducedMotion ? 40 : popup.kind === "defeat" ? 1450 : 1100);
-        popupTimersRef.current.add(timer);
-      });
+          animationScheduler.release(scope);
+        }, generation);
+      }, generation);
       if (popup.kind === "heal") runAfterSelfDestructReturn(popup.fighterId, present);
       else present();
     });
-  }, [fighterById, fighters, prefersReducedMotion, runAfterSelfDestructReturn, spawnBurst]);
+  }, [animationScheduler, fighterById, fighters, prefersReducedMotion, runAfterSelfDestructReturn, spawnBurst]);
 
   useEffect(() => {
-    if (!activeLog || mobileView === "logs" || developmentSummonPreviewRef.current || developmentTingPreviewRef.current) return;
+    if (!activeLog || mobileView === "logs" || developmentSummonPreviewRef.current || developmentTingPreviewRef.current || developmentGachaPreviewRef.current || developmentFinisherPreviewRef.current) return;
     const eventKey = activeLog.id ?? `event-${activeLog.sequence ?? battleTurn}`;
     if (lastProcessedVisualEventKeyRef.current === eventKey) return;
     lastProcessedVisualEventKeyRef.current = eventKey;
 
     const currentActor = activeLog.actorId ? fighterById.get(activeLog.actorId) : actor;
+    const explicitCombatCue = activeLog.visualCue?.kind === "combat_fx" ? activeLog.visualCue : null;
+    const effectSource = explicitCombatCue
+      ? fighterById.get(explicitCombatCue.sourceId)
+      : currentActor;
+    const effectTargetIds = explicitCombatCue
+      ? explicitCombatCue.targetIds.filter((id) => fighterById.has(id))
+      : targetIds;
     const visualActionKey = activeLog.actionId ?? `turn-${activeLog.turn ?? battleTurn}-actor-${currentActor?.id ?? "global"}`;
-    if (lastVisualActionKeyRef.current !== visualActionKey) {
+    let actionGeneration = animationScheduler.generation("action");
+    if (lastVisualActionKeyRef.current !== visualActionKey || explicitCombatCue) {
+      actionGeneration = animationScheduler.begin("action");
       lastVisualActionKeyRef.current = visualActionKey;
       clearFighterMotions();
       beamsRef.current = [];
       particlesRef.current = [];
       tingCombatFxRef.current = [];
+      gachaCombatFxRef.current = [];
       clearImpactTimers();
-      requestAnimationFrame(() => setShowImpact(false));
+      animationScheduler.frame("action", () => setShowImpact(false), actionGeneration);
     }
 
     const namedTargets = fighters
-      .filter((fighter) => fighter.id !== currentActor?.id && activeLog.text.includes(fighter.name))
+      .filter((fighter) => fighter.id !== effectSource?.id && activeLog.text.includes(fighter.name))
       .map((fighter) => fighter.id);
 
-    const accent = getFighterAccent(currentActor);
-    const combatEffect = currentActor ? resolveCombatEffect(activeLog, currentActor) : null;
+    const accent = getFighterAccent(effectSource ?? currentActor);
+    const combatEffect = resolveCombatEffect(activeLog, effectSource);
     const attackLogType = activeLog.type === "skill" || activeLog.type === "crit" || activeLog.type === "death" || activeLog.type === "poison";
     const shouldAttack = Boolean(
-      currentActor &&
-      targetIds.length > 0 &&
+      effectSource &&
+      effectTargetIds.length > 0 &&
       activeLog.visualCue?.kind !== "summon_card" &&
       (activeLog.presentation === "basic" || (attackLogType && (activeLog.presentation === "skill" || activeLog.presentation === "finisher"))),
     );
     const shouldPlayActorEffect = Boolean(
       combatEffect?.targetMode === "actor" &&
-      currentActor &&
+      effectSource &&
       (activeLog.type === "skill" || activeLog.type === "crit" || activeLog.type === "buff" || activeLog.type === "heal"),
     );
-    const shouldPlayActionEffect = shouldAttack || shouldPlayActorEffect;
-    if (shouldPlayActionEffect && currentActor && !animatedAttackActionKeysRef.current.has(visualActionKey)) {
-      animatedAttackActionKeysRef.current.add(visualActionKey);
-      requestAnimationFrame(() => {
+    const shouldPlayActionEffect = Boolean(explicitCombatCue) || shouldAttack || shouldPlayActorEffect;
+    const effectPlaybackKey = explicitCombatCue ? eventKey : visualActionKey;
+    if (shouldPlayActionEffect && effectSource && !animatedAttackActionKeysRef.current.has(effectPlaybackKey)) {
+      animatedAttackActionKeysRef.current.add(effectPlaybackKey);
+      keepNewestSet(animatedAttackActionKeysRef.current, 256);
+      animationScheduler.frame("action", () => {
         if (combatEffect) {
-          playTingActorMotion(combatEffect, currentActor.id, targetIds[0]);
-          spawnTingEffect(combatEffect, currentActor.id, targetIds);
+          playCombatActorMotion(combatEffect, effectSource.id, effectTargetIds[0]);
+          if (combatEffect.theme === "ting") {
+            spawnTingEffect(combatEffect, effectSource.id, effectTargetIds);
+          } else {
+            spawnGachaEffect(combatEffect, effectSource.id, effectTargetIds, {
+              label: explicitCombatCue?.label,
+              count: explicitCombatCue?.count,
+            });
+          }
         } else {
-          targetIds.forEach((targetId) => {
-            spawnBeam(currentActor.id, targetId, accent);
+          effectTargetIds.forEach((targetId) => {
+            spawnBeam(effectSource.id, targetId, accent);
             spawnBurst(targetId, accent, activeLog.type === "crit" || activeLog.type === "death" ? 58 : 28, activeLog.type === "crit" ? 7 : 4.5);
           });
         }
@@ -1145,16 +1888,24 @@ export function NameArenaBattleStage({
           ? 1180
           : combatEffect?.impact === "ting_blood" || combatEffect?.impact === "ting_curse"
             ? 780
-            : 460;
+            : combatEffect?.theme === "gacha"
+              ? 680
+              : 460;
         const impactDelay = combatEffect
           ? getCombatActorMotionTiming(combatEffect.actorMotion, prefersReducedMotion).impactDelayMs
           : 0;
-        playCombatImpact(combatEffect?.impact ?? "generic", impactDuration, impactDelay);
-      });
+        if (!combatEffect || combatEffect.stageImpact) {
+          playCombatImpact(combatEffect?.impact ?? "generic", impactDuration, impactDelay);
+        }
+      }, actionGeneration);
     } else if (activeLog.type === "heal" || activeLog.type === "buff") {
-      const beneficiary = namedTargets[0] ?? currentActor?.id;
+      const beneficiary = namedTargets[0] ?? effectSource?.id ?? currentActor?.id;
       if (beneficiary) {
-        const present = () => requestAnimationFrame(() => spawnBurst(beneficiary, activeLog.type === "heal" ? "#7be36a" : accent, 36, 4));
+        const present = () => animationScheduler.frame(
+          "action",
+          () => spawnBurst(beneficiary, activeLog.type === "heal" ? "#7be36a" : accent, 36, 4),
+          actionGeneration,
+        );
         if (activeLog.type === "heal") runAfterSelfDestructReturn(beneficiary, present);
         else present();
       }
@@ -1172,10 +1923,10 @@ export function NameArenaBattleStage({
         from: visualCue.from,
         to: visualCue.to,
       };
-      requestAnimationFrame(() => playCinematic(nextCinematic, 3200));
-      if (transformed) requestAnimationFrame(() => spawnBurst(transformed.id, getFighterAccent(transformed), 86, 7));
+      animationScheduler.frame("action", () => playCinematic(nextCinematic, 3200), actionGeneration);
+      if (transformed) animationScheduler.frame("action", () => spawnBurst(transformed.id, getFighterAccent(transformed), 86, 7), actionGeneration);
     } else if (visualCue?.kind === "summon_card") {
-      requestAnimationFrame(() => playCinematic({ ...visualCue }, 4400));
+      animationScheduler.frame("action", () => playCinematic({ ...visualCue }, visualCue.summonKind === "reveal" ? 2800 : 4400), actionGeneration);
     } else if (activeLog.presentation === "finisher" && shouldAttack) {
       const finisherKey = activeLog.actionId ?? activeLog.id ?? `event-${activeLog.sequence ?? battleTurn}`;
       if (lastFinisherKeyRef.current !== finisherKey) {
@@ -1188,56 +1939,49 @@ export function NameArenaBattleStage({
           kicker: `FINISHER // TURN ${activeLog.turn ?? battleTurn}`,
           title: getActionTitle(activeLog),
           image: getStageFinisherImage(finisher),
-          theme: combatEffect?.theme === "ting" ? "ting_blood" : undefined,
+          theme: combatEffect?.theme === "ting"
+            ? "ting_blood"
+            : combatEffect?.impact === "gacha_dragon"
+              ? "gacha_dragon"
+              : combatEffect?.impact === "gacha_solar"
+                ? "gacha_solar"
+                : combatEffect?.impact === "gacha_void"
+                  ? "gacha_void"
+                  : combatEffect?.theme === "gacha"
+                    ? "gacha_summon"
+                    : undefined,
           targetName: targetIds[0] ? fighterById.get(targetIds[0])?.name : undefined,
         };
-        requestAnimationFrame(() => playCinematic(nextCinematic, nextCinematic.theme === "ting_blood" ? 2100 : 1900));
+        animationScheduler.frame("action", () => playCinematic(nextCinematic, nextCinematic.theme ? 2100 : 1900), actionGeneration);
       }
     }
 
     if (/普瑞赛斯|源石结晶|矿石病/.test(activeLog.text)) {
-      if (glitchTimerRef.current !== null) window.clearTimeout(glitchTimerRef.current);
-      requestAnimationFrame(() => setIsGlitching(true));
-      glitchTimerRef.current = window.setTimeout(() => {
+      const glitchGeneration = animationScheduler.begin("glitch");
+      animationScheduler.frame("glitch", () => setIsGlitching(true), glitchGeneration);
+      animationScheduler.after("glitch", prefersReducedMotion ? 40 : 900, () => {
         setIsGlitching(false);
-        glitchTimerRef.current = null;
-      }, prefersReducedMotion ? 40 : 900);
+      }, glitchGeneration);
     }
-  }, [activeLog, actor, battleTurn, clearFighterMotions, clearImpactTimers, fighterById, fighters, mobileView, playCinematic, playCombatImpact, playTingActorMotion, prefersReducedMotion, runAfterSelfDestructReturn, spawnBeam, spawnBurst, spawnTingEffect, targetIds]);
+  }, [activeLog, actor, animationScheduler, battleTurn, clearFighterMotions, clearImpactTimers, fighterById, fighters, mobileView, playCinematic, playCombatActorMotion, playCombatImpact, prefersReducedMotion, runAfterSelfDestructReturn, spawnBeam, spawnBurst, spawnGachaEffect, spawnTingEffect, targetIds]);
 
   useEffect(() => {
     if (!isAutoScroll) return;
     const feed = feedRef.current;
     if (!feed) return;
-    requestAnimationFrame(() => feed.scrollTo({ top: feed.scrollHeight, behavior: "auto" }));
-  }, [isAutoScroll, logGroups]);
+    const generation = animationScheduler.begin("feed-scroll");
+    animationScheduler.frame("feed-scroll", () => feed.scrollTo({ top: feed.scrollHeight, behavior: "auto" }), generation);
+  }, [animationScheduler, isAutoScroll, logGroups]);
 
   useEffect(() => {
     if (mobileView !== "logs") return;
-    requestAnimationFrame(() => {
+    const generation = animationScheduler.begin("mobile-view");
+    animationScheduler.frame("mobile-view", () => {
       setShowImpact(false);
       stopCinematic();
-    });
-  }, [mobileView, stopCinematic]);
+    }, generation);
+  }, [animationScheduler, mobileView, stopCinematic]);
 
-  const names = useMemo(() => fighters.map((fighter) => fighter.name).filter(Boolean).sort((a, b) => b.length - a.length), [fighters]);
-  const namePattern = useMemo(() => names.length > 0 ? new RegExp(`(${names.map(escapeRegExp).join("|")})`, "g") : null, [names]);
-
-  const renderHighlightedText = (text: string) => {
-    if (!namePattern) return text;
-    return text.split(namePattern).map((part, index) => {
-      const namedFighter = fighters.find((fighter) => fighter.name === part);
-      if (!namedFighter) return <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>;
-      return (
-        <strong key={`${part}-${index}`} style={{ color: getFighterAccent(namedFighter) }}>
-          {part}
-        </strong>
-      );
-    });
-  };
-
-  const actionTitle = getActionTitle(activeLog);
-  const actionSubtitle = activeLog?.text ?? "等待战斗事件";
   const actionAccent = getFighterAccent(actor);
   const playerCount = fighters.filter((fighter) => !fighter.isNpc && !fighter.isSummon).length;
   const livingPlayers = fighters.filter((fighter) => !fighter.isNpc && !fighter.isSummon && !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0).length;
@@ -1250,6 +1994,9 @@ export function NameArenaBattleStage({
       className={`${styles.root} ${isGlitching ? styles.glitching : ""}`}
       data-mobile-view={mobileView}
       data-density={stageDensity}
+      data-fx-suspended={stageFxSuspended ? "true" : "false"}
+      data-cinematic-active={cinematic ? "true" : "false"}
+      data-page-visible={isPageVisible ? "true" : "false"}
     >
       <section
         ref={arenaRef}
@@ -1267,154 +2014,55 @@ export function NameArenaBattleStage({
           </div>
         ) : null}
 
-        <div className={styles.actionBanner} style={{ "--event-accent": actionAccent } as CSSProperties}>
-          <span>{`${activeLog?.type?.toUpperCase() ?? "ARENA"} // EVENT ${String(activeLog?.sequence ?? battleTurn).padStart(3, "0")}`}</span>
-          <strong>{actionTitle}</strong>
-          <small title={actionSubtitle}>{actionSubtitle}</small>
-        </div>
-
-        <div className={styles.roundOrbit} aria-hidden="true">
-          <span>ROUND</span>
-          <b>{String(roundProgress.number).padStart(2, "0")}</b>
-          <small>{roundProgress.acted}/{roundProgress.total}</small>
-        </div>
-
-        <div
-          className={styles.fighterLayer}
-          data-stage-empty-surface="true"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setManualFocus(null);
-          }}
-        >
-          {stageFighters.map((fighter) => {
-            const position = positionById.get(fighter.id) ?? { x: 50, y: 47 };
-            const accent = getFighterAccent(fighter);
-            const shield = getShield(fighter);
-            const hpPercent = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (fighter.currentHp / fighter.maxHp) * 100)) : 0;
-            const shieldPercent = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (shield / fighter.maxHp) * 100)) : 0;
-            const allStatusBadges = getStatusBadges(fighter);
-            const visibleStatusCount = densityPopulation > 6 ? 1 : 2;
-            const statusBadges = allStatusBadges.slice(0, visibleStatusCount);
-            const hiddenStatusCount = Math.max(0, allStatusBadges.length - statusBadges.length);
-            const isTarget = targetIds.includes(fighter.id);
-            const isActive = fighter.id === activeActorId || fighter.isActing;
-            const isDimmed = Boolean(activeActorId && !isActive && !isTarget);
-            const image = getStageFighterImage(fighter);
-            return (
-              <button
-                ref={(node) => {
-                  if (node) nodeRefs.current.set(fighter.id, node);
-                  else nodeRefs.current.delete(fighter.id);
-                }}
-                key={fighter.id}
-                type="button"
-                className={`${styles.fighter} ${isActive ? styles.active : ""} ${isTarget ? styles.target : ""} ${fighter.isHit ? styles.hit : ""} ${fighter.isDead ? styles.dead : ""} ${isDimmed ? styles.dimmed : ""} ${selectedFighter?.id === fighter.id ? styles.selected : ""}`}
-                style={{ "--x": `${position.x}%`, "--y": `${position.y}%`, "--accent": accent } as CSSProperties}
-                onClick={() => selectFighterForCurrentAction(fighter.id)}
-                aria-label={`查看 ${fighter.displayName ?? fighter.name} 状态`}
-                aria-pressed={selectedFighter?.id === fighter.id}
-              >
-                <span className={styles.portrait}>
-                  {image ? <Image src={image} alt="" fill sizes="54px" unoptimized={image.startsWith("/namearena/cards/")} /> : <span className={styles.emblem}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>}
-                  {fighter.teamId ? <span className={styles.teamBadge} style={{ "--team-color": fighter.color } as CSSProperties}>{fighter.teamId}</span> : null}
-                  <span className={styles.phase}>{getPhaseLabel(fighter)}</span>
-                </span>
-                <span className={styles.unitHud}>
-                  <span className={styles.unitName}>
-                    <span title={fighter.displayName ?? fighter.name}>{fighter.displayName ?? fighter.name}</span>
-                    <small>{fighter.currentHp}/{fighter.maxHp}</small>
-                  </span>
-                  <span className={styles.hpBar} style={{ "--bar-value": `${hpPercent}%` } as CSSProperties}><i /></span>
-                  <span className={styles.shieldBar} style={{ "--bar-value": `${shieldPercent}%` } as CSSProperties}><i /></span>
-                  <span className={styles.unitBadges}>
-                    {statusBadges.map((badge) => <span key={badge.key} title={badge.detail}>{badge.icon} {badge.label}</span>)}
-                    {hiddenStatusCount > 0 ? (
-                      <span className={styles.moreBadge} title={allStatusBadges.slice(visibleStatusCount).map((badge) => badge.label).join("、")}>+{hiddenStatusCount}</span>
-                    ) : null}
-                    {fighter.isDead ? <span className={styles.koBadge}>已退场</span> : null}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className={styles.popupLayer} aria-hidden="true">
-          {popups.map((popup) => {
-            const position = positionById.get(popup.fighterId) ?? { x: 50, y: 47 };
-            return (
-              <span
-                key={popup.id}
-                className={`${styles.popup} ${styles[popup.kind]}`}
-                style={{ left: `${position.x}%`, top: `${position.y}%` }}
-                data-label={popup.label}
-              >
-                {popup.value}
-              </span>
-            );
-          })}
-        </div>
-
-        {selectedFighter ? (
-          <div
-            className={styles.dossier}
-            style={{ "--selected-accent": selectedAccent } as CSSProperties}
-            data-focus-mode={selectedId ? "manual" : "actor"}
-            data-focus-cycle={focusCycleKey}
-            data-focused-fighter-id={selectedFighter.id}
-          >
-            <i />
-            <div className={styles.dossierBody}>
-              <div className={styles.dossierHeading}>
-                <div>
-                  <span>{selectedFighter.jobData?.name ?? "未知职业"}</span>
-                  <strong>{selectedFighter.displayName ?? selectedFighter.name}</strong>
-                  <small className={styles.dossierVital}>生命 {selectedFighter.currentHp.toLocaleString()} / {selectedFighter.maxHp.toLocaleString()}</small>
-                </div>
-                <dl>
-                  <div><dt>攻</dt><dd>{selectedFighter.atk}</dd></div>
-                  <div><dt>防</dt><dd>{selectedFighter.def}</dd></div>
-                  <div><dt>速</dt><dd>{selectedFighter.spd}</dd></div>
-                  <div><dt>敏</dt><dd>{selectedFighter.agl}</dd></div>
-                  <div><dt>魔</dt><dd>{selectedFighter.mag}</dd></div>
-                  <div><dt>抗</dt><dd>{selectedFighter.res}</dd></div>
-                  <div><dt>智</dt><dd>{selectedFighter.wis}</dd></div>
-                  <div><dt>暴</dt><dd>{Math.round(selectedFighter.critRate * 100)}%</dd></div>
-                  <div><dt>盾</dt><dd>{getShield(selectedFighter)}</dd></div>
-                </dl>
-              </div>
-              <div className={styles.dossierBadges}>
-                {[...selectedStatuses, ...selectedResources].map((badge) => (
-                  <span key={badge.key} data-tone={badge.tone} title={badge.detail}>{badge.icon} {badge.label}</span>
-                ))}
-                {selectedStatuses.length + selectedResources.length === 0 ? <small>当前没有额外状态或资源</small> : null}
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        <div className={styles.arenaFooter}>
-          <div className={styles.threat}>
-            <span>战场烈度</span>
-            <div><i style={{ width: `${threat}%` }} /></div>
-            <b>{threat >= 90 ? "极危" : threat >= 70 ? "激战" : "交战"}</b>
-          </div>
-          <div className={styles.currentActor}>
-            <span>当前镜头</span>
-            <b style={{ color: actionAccent }}>{actor?.name ?? "全局事件"}</b>
-            <small>T{battleTurn} / R{roundProgress.number}</small>
-          </div>
-        </div>
+        <StageActionBanner activeLog={activeLog} battleTurn={battleTurn} accent={actionAccent} />
+        <StageRoundOrbit
+          number={roundProgress.number}
+          acted={roundProgress.acted}
+          total={roundProgress.total}
+        />
+        <StageFighterLayer
+          fighters={stageFighters}
+          positionById={positionById}
+          activeActorId={activeActorId}
+          targetIdSet={targetIdSet}
+          selectedFighterId={selectedFighter?.id}
+          visibleStatusCount={visibleStatusCount}
+          getStatusBadges={getStatusBadges}
+          onSelect={selectFighterForCurrentAction}
+          onClearFocus={clearManualFocus}
+          registerNode={registerFighterNode}
+        />
+        <StagePopupLayer popups={popups} positionById={positionById} />
+        <StageDossier
+          fighter={selectedFighter}
+          statuses={selectedStatuses}
+          resources={selectedResources}
+          accent={selectedAccent}
+          isManualFocus={Boolean(selectedId)}
+          focusCycleKey={focusCycleKey}
+        />
+        <StageArenaFooter
+          threat={threat}
+          actorName={actor?.name ?? "全局事件"}
+          actorAccent={actionAccent}
+          battleTurn={battleTurn}
+          roundNumber={roundProgress.number}
+        />
 
         {cinematic?.kind === "finisher" ? (
           <div
             className={styles.cinematic}
             data-cinematic-theme={cinematic.theme ?? "default"}
-            style={{ "--cinematic-accent": getFighterAccent(fighterById.get(cinematic.fighterId ?? "")) } as CSSProperties}
+            style={{ "--cinematic-accent": cinematic.accent ?? getFighterAccent(fighterById.get(cinematic.fighterId ?? "")) } as CSSProperties}
             aria-live="assertive"
           >
             {cinematic.theme === "ting_blood" ? (
               <div className={styles.tingFinisherFx} aria-hidden="true">
+                <i /><i /><i /><i /><i /><i />
+              </div>
+            ) : null}
+            {cinematic.theme?.startsWith("gacha_") ? (
+              <div className={styles.gachaFinisherFx} aria-hidden="true">
                 <i /><i /><i /><i /><i /><i />
               </div>
             ) : null}
@@ -1475,82 +2123,25 @@ export function NameArenaBattleStage({
         {mvpOverlay}
       </section>
 
-      <aside className={styles.feed} aria-label="实时战斗记录">
-        <header className={styles.feedHeader}>
-          <div>
-            <span>COMBAT FEED // LIVE</span>
-            <strong>实时战斗记录</strong>
-          </div>
-          <div className={styles.feedActions}>
-            {gameState === "END" ? (
-              <>
-                <button type="button" onClick={onOpenFullLog} title="打开完整战报">战报</button>
-                <button type="button" onClick={onDownloadLogs} title="导出 TXT 战斗日志">TXT</button>
-                <button type="button" onClick={onDownloadReplay} title="导出 JSON 回放">JSON</button>
-              </>
-            ) : (
-              <button type="button" onClick={onToggleAutoScroll} title={isAutoScroll ? "暂停自动跟随" : "恢复自动跟随"}>{isAutoScroll ? "暂停" : "跟随"}</button>
-            )}
-            <button type="button" onClick={onReset} title="重置大厅" aria-label="重置大厅">↻</button>
-          </div>
-        </header>
-
-        <div className={styles.pulseStrip} aria-label="场上单位">
-          <div className={styles.pulseList}>
-            {displayOrder.slice(0, 12).map((fighter) => {
-              const image = getStageFighterImage(fighter);
-              return (
-                <button
-                  key={fighter.id}
-                  type="button"
-                  title={fighter.displayName ?? fighter.name}
-                  aria-label={`聚焦 ${fighter.displayName ?? fighter.name}`}
-                  onClick={() => {
-                    selectFighterForCurrentAction(fighter.id);
-                    setMobileView("arena");
-                  }}
-                  className={fighter.id === activeActorId ? styles.pulseActive : ""}
-                  style={{ "--pulse-accent": getFighterAccent(fighter) } as CSSProperties}
-                >
-                  {image ? (
-                    <Image src={image} alt="" fill sizes="34px" unoptimized={image.startsWith("/namearena/cards/")} />
-                  ) : (
-                    <span className={styles.pulseGlyph}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          {displayOrder.length > 12 ? <span className={styles.pulseMore}>+{displayOrder.length - 12}</span> : null}
-        </div>
-
-        <div ref={feedRef} className={styles.feedScroll}>
-          {logGroups.map((group) => {
-            const groupActor = group.actorId ? fighterById.get(group.actorId) : undefined;
-            const latest = group.logs[group.logs.length - 1];
-            const tone = getLogGroupTone(group);
-            return (
-              <article key={group.key} className={styles.logGroup} data-tone={tone} style={{ "--log-accent": getFighterAccent(groupActor) } as CSSProperties}>
-                <header>
-                  <div>
-                    <span>{TYPE_LABELS[latest.type] ?? "事件"}</span>
-                    <strong>{group.skillName || getActionTitle(latest)}{group.partCount > 1 ? ` · ${group.part}/${group.partCount}` : ""}</strong>
-                  </div>
-                  <time>T{group.turn ?? battleTurn} · R{group.largeRound ?? roundProgress.number}</time>
-                </header>
-                {group.logs.map((log, index) => <p key={log.id ?? `${group.key}-${index}`}>{renderHighlightedText(log.text)}</p>)}
-              </article>
-            );
-          })}
-        </div>
-
-        <footer className={styles.feedFooter}>
-          <span><i data-tone="skill" />技能</span>
-          <span><i data-tone="death" />击杀</span>
-          <span><i data-tone="heal" />恢复</span>
-          <b>● 快照同步</b>
-        </footer>
-      </aside>
+      <StageFeedPanel
+        feedRef={feedRef}
+        fighters={displayOrder}
+        activeActorId={activeActorId}
+        logGroups={logGroups}
+        battleTurn={battleTurn}
+        roundNumber={roundProgress.number}
+        gameState={gameState}
+        isAutoScroll={isAutoScroll}
+        namePattern={namePattern}
+        nameAccentByName={nameAccentByName}
+        fighterAccentById={fighterAccentById}
+        onSelectFighter={selectFighterFromFeed}
+        onToggleAutoScroll={onToggleAutoScroll}
+        onReset={onReset}
+        onOpenFullLog={onOpenFullLog}
+        onDownloadLogs={onDownloadLogs}
+        onDownloadReplay={onDownloadReplay}
+      />
 
       <nav className={styles.mobileTabs} aria-label="手机战斗视图">
         <button type="button" className={mobileView === "arena" ? styles.mobileActive : ""} onClick={() => setMobileView("arena")}>战场 <span>{aliveCount}</span></button>

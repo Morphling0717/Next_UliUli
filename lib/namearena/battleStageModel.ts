@@ -130,9 +130,20 @@ export function createVisibleStagePositionMap(
   width: number,
   height: number,
 ): Map<string, StagePosition> {
-  const visibleFighters = fighters.filter(shouldRenderFighterOnStage);
-  const positions = createStagePositions(visibleFighters.length, width, height);
-  return new Map(visibleFighters.map((fighter, index) => [fighter.id, positions[index] ?? { x: 50, y: 47 }]));
+  return createStagePositionMap(
+    fighters.filter(shouldRenderFighterOnStage).map((fighter) => fighter.id),
+    width,
+    height,
+  );
+}
+
+export function createStagePositionMap(
+  fighterIds: readonly string[],
+  width: number,
+  height: number,
+): Map<string, StagePosition> {
+  const positions = createStagePositions(fighterIds.length, width, height);
+  return new Map(fighterIds.map((fighterId, index) => [fighterId, positions[index] ?? { x: 50, y: 47 }]));
 }
 
 export function buildStageLogGroups(
@@ -174,4 +185,61 @@ export function buildStageLogGroups(
     }));
   });
   return chunks.slice(-maxGroups);
+}
+
+export function appendStageLogGroup(
+  groups: readonly StageLogGroup[],
+  log: StageLogEntry,
+  maxGroups = 16,
+  maxLogsPerGroup = 5,
+): StageLogGroup[] {
+  const previous = groups[groups.length - 1];
+  if (log.actionId && previous?.actionId === log.actionId) {
+    const sharedMetadata = {
+      actorId: log.actorId ?? previous.actorId,
+      skillName: log.skillName ?? previous.skillName,
+      turn: log.turn ?? previous.turn,
+      largeRound: log.largeRound ?? previous.largeRound,
+    };
+    if (previous.logs.length < maxLogsPerGroup) {
+      return [
+        ...groups.slice(0, -1),
+        { ...previous, ...sharedMetadata, logs: [...previous.logs, log] },
+      ];
+    }
+
+    const nextPart = previous.part + 1;
+    const continued = groups.map((group) =>
+      group.actionId === log.actionId && group.partCount !== nextPart
+        ? { ...group, partCount: nextPart }
+        : group,
+    );
+    const baseKey = previous.key.replace(/-part-\d+$/, '');
+    continued.push({
+      key: `${baseKey}-part-${nextPart}`,
+      actionId: log.actionId,
+      ...sharedMetadata,
+      part: nextPart,
+      partCount: nextPart,
+      logs: [log],
+    });
+    return continued.slice(-maxGroups);
+  }
+
+  const eventKey = log.id ?? log.sequence ?? `${log.turn ?? 0}-${groups.length}`;
+  const actionKey = log.actionId ?? `event-${eventKey}`;
+  return [
+    ...groups,
+    {
+      key: `${actionKey}-group-${eventKey}-part-1`,
+      actionId: log.actionId,
+      actorId: log.actorId,
+      skillName: log.skillName ?? undefined,
+      turn: log.turn,
+      largeRound: log.largeRound,
+      part: 1,
+      partCount: 1,
+      logs: [log],
+    },
+  ].slice(-maxGroups);
 }

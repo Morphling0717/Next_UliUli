@@ -7,12 +7,24 @@ import {
   withBattleRandom,
 } from '../../../lib/namearena/battleState';
 import { grantStatus } from '../../../lib/namearena/defenseStatus';
-import { cloneJobDefinition } from '../../../lib/namearena/combatState';
+import {
+  cloneFighters,
+  cloneJobDefinition,
+  reconcileFighterSnapshots,
+} from '../../../lib/namearena/combatState';
 import {
   createCombatActorMotionPlan,
   TING_SELF_DESTRUCT_TIMELINE,
 } from '../../../lib/namearena/combatActorMotion';
-import { resolveCombatEffect } from '../../../lib/namearena/combatEffects';
+import {
+  GACHA_COMBAT_EFFECT_IDS,
+  resolveCombatEffect,
+} from '../../../lib/namearena/combatEffects';
+import { GACHA_NORMAL_POOL, GACHA_SSR_POOL } from '../../../lib/namearena/data/gachaPools';
+import {
+  GACHA_ORDINARY_SUMMON_NAMES,
+  GACHA_SUMMON_LIFESTEAL_STATUS,
+} from '../../../lib/namearena/gachaMechanics';
 import {
   applyPermanentStatBuff,
   applyTimedStatModifier,
@@ -26,6 +38,7 @@ import {
   tickStatusTurn,
 } from '../../../lib/namearena/statusLifecycle';
 import {
+  appendStageLogGroup,
   buildStageLogGroups,
   createStagePositions,
   createVisibleStagePositionMap,
@@ -34,7 +47,18 @@ import {
   getStageFocusCycleKey,
   resolveStageManualFocusId,
   shouldRenderFighterOnStage,
+  type StageLogEntry,
 } from '../../../lib/namearena/battleStageModel';
+import {
+  appendBattleFeedEntry,
+  commitBattlePlaybackView,
+  createBattlePlaybackView,
+} from '../../../lib/namearena/battlePlaybackModel';
+import {
+  StageAnimationScheduler,
+  type StageAnimationHost,
+} from '../../../lib/namearena/stageAnimationScheduler';
+import { collectStageAssetManifest } from '../../../lib/namearena/stageAssetPreloader';
 import {
   EXODIA_STAR_ORDER,
   SUMMON_CARD_ART_SLOTS,
@@ -171,6 +195,159 @@ export function runArchitectureCases(): string[] {
     assert(selfDestruct?.actorMotion === 'self_destruct_cling', 'Ting self-destruction should cling to the target before charging');
     assert(localProject.skills.suicide_bomb?.presentation === 'finisher', 'Ting self-destruction should be explicitly classified as a finisher');
     cases.push('Ting combat effects are structured by skill and random-pool subtype');
+  }
+
+  {
+    const source = makeFighter('牢鳄@特效契约');
+    const target = makeFighter('玄凝@特效目标');
+    GACHA_COMBAT_EFFECT_IDS.forEach((effectId) => {
+      const cue = resolveCombatEffect({
+        skillId: 'gacha_visual_contract',
+        skillName: '命运抽卡',
+        text: `${source.name} 触发 ${effectId}。`,
+        presentation: 'skill',
+        type: 'skill',
+        visualCue: {
+          kind: 'combat_fx',
+          effectId,
+          sourceId: source.id,
+          targetIds: [target.id],
+        },
+      }, source);
+      assert(cue?.theme === 'gacha', `${effectId} should resolve to a playable gacha effect`);
+      assert(cue?.stageImpact === false, `${effectId} should remain anchored to its fighters during regular skill playback`);
+    });
+    assert(
+      GACHA_NORMAL_POOL.every((entry) => Boolean(entry.visualEffect)),
+      'Every phase-one gacha result should own an explicit combat effect',
+    );
+    assert(
+      new Set(GACHA_NORMAL_POOL.map((entry) => entry.visualEffect)).size === GACHA_NORMAL_POOL.length,
+      'Every phase-one gacha result should have a distinct effect identity',
+    );
+    assert(
+      GACHA_SSR_POOL.filter((entry) => !entry.isSummon).every((entry) => Boolean(entry.visualEffect)),
+      'Every non-summon phase-two card should own an explicit combat effect',
+    );
+
+    const ordinaryMotions = GACHA_ORDINARY_SUMMON_NAMES.map((name) => {
+      const summon = makeFighter(`${name}@召唤物特效`);
+      summon.name = name;
+      summon.summonBaseName = name;
+      summon.isSummon = true;
+      return resolveCombatEffect({
+        skillId: null,
+        skillName: '普通攻击',
+        text: `${name} 发动攻击。`,
+        presentation: 'basic',
+        type: 'skill',
+      }, summon)?.motion;
+    });
+    assert(ordinaryMotions.every(Boolean), 'Every ordinary summon should resolve its own attack effect');
+    assert(
+      new Set(ordinaryMotions).size === GACHA_ORDINARY_SUMMON_NAMES.length,
+      'Every ordinary summon should use a distinct attack motion',
+    );
+
+    const advancedSkills = [
+      'blue_eyes_burst_stream',
+      'blue_eyes_sweeping_breath',
+      'blue_eyes_dragon_roar',
+      'ultimate_burst_stream',
+      'triple_dragon_head',
+      'ra_sun_flare',
+      'ra_divine_pressure',
+      'exodia_forbidden_blast',
+      'exodia_seal_chains',
+      'exodia_obliterate',
+    ];
+    const advancedSummon = makeFighter('黑暗大法师@高级特效');
+    advancedSummon.isSummon = true;
+    advancedSummon.isAdvancedSummon = true;
+    advancedSkills.forEach((skillId) => {
+      const presentation = skillId === 'exodia_obliterate' ? 'finisher' : 'skill';
+      const cue = resolveCombatEffect({
+        skillId,
+        skillName: skillId,
+        text: `${advancedSummon.name} 发动 ${skillId}。`,
+        presentation,
+        type: 'skill',
+      }, advancedSummon);
+      assert(cue?.theme === 'gacha', `${skillId} should resolve an advanced-summon effect`);
+      assert(
+        cue?.stageImpact === (presentation === 'finisher'),
+        `${skillId} should only use a stage-wide impact when explicitly classified as a finisher`,
+      );
+    });
+
+    const trueFinisherIds = [
+      'blue_eyes_burst_stream',
+      'ultimate_burst_stream',
+      'ra_sun_flare',
+      'exodia_obliterate',
+    ];
+    trueFinisherIds.forEach((skillId) => {
+      const cue = resolveCombatEffect({
+        skillId,
+        skillName: skillId,
+        text: `${advancedSummon.name} 发动 ${skillId}。`,
+        presentation: 'finisher',
+        type: 'skill',
+      }, advancedSummon);
+      assert(cue?.stageImpact === true, `${skillId} should retain its finisher-wide impact`);
+    });
+    cases.push('Laoe cards and every summon action have explicit playable effect identities');
+  }
+
+  {
+    const laoe = makeFighter('牢鳄@延迟被动');
+    const attacker = makeFighter('小汀@延迟伤害');
+    laoe.transformed = true;
+    laoe.jobData = { ...laoe.jobData, name: '欧皇' };
+    laoe.hasUsedGachaDeathSave = false;
+    localProject.setCurrentHp(laoe, 10);
+    const deathEvents: BattleEvent[] = [];
+    const deathEngine = makeProjectEngine(localProject, [laoe, attacker], [], 0, undefined, deathEvents);
+    deathEngine.applyDamage(laoe, laoe.maxHp * 2, 'skill', true, attacker, {
+      deferTransform: true,
+      actionName: '延迟致死测试',
+    });
+    deathEngine.flushDeferredDamageEvents(laoe);
+    assert(
+      deathEvents.some((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_death_save'),
+      'Queued damage logs should preserve the Laoe death-save effect metadata',
+    );
+    assert(
+      deathEvents.some((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_luck_gain'),
+      'Luck gained during a queued death-save should preserve its effect metadata',
+    );
+
+    const lifestealOwner = makeFighter('牢鳄@吸血回流');
+    lifestealOwner.transformed = true;
+    lifestealOwner.jobData = { ...lifestealOwner.jobData, name: '欧皇' };
+    localProject.setCurrentHp(lifestealOwner, Math.floor(lifestealOwner.maxHp * 0.4));
+    lifestealOwner.gachaSummonLifestealPct = 0.35;
+    lifestealOwner.status.push(createLifecycleStatus(GACHA_SUMMON_LIFESTEAL_STATUS, 4));
+    const summon = makeFighter('史瓦罗@吸血攻击');
+    summon.name = '史瓦罗';
+    summon.isSummon = true;
+    summon.summonerId = lifestealOwner.id;
+    summon.summonBaseName = '史瓦罗';
+    const enemy = makeFighter('玄凝@吸血目标');
+    const lifestealEvents: BattleEvent[] = [];
+    const lifestealEngine = makeProjectEngine(localProject, [lifestealOwner, summon, enemy], [], 0, undefined, lifestealEvents);
+    lifestealEngine.applyDamage(enemy, 120, 'skill', true, summon, {
+      deferTransform: true,
+      actionName: '吸血回流测试',
+    });
+    lifestealEngine.flushDeferredDamageEvents(enemy);
+    const lifestealCue = lifestealEvents.find((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_lifesteal_proc')?.visualCue;
+    assert(lifestealCue?.kind === 'combat_fx', 'Queued summon lifesteal should emit a combat effect');
+    if (lifestealCue?.kind === 'combat_fx') {
+      assert(lifestealCue.sourceId === summon.id, 'Summon lifesteal should originate from the summon that dealt damage');
+      assert(lifestealCue.targetIds.includes(lifestealOwner.id), 'Summon lifesteal should terminate on Laoe');
+    }
+    cases.push('Laoe damage-triggered passives retain source, target, and effect metadata after deferred settlement');
   }
 
   {
@@ -366,7 +543,25 @@ export function runArchitectureCases(): string[] {
       stats: { hp: 500, atk: 50 },
     }, owner, ordinaryEngine.getTeamId(owner));
     assert(!ordinaryEvents.some((event) => event.visualCue?.kind === 'summon_card'), 'Ordinary summons must not emit a card cinematic');
-    cases.push('tribute, fusion, Exodia, and ordinary summon presentations stay separated');
+
+    const knownOwner = makeFighter('牢鳄@钟离翻牌');
+    const knownOrdinaryEvents: BattleEvent[] = [];
+    const knownOrdinaryEngine = makeProjectEngine(localProject, [knownOwner], [], 0, undefined, knownOrdinaryEvents);
+    knownOrdinaryEngine.executeSummonSkill({
+      name: '命运召唤',
+      tag: summonTag!,
+      text: '{USER} 从卡组抽出钟离。',
+      isSummon: true,
+      summonName: '钟离',
+      summonJob: 'GENSHIN_ARCHON',
+      stats: { hp: 2500, atk: 30, def: 150 },
+    }, knownOwner, knownOrdinaryEngine.getTeamId(knownOwner));
+    const ordinaryCue = knownOrdinaryEvents.find((event) => event.visualCue?.kind === 'summon_card')?.visualCue;
+    assert(
+      ordinaryCue?.kind === 'summon_card' && ordinaryCue.summonKind === 'reveal',
+      'Known ordinary summon cards should receive a short card-reveal cinematic',
+    );
+    cases.push('tribute, fusion, Exodia, known card reveals, and unknown summons stay separated');
   }
 
   {
@@ -390,6 +585,25 @@ export function runArchitectureCases(): string[] {
     })), 10, 5);
     assert(grouped.length === 3 && grouped[0]?.logs[0]?.text === '因果日志 1', 'Long actions should be chunked without dropping their opening cause');
     assert(grouped.every((group) => group.partCount === 3), 'Chunked logs should expose continuation numbering');
+
+    const sourceLogs = Array.from({ length: 12 }, (_, index) => ({
+      id: `incremental-log-${index}`,
+      type: index === 0 ? 'skill' : 'info',
+      text: `增量因果日志 ${index + 1}`,
+      actionId: 'incremental-action',
+      skillName: '增量结算技能',
+    }));
+    const incrementalGroups = sourceLogs.reduce(
+      (groups, log) => appendStageLogGroup(groups, log, 10, 5),
+      [] as ReturnType<typeof buildStageLogGroups>,
+    );
+    const rebuiltGroups = buildStageLogGroups(sourceLogs, 10, 5);
+    assert(
+      incrementalGroups.map((group) => group.logs.map((log) => log.text).join('|')).join('||') ===
+        rebuiltGroups.map((group) => group.logs.map((log) => log.text).join('|')).join('||'),
+      'Incremental feed grouping should preserve the same causal chunks as a full rebuild',
+    );
+    assert(incrementalGroups.every((group) => group.partCount === 3), 'Incremental feed groups should update continuation counts');
 
     const positions = createStagePositions(30, 900, 430);
     assert(positions.length === 30, 'Crowded stage layout should allocate every unit');
@@ -464,6 +678,28 @@ export function runArchitectureCases(): string[] {
     const shuffled = ['被封印者的右足', '被封印者本体', '被封印者的右腕', '被封印者的左足', '被封印者的左腕'];
     assert(orderExodiaMaterials(shuffled).join('|') === EXODIA_STAR_ORDER.join('|'), 'Exodia components should always occupy their fixed pentagram vertices');
     cases.push('summons and Exodia components have complete, deterministic card-art slots');
+  }
+
+  {
+    const source = [makeFighter('快照未变化者@A'), makeFighter('快照变化者@B')];
+    const first = reconcileFighterSnapshots(source);
+    const semanticallyEqual = reconcileFighterSnapshots(cloneFighters(source), first);
+    assert(semanticallyEqual === first, 'An unchanged playback frame should reuse the roster array');
+    assert(semanticallyEqual[0] === first[0] && semanticallyEqual[1] === first[1], 'Unchanged fighters should retain stable object identities');
+
+    const changedSource = cloneFighters(source);
+    changedSource[1].currentHp -= 123;
+    changedSource[1].hpPct = changedSource[1].currentHp / changedSource[1].maxHp;
+    changedSource[1].status.push({ type: 'BURN', duration: 2 });
+    const second = reconcileFighterSnapshots(changedSource, first);
+    assert(second !== first, 'A changed playback frame should receive a new roster array');
+    assert(second[0] === first[0], 'Unchanged fighters should be structurally shared across log snapshots');
+    assert(second[1] !== first[1] && first[1].status.length === 0, 'Changed fighter state should be cloned without mutating the previous log snapshot');
+
+    changedSource[0].jobData.skills.push('snapshot_test_skill');
+    const third = reconcileFighterSnapshots(changedSource, second);
+    assert(third[0] !== second[0] && !second[0].jobData.skills.includes('snapshot_test_skill'), 'In-place job skill changes should invalidate only the affected fighter snapshot');
+    cases.push('playback snapshots structurally share unchanged fighters without losing state isolation');
   }
 
   {
@@ -657,6 +893,103 @@ export function runArchitectureCases(): string[] {
     assert(blockedActual === 0 && blockedOptions.resolution?.outcome === 'spell_blocked', 'Spell block should produce a typed zero-damage outcome');
     assert(blockedFixture.engine.fighters[0].stats.dmgDealt === 0, 'Blocked damage should not inflate attacker damage statistics');
     cases.push('damage ledger separates HP, shields, overkill, and blocked outcomes');
+  }
+
+  {
+    let nextHandle = 0;
+    const timers = new Map<number, () => void>();
+    const frames = new Map<number, FrameRequestCallback>();
+    const host: StageAnimationHost = {
+      setTimeout: (callback) => {
+        const handle = ++nextHandle;
+        timers.set(handle, callback);
+        return handle;
+      },
+      clearTimeout: (handle) => { timers.delete(handle); },
+      requestAnimationFrame: (callback) => {
+        const handle = ++nextHandle;
+        frames.set(handle, callback);
+        return handle;
+      },
+      cancelAnimationFrame: (handle) => { frames.delete(handle); },
+    };
+    const flush = () => {
+      const timerBatch = [...timers.entries()];
+      timers.clear();
+      timerBatch.forEach(([, callback]) => callback());
+      const frameBatch = [...frames.entries()];
+      frames.clear();
+      frameBatch.forEach(([, callback]) => callback(16));
+    };
+    const scheduler = new StageAnimationScheduler(host);
+    const fired: string[] = [];
+    const staleGeneration = scheduler.begin('action');
+    scheduler.after('action', 100, () => fired.push('stale'), staleGeneration);
+    const currentGeneration = scheduler.begin('action');
+    scheduler.frame('action', () => fired.push('current'), currentGeneration);
+    flush();
+    assert(fired.join(',') === 'current', `Superseded stage callbacks should be cancelled, got ${fired.join(',')}`);
+    scheduler.after('impact', 100, () => fired.push('impact'));
+    scheduler.frame('popup:1', () => fired.push('popup'));
+    assert(scheduler.pendingCount() === 2, 'Stage scheduler should account for pending work across scopes');
+    scheduler.reset();
+    assert(scheduler.pendingCount() === 0 && timers.size === 0 && frames.size === 0, 'Stage reset should cancel every timer and animation frame');
+    scheduler.dispose();
+    assert(scheduler.after('disposed', 0, () => fired.push('disposed')) === null, 'Disposed scheduler should reject new work');
+    cases.push('stage animation scheduler cancels stale actions and releases pending work');
+  }
+
+  {
+    const firstState = createBattleState(31337);
+    const first = createBattlePlaybackView<StageLogEntry>(firstState);
+    const fighters = [makeFighter('播放帧甲@A'), makeFighter('播放帧乙@B')];
+    const visibleLog: StageLogEntry = {
+      type: 'skill',
+      text: '播放帧甲发动了测试技能。',
+      actionId: 'atomic-action-1',
+      actorId: fighters[0].id,
+      turn: 1,
+      largeRound: 1,
+    };
+    const committed = commitBattlePlaybackView(first, {
+      fighters,
+      battleTurn: 1,
+      battleState: createBattleState(31337, 1),
+      log: visibleLog,
+    });
+    assert(first.fighters.length === 0 && first.feed.logs.length === 0, 'Atomic playback commits must not mutate the previous UI frame');
+    assert(committed.fighters === fighters && committed.battleTurn === 1, 'Atomic playback should publish roster and turn in the same frame');
+    assert(committed.feed.logs[0] === visibleLog && committed.feed.groups.length === 1, 'Atomic playback should publish the matching log with its fighter frame');
+
+    const hiddenLog: StageLogEntry = { type: 'info', text: '隐藏状态检查点', displayInFeed: false };
+    const hiddenCommit = commitBattlePlaybackView(committed, {
+      fighters: cloneFighters(fighters),
+      battleTurn: 2,
+      battleState: createBattleState(31337, 2),
+      log: hiddenLog,
+    });
+    assert(hiddenCommit.feed === committed.feed, 'Hidden state checkpoints should reuse the visible feed while advancing the fighter frame');
+
+    let cappedFeed = committed.feed;
+    for (let index = 0; index < 260; index += 1) {
+      cappedFeed = appendBattleFeedEntry(cappedFeed, { type: 'info', text: `日志 ${index}`, id: `cap-${index}` });
+    }
+    assert(cappedFeed.logs.length === 240 && cappedFeed.groups.length <= 16, 'Playback feed should keep bounded visible logs and action groups');
+    cases.push('battle playback publishes synchronized atomic frames with bounded feed memory');
+  }
+
+  {
+    const ordinary = makeFighter('素材预载普通角色@A');
+    const ordinaryManifest = collectStageAssetManifest([ordinary]);
+    assert(ordinaryManifest.deferred.length === 0, 'A roster without gacha summons should not preload the full summon library');
+
+    const gacha = makeFighter('牢鳄@素材预载');
+    gacha.isGacha = true;
+    const gachaManifest = collectStageAssetManifest([gacha]);
+    assert(gachaManifest.deferred.length > 0, 'A gacha roster should idle-preload possible summon artwork');
+    assert(new Set(gachaManifest.deferred).size === gachaManifest.deferred.length, 'Deferred stage assets should be deduplicated');
+    assert(!gachaManifest.deferred.some((source) => gachaManifest.immediate.includes(source)), 'Immediate and deferred preload queues should not overlap');
+    cases.push('stage asset manifests prioritize active roster art and defer summon libraries');
   }
 
   {

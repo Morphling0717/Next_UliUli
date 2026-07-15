@@ -8,6 +8,7 @@ import type {
 } from './types';
 import { cloneJobDefinition, healFighter } from './combatState';
 import {
+  GACHA_ORDINARY_SUMMON_NAMES,
   GACHA_RA_PHOENIX_STATUS,
   grantGachaLuck,
   isAdvancedSummonName,
@@ -183,7 +184,9 @@ export function executeSummonSkill(
       ? 'fusion'
       : (skill.tributes ?? 0) > 0
         ? 'tribute'
-      : undefined;
+        : GACHA_ORDINARY_SUMMON_NAMES.includes(skill.summonName ?? '')
+          ? 'reveal'
+          : undefined;
   if (summonKind === 'exodia') summonMaterials = [...(user.exodiaPieces ?? [])];
   runtime.log('skill', `${summonText}\n✨ 【召唤成功】${user.name} 召唤出了 ${summonName}！`, summonKind ? {
     targetIds: [summon.id],

@@ -27,7 +27,7 @@ export function createSkillContext(
     turnCount: runtime.turnCount,
     largeRound: runtime.largeRound,
     setLogs: () => {},
-    log: (type, text) => runtime.log(type, text),
+    log: (type, text, metadata) => runtime.log(type, text, metadata),
     getTeamId: (fighter) => runtime.getTeamId(fighter),
     applyDamage: (damageTarget, amount, source, trueDamage, attacker, options) => {
       context.suppressOnHitStatuses = false;

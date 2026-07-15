@@ -66,12 +66,12 @@ export const SUICIDE_POOL: GachaEntry[] = [
 ];
 
 export const GACHA_NORMAL_POOL: GachaEntry[] = [
-  { text: "💳 {USER} 十连全是蓝天白云... 愤怒地把手机砸向 {TARGET}，造成 {VAL} 点物理伤害！", mult: 0.8, tag: SKILL_TAGS.PHYS },
-  { text: "🧟 {USER} 歪了！小保底抽到了「七七」... 只能给自己加点血了 ({VAL})。", mult: 1.5, tag: SKILL_TAGS.HEAL },
-  { text: "🧩 {USER} 抽到了一张盗版封印卡... 没有任何组件反应，只能把卡套拿来挡一下。", mult: 0.0, tag: SKILL_TAGS.BUFF, status: 'SPELL_BLOCK', statusSource: 'fake_seal_card' },
-  { text: "🍯 {USER} 抽出了一张「强欲之壶的碎片」... 没啥用，加点防御吧。", mult: 0.0, tag: SKILL_TAGS.BUFF, status: 'COUNTER' },
-  { text: "⚔️ {USER} 抽到了「三星武器·以理服人」！物理说服了 {TARGET} ({VAL}伤害)。", mult: 1.1, tag: SKILL_TAGS.PHYS },
-  { text: "😿 {USER} 抽卡沉船了... 悲伤逆流成河，对周围造成 {VAL} 点精神伤害。", mult: 1.0, tag: SKILL_TAGS.MAG },
+  { text: "💳 {USER} 十连全是蓝天白云... 愤怒地把手机砸向 {TARGET}，造成 {VAL} 点物理伤害！", mult: 0.8, tag: SKILL_TAGS.PHYS, visualEffect: 'gacha_blue_sky' },
+  { text: "🧟 {USER} 歪了！小保底抽到了「七七」... 只能给自己加点血了 ({VAL})。", mult: 1.5, tag: SKILL_TAGS.HEAL, visualEffect: 'gacha_qiqi' },
+  { text: "🧩 {USER} 抽到了一张盗版封印卡... 没有任何组件反应，只能把卡套拿来挡一下。", mult: 0.0, tag: SKILL_TAGS.BUFF, status: 'SPELL_BLOCK', statusSource: 'fake_seal_card', visualEffect: 'gacha_fake_seal' },
+  { text: "🍯 {USER} 抽出了一张「强欲之壶的碎片」... 没啥用，加点防御吧。", mult: 0.0, tag: SKILL_TAGS.BUFF, status: 'COUNTER', visualEffect: 'gacha_pot_shard' },
+  { text: "⚔️ {USER} 抽到了「三星武器·以理服人」！物理说服了 {TARGET} ({VAL}伤害)。", mult: 1.1, tag: SKILL_TAGS.PHYS, visualEffect: 'gacha_debate_club' },
+  { text: "😿 {USER} 抽卡沉船了... 悲伤逆流成河，对周围造成 {VAL} 点精神伤害。", mult: 1.0, tag: SKILL_TAGS.MAG, visualEffect: 'gacha_shipwreck' },
 ];
 
 export const EXODIA_CARD: GachaEntry = {
@@ -85,7 +85,7 @@ export const EXODIA_CARD: GachaEntry = {
 };
 
 export const GACHA_SSR_POOL: GachaEntry[] = [
-  { text: "🃏 {USER} 发动魔法卡「强欲之壶」！从卡组再抽两张卡！（技能二连发）", triggerAgain: 2, tag: SKILL_TAGS.BUFF },
+  { text: "🃏 {USER} 发动魔法卡「强欲之壶」！从卡组再抽两张卡！（技能二连发）", triggerAgain: 2, tag: SKILL_TAGS.BUFF, visualEffect: 'gacha_pot_of_greed' },
   GACHA_WHALE_REWRITE_CARD,
   GACHA_SUMMON_LIFESTEAL_CARD,
   GACHA_TEN_PULL_GOLD_CARD,

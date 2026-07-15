@@ -131,6 +131,7 @@ export interface StatusApplicationOptions {
 export interface PendingDamageEvent {
   type: string;
   text: string;
+  metadata?: BattleLogMetadata;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +210,64 @@ export type BattleEventKind =
 /** Visual weight of an action. UI effects must consume this field instead of guessing from log text. */
 export type SkillPresentation = 'basic' | 'skill' | 'finisher';
 
+export type BattleCombatEffectId =
+  | 'gacha_blue_sky'
+  | 'gacha_qiqi'
+  | 'gacha_fake_seal'
+  | 'gacha_pot_shard'
+  | 'gacha_debate_club'
+  | 'gacha_shipwreck'
+  | 'gacha_pot_of_greed'
+  | 'gacha_whale_rewrite'
+  | 'gacha_summon_lifesteal'
+  | 'gacha_ten_pull_gold'
+  | 'gacha_ceiling_exchange'
+  | 'gacha_ash_blossom'
+  | 'gacha_mirror_force'
+  | 'gacha_monster_reborn'
+  | 'gacha_black_lotus'
+  | 'gacha_summon_command'
+  | 'gacha_all_out_attack'
+  | 'gacha_tribute_prep'
+  | 'gacha_summon_recycle'
+  | 'gacha_exodia_piece'
+  | 'gacha_small_pity'
+  | 'gacha_major_pity'
+  | 'gacha_luck_gain'
+  | 'gacha_instant_action'
+  | 'gacha_death_save'
+  | 'gacha_lifesteal_proc'
+  | 'gacha_guard_trap'
+  | 'gacha_summon_guard'
+  | 'gacha_blue_eyes_burst'
+  | 'gacha_true_light'
+  | 'gacha_ancient_chant'
+  | 'gacha_blaze_cannon'
+  | 'gacha_ra_phoenix'
+  | 'gacha_ra_tribute'
+  | 'summon_zhongli_geo'
+  | 'summon_saber_slash'
+  | 'summon_sam_drive'
+  | 'summon_bahamut_flare'
+  | 'summon_emrakul_void'
+  | 'summon_surtr_laeva'
+  | 'summon_svarog_barrage'
+  | 'summon_blue_eyes_burst'
+  | 'summon_blue_eyes_sweep'
+  | 'summon_blue_eyes_roar'
+  | 'summon_ultimate_burst'
+  | 'summon_triple_heads'
+  | 'summon_ra_flare'
+  | 'summon_ra_pressure'
+  | 'summon_ra_rebirth'
+  | 'summon_ra_guard'
+  | 'summon_blue_eyes_guard'
+  | 'summon_ultimate_guard'
+  | 'summon_exodia_guard'
+  | 'summon_exodia_blast'
+  | 'summon_exodia_chains'
+  | 'summon_exodia_obliterate';
+
 export interface BattleFormIdentity {
   jobKey: string;
   jobName: string;
@@ -216,7 +275,7 @@ export interface BattleFormIdentity {
   phase: number;
 }
 
-export type SummonCinematicKind = 'tribute' | 'fusion' | 'exodia';
+export type SummonCinematicKind = 'reveal' | 'tribute' | 'fusion' | 'exodia';
 
 export type BattleVisualCue =
   | {
@@ -235,6 +294,15 @@ export type BattleVisualCue =
       materials: string[];
       /** Reserved for the future card art supplied by the site owner. */
       cardImage?: string;
+    }
+  | {
+      kind: 'combat_fx';
+      effectId: BattleCombatEffectId;
+      sourceId: string;
+      targetIds: string[];
+      links?: Array<{ sourceId: string; targetId: string }>;
+      label?: string;
+      count?: number;
     };
 
 export type BattleLogMetadata = Partial<Pick<BattleEvent, 'targetIds' | 'visualCue' | 'displayInFeed'>>;
@@ -489,7 +557,7 @@ export interface SkillContext {
   fighters: Fighter[];
   turnCount: number;
   largeRound: number;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   getTeamId: (f: Fighter) => string;
   applyDamage: (
     target: Fighter,
@@ -558,6 +626,7 @@ export interface SummonStats {
 // ---------------------------------------------------------------------------
 export interface GachaEntry {
   text: string;
+  visualEffect?: BattleCombatEffectId;
   tag?: SkillTag;
   mult?: number;
   hits?: number;
@@ -610,6 +679,7 @@ export interface StylePoolEntry {
 export interface SkillDefinition {
   name: string;
   tag: SkillTag;
+  visualEffect?: BattleCombatEffectId;
   /** Defaults to `skill`; basic attacks are represented by a null skill id. */
   presentation?: Exclude<SkillPresentation, 'basic'>;
   rate?: number;

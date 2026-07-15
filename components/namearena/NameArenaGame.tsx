@@ -6,7 +6,11 @@ import {
   type NameArenaStageBadge,
 } from "@/components/namearena/NameArenaBattleStage";
 import { BattleEngine } from "@/lib/namearena/battleEngine";
-import { cloneFighters, isWinningCombatant } from "@/lib/namearena/combatState";
+import {
+  cloneFighters,
+  isWinningCombatant,
+  reconcileFighterSnapshots,
+} from "@/lib/namearena/combatState";
 import { namerenaCore } from "@/lib/namearena/core";
 import { namerenaData } from "@/lib/namearena/data";
 import { getDefenseStatusDisplayName } from "@/lib/namearena/defenseStatus";
@@ -16,6 +20,12 @@ import { hasPuruisaishiAppeared, spawnPuruisaishiEvent } from "@/lib/namearena/p
 import { parseNameArenaSetupInput } from "@/lib/namearena/setupInput";
 import { namerenaSkills } from "@/lib/namearena/skills";
 import { statusDurationText } from "@/lib/namearena/statusLifecycle";
+import {
+  clearBattlePlaybackFeed,
+  commitBattlePlaybackView,
+  createBattlePlaybackView,
+  type BattlePlaybackView,
+} from "@/lib/namearena/battlePlaybackModel";
 import {
   cloneBattleState,
   createBattleState,
@@ -59,7 +69,6 @@ type SettlementRow = {
 };
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const DISPLAY_LOG_LIMIT = 240;
 const LOG_PLAYBACK_PROFILE_BY_SPEED: Record<number, {
   base: number;
   charMs: number;
@@ -1046,16 +1055,20 @@ type NameArenaGameProps = {
 
 export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const [inputNames, setInputNames] = useState('水人\n玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep');
-    const [fighters, setFighters] = useState<Fighter[]>([]);
-    const [battleTurn, setBattleTurn] = useState(0);
-    const [battleState, setBattleState] = useState<BattleState>(() => createBattleState(1, 0));
+    const [battleView, setBattleView] = useState<BattlePlaybackView<BattleLogEntry>>(
+        () => createBattlePlaybackView<BattleLogEntry>(createBattleState(1, 0)),
+    );
+    const fighters = battleView.fighters;
+    const battleTurn = battleView.battleTurn;
+    const battleState = battleView.battleState;
     const [battleRunId, setBattleRunId] = useState(0);
     const [gameState, setGameState] = useState<'SETUP' | 'FIGHTING' | 'END'>('SETUP');
     const [showMvp, setShowMvp] = useState(false);
 
     const fullLogsRef = useRef<BattleLogEntry[]>([]);
     const fullEventsRef = useRef<BattleEvent[]>([]);
-	    const [displayLogs, setDisplayLogs] = useState<BattleLogEntry[]>([]);
+    const displayLogs = battleView.feed.logs;
+    const displayLogGroups = battleView.feed.groups;
 	    const [fullLogSnapshot, setFullLogSnapshot] = useState<BattleLogEntry[]>([]);
 	    const [isFullLogModalOpen, setIsFullLogModalOpen] = useState(false);
     const [logPage, setLogPage] = useState(1);
@@ -1063,7 +1076,8 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
     const spinalSwordRef = useRef(false);
     // Always-current fighters ref so battleStep never closes over a stale fighters value
-    const fightersRef = useRef<Fighter[]>([]);
+	    const fightersRef = useRef<Fighter[]>([]);
+	    const playbackFightersSnapshotRef = useRef<Fighter[]>([]);
     const logsEndRef = useRef<HTMLDivElement | null>(null);
     const timerRef = useRef<number | null>(null);
     const battleSpeedRef = useRef(1500);
@@ -1116,10 +1130,12 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     }, [battleUiMode, displayLogs, isAutoScroll, gameState, isPortraitPhone, mobileBattleView]);
 
     const appendDisplayLog = useCallback((logEntry: BattleLogEntry) => {
-        setDisplayLogs(prev => {
-            const newLogs = [...prev, logEntry];
-            return newLogs.length > DISPLAY_LOG_LIMIT ? newLogs.slice(-DISPLAY_LOG_LIMIT) : newLogs;
-        });
+        setBattleView((current) => commitBattlePlaybackView(current, {
+            fighters: current.fighters,
+            battleTurn: current.battleTurn,
+            battleState: current.battleState,
+            log: logEntry,
+        }));
     }, []);
 
     const toggleFullscreen = async () => {
@@ -1135,18 +1151,16 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         }
     };
 
-    const resetGame = () => {
+    const resetGame = useCallback(() => {
         setGameState('SETUP');
-		        setDisplayLogs([]);
         fullLogsRef.current = [];
         fullEventsRef.current = [];
 	        setFullLogSnapshot([]);
         fightersRef.current = [];
+	    playbackFightersSnapshotRef.current = [];
         logPlaybackQueueRef.current = [];
         pendingFinalFightersRef.current = null;
         pendingEndRef.current = false;
-        setFighters([]);
-        setBattleTurn(0);
         setIsFullLogModalOpen(false);
         setShowMvp(false);
         setMobileBattleView('arena');
@@ -1155,12 +1169,12 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         battleTurnRef.current = 0;
         const resetBattleState = createBattleState(1, 0);
         battleStateRef.current = resetBattleState;
-        setBattleState(resetBattleState);
+        setBattleView(createBattlePlaybackView<BattleLogEntry>(resetBattleState));
         if (timerRef.current !== null) {
             clearTimeout(timerRef.current);
             timerRef.current = null;
         }
-    };
+    }, []);
 
     const addLog = (logEntry: BattleLogEntry) => {
         fullLogsRef.current.push(logEntry);
@@ -1184,7 +1198,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         fullLogsRef.current = [];
         fullEventsRef.current = [];
         setFullLogSnapshot([]);
-        setDisplayLogs([]);
+        setBattleView(clearBattlePlaybackFeed);
         logPlaybackQueueRef.current = [];
         pendingFinalFightersRef.current = null;
         pendingEndRef.current = false;
@@ -1221,10 +1235,14 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         }
 
         lastBattleSetupRef.current = { names: [...list], forcePuruisaishi, seed: nextBattleState.seed };
-        fightersRef.current = nextFighters;
-        setFighters(nextFighters);
-        setBattleTurn(0);
-        setBattleState(cloneBattleState(nextBattleState));
+	        const initialPlaybackFighters = cloneFighters(nextFighters);
+	        fightersRef.current = nextFighters;
+	        playbackFightersSnapshotRef.current = initialPlaybackFighters;
+        setBattleView((current) => commitBattlePlaybackView(current, {
+            fighters: initialPlaybackFighters,
+            battleTurn: 0,
+            battleState: cloneBattleState(nextBattleState),
+        }));
         setShowMvp(false);
         setIsFullLogModalOpen(false);
         setMobileBattleView('arena');
@@ -1251,7 +1269,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         }, delay);
     }, []);
 
-    const downloadLogs = () => {
+    const downloadLogs = useCallback(() => {
         const header = [
             `NameWar seed=${battleStateRef.current.seed}`,
             `globalTurn=${battleTurnRef.current}`,
@@ -1274,9 +1292,9 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         a.download = `NameWar_BattleLog_${new Date().getTime()}.txt`;
         a.click();
         URL.revokeObjectURL(url);
-    };
+    }, []);
 
-    const downloadReplayData = () => {
+    const downloadReplayData = useCallback(() => {
         const payload = {
             schemaVersion: 1,
             setup: lastBattleSetupRef.current,
@@ -1290,7 +1308,17 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         anchor.download = `NameWar_Replay_${battleStateRef.current.seed}.json`;
         anchor.click();
         URL.revokeObjectURL(url);
-    };
+    }, []);
+
+    const openFullLog = useCallback(() => {
+        setLogPage(1);
+        setFullLogSnapshot([...fullLogsRef.current]);
+        setIsFullLogModalOpen(true);
+    }, []);
+
+    const toggleAutoScroll = useCallback(() => {
+        setIsAutoScroll((current) => !current);
+    }, []);
 
     const battleStep = useCallback(() => {
         if (pendingEndRef.current || logPlaybackQueueRef.current.length > 0) return;
@@ -1299,10 +1327,15 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         pendingPlaybackItemsRef.current = [];
         let engine: BattleEngine | null = null;
         const clonedFighters = cloneFighters(fightersRef.current);
+        let latestPlaybackSnapshot = playbackFightersSnapshotRef.current;
         const batchedLog = (logEntry: BattleLogEntry) => {
+            latestPlaybackSnapshot = reconcileFighterSnapshots(
+                engine?.fighters ?? clonedFighters,
+                latestPlaybackSnapshot,
+            );
             const playbackItem: BattlePlaybackItem = {
                 log: logEntry,
-                fighters: cloneFighters(engine?.fighters ?? clonedFighters),
+                fighters: latestPlaybackSnapshot,
                 turnCount: engine?.turnCount ?? battleTurnRef.current,
                 battleState: cloneBattleState(engine?.battleState ?? battleStateRef.current),
             };
@@ -1346,15 +1379,18 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         fightersRef.current = nextFighters;
 
         const playbackItems = pendingPlaybackItemsRef.current;
-        const finalFightersSnapshot = cloneFighters(nextFighters);
+        const finalFightersSnapshot = reconcileFighterSnapshots(nextFighters, latestPlaybackSnapshot);
         if (playbackItems.length > 0) {
             logPlaybackQueueRef.current.push(...playbackItems);
             pendingFinalFightersRef.current = finalFightersSnapshot;
         } else {
             pendingFinalFightersRef.current = null;
-            setFighters(finalFightersSnapshot);
-            setBattleTurn(battleTurnRef.current);
-            setBattleState(cloneBattleState(battleStateRef.current));
+            playbackFightersSnapshotRef.current = finalFightersSnapshot;
+            setBattleView((current) => commitBattlePlaybackView(current, {
+                fighters: finalFightersSnapshot,
+                battleTurn: battleTurnRef.current,
+                battleState: cloneBattleState(battleStateRef.current),
+            }));
         }
 
         if (isEnd) {
@@ -1368,22 +1404,34 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         if (nextItem) {
             const playbackItem = logPlaybackQueueRef.current.shift();
             if (!playbackItem) return;
-            setFighters(playbackItem.fighters);
-            setBattleTurn(playbackItem.turnCount);
-            setBattleState(playbackItem.battleState);
+            playbackFightersSnapshotRef.current = playbackItem.fighters;
             if (playbackItem.log.displayInFeed === false) {
+                setBattleView((current) => commitBattlePlaybackView(current, {
+                    fighters: playbackItem.fighters,
+                    battleTurn: playbackItem.turnCount,
+                    battleState: playbackItem.battleState,
+                }));
                 scheduleBattlePump(0);
                 return;
             }
-            appendDisplayLog(playbackItem.log);
+            setBattleView((current) => commitBattlePlaybackView(current, {
+                fighters: playbackItem.fighters,
+                battleTurn: playbackItem.turnCount,
+                battleState: playbackItem.battleState,
+                log: playbackItem.log,
+            }));
             scheduleBattlePump(getLogPlaybackDelay(playbackItem.log, battleSpeedRef.current));
             return;
         }
 
         if (pendingFinalFightersRef.current) {
-            setFighters(pendingFinalFightersRef.current);
-            setBattleTurn(battleTurnRef.current);
-            setBattleState(cloneBattleState(battleStateRef.current));
+            const finalFighters = pendingFinalFightersRef.current;
+            playbackFightersSnapshotRef.current = finalFighters;
+            setBattleView((current) => commitBattlePlaybackView(current, {
+                fighters: finalFighters,
+                battleTurn: battleTurnRef.current,
+                battleState: cloneBattleState(battleStateRef.current),
+            }));
             pendingFinalFightersRef.current = null;
         }
 
@@ -1399,7 +1447,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
         battleStep();
         scheduleBattlePump(logPlaybackQueueRef.current.length > 0 || pendingEndRef.current ? 0 : 180);
-    }, [appendDisplayLog, battleStep, scheduleBattlePump]);
+    }, [battleStep, scheduleBattlePump]);
 
     useEffect(() => {
         battlePumpRef.current = battlePump;
@@ -1429,6 +1477,10 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const nameRegex = names.length > 0 ? new RegExp(`(${names.map(escapeRegExp).join('|')})`, 'g') : null;
     const roundProgress = getLargeRoundProgress(battleState);
     const aliveCount = fighters.filter(isWinningCombatant).length;
+    const getStageResourceBadgesForFighter = useCallback(
+        (fighter: Fighter) => buildStageResourceBadges(fighter, fighters, battleTurn, battleState),
+        [battleState, battleTurn, fighters],
+    );
 
         const renderLogText = (l: BattleLogEntry, i: number) => {
         const parts = nameRegex ? l.text.split(nameRegex) : [l.text];
@@ -1751,8 +1803,8 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                         <NameArenaBattleStage
                             fighters={fighters}
                             displayLogs={displayLogs}
+                            logGroups={displayLogGroups}
                             battleTurn={battleTurn}
-                            battleState={battleState}
                             battleRunId={battleRunId}
                             roundProgress={roundProgress}
                             aliveCount={aliveCount}
@@ -1760,17 +1812,13 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             mobileView={mobileBattleView}
                             setMobileView={setMobileBattleView}
                             isAutoScroll={isAutoScroll}
-                            onToggleAutoScroll={() => setIsAutoScroll((current) => !current)}
+                            onToggleAutoScroll={toggleAutoScroll}
                             onReset={resetGame}
-                            onOpenFullLog={() => {
-                                setLogPage(1);
-                                setFullLogSnapshot([...fullLogsRef.current]);
-                                setIsFullLogModalOpen(true);
-                            }}
+                            onOpenFullLog={openFullLog}
                             onDownloadLogs={downloadLogs}
                             onDownloadReplay={downloadReplayData}
                             getStatusBadges={buildStageStatusBadges}
-                            getResourceBadges={(fighter) => buildStageResourceBadges(fighter, fighters, battleTurn, battleState)}
+                            getResourceBadges={getStageResourceBadgesForFighter}
                             mvpOverlay={showMvp ? renderMVP() : null}
                         />
                         {isFullLogModalOpen ? (
