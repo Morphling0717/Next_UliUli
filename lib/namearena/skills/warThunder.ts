@@ -257,7 +257,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       return false;
     },
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
       if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
       const moduleRoll = Math.random();
@@ -315,7 +315,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: 'BMPT死亡收割机', tag: SKILL_TAGS.PHYS, mult: 0.58, hits: 5, status: 'WT_SUPPRESS', alwaysHit: true,
     text: '🚜 {USER} 召唤巨大 BMPT 终结者！双联装30毫米机炮狂啸！\n"哒哒哒哒哒！" 对 {TARGET} 倾泻 5 段火力（共 {VAL} 伤害）并形成绝对【火力压制】！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
       if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
       exposeModule(ctx, ctx.target, 'WT_TRACK_DAMAGED', 2, `🛞 【履带断裂】${ctx.user.name} 的机炮扫断 ${ctx.target.name} 的机动部件，闪避归零！`);
@@ -328,7 +328,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: 'T-58 碎甲轰击', tag: SKILL_TAGS.PHYS, mult: 4.35, ignoreDef: true, status: 'WT_AIRBORNE',
     text: '💥 {USER} 召唤 T-58 重型坦克！155毫米线膛炮锁定！\n"一发入魂！" 粗壮的钢针瞬间粉碎了 {TARGET} 的装甲，造成 {VAL} 真实伤害并将其当场【击飞】！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || !isTopTierWt(ctx.user)) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user)) return;
       if (actualDmg > 0 && isActiveCombatant(ctx.target)) {
         grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
         if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
@@ -400,7 +400,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         const damageOptions: DamageApplicationOptions = { actionName: '苏-30SM2 洗地' };
         const actualDmg = ctx.applyDamage(e, plannedDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
         const airborneImmune = findDefenseStatus(e, 'BKB') || findDefenseStatus(e, 'INVUL');
         if (actualDmg <= 0) {
           ctx.log('info', `💥 轰炸冲击被化解！${e.name} 没有承受实际伤害，也没有被【击飞】！`);

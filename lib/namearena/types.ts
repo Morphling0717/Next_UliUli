@@ -113,6 +113,16 @@ export interface DamageApplicationOptions {
   redirectedJokerDamage?: number;
   redirectedByOriginiumCore?: boolean;
   redirectedOriginiumDamage?: number;
+  redirectedByOwlEmperor?: boolean;
+  redirectedOwlEmperorDamage?: number;
+  /** Internal guard used while damage is already being paid by 帝王之征. */
+  bypassOwlEmperorRedirect?: boolean;
+  /** Mechanical costs and copied damage must not recursively create 过江协同. */
+  suppressOwlCooperation?: boolean;
+  /** Mechanical self-costs do not receive 鸮's offensive form multiplier. */
+  bypassOwlOutgoingModifier?: boolean;
+  /** Fixed self-costs do not receive 鸮's defensive form multiplier. */
+  bypassOwlIncomingModifier?: boolean;
   targetDefeatedDuringDamage?: boolean;
   /** A cleansing death-save consumed this hit, so its post-hit hostile statuses must not be re-applied. */
   suppressOnHitStatuses?: boolean;
@@ -333,6 +343,43 @@ export interface BattleEvent {
 
 export type BattleLogEntry = BattleEvent & { visible: true };
 
+export type OwlWarForm = 'victory' | 'pride' | 'defeat' | 'sorrow';
+
+export type OwlSummonKind =
+  | 'meal'
+  | 'rice'
+  | 'cricket'
+  | 'zhao_adou'
+  | 'swire'
+  | 'linlang_swire'
+  | 'specter'
+  | 'spalter'
+  | 'emperor';
+
+export interface OwlState {
+  phase: 1 | 2 | 3;
+  warForm: OwlWarForm;
+  warFormStartedTurn: number;
+  heavenStacks: number;
+  sweepUsed: boolean;
+  riverMarkedTargetId?: string;
+  riverMarkExpiresTurn?: number;
+}
+
+export interface OwlSummonState {
+  kind: OwlSummonKind;
+  spawnedTurn: number;
+  transformAtTurn?: number;
+  expiresAtTurn?: number;
+  pairId?: string;
+  lastAttackerId?: string;
+  suicideTriggered?: boolean;
+  deathSaveUsed?: boolean;
+  lockUntilTurn?: number;
+  dollUntilTurn?: number;
+  wildStacks?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Fighter — a participant in a battle round
 // ---------------------------------------------------------------------------
@@ -374,6 +421,7 @@ export interface Fighter {
   isGamer?: boolean;       // High-end gamer (玄凝)
   isEmote?: boolean;       // 表情（四处认主型魔虚罗）
   isYuzu?: boolean;        // 柚子（镜世界的食指父辈）
+  isOwl?: boolean;         // 鸮（雾隐罅中鸮）
   isSummon?: boolean;      // Summoned unit
   isAdvancedSummon?: boolean;
   isSon?: boolean;         // Water god's son
@@ -511,6 +559,10 @@ export interface Fighter {
   yuzuFuriosoReady?: boolean;
   yuzuLastWeapon?: string;
 
+  // ── Owl / Heaven-corrosion and dedicated summon system ───────────────
+  owlState?: OwlState;
+  owlSummonState?: OwlSummonState;
+
   // ── Slacking synergy (丝瓜 + 兔卷卷 bond) ────────────────────────────
   willSlackThisGame?: boolean;
   hasTriggeredSlacking?: boolean;
@@ -553,6 +605,8 @@ export interface DefeatOptions {
 export interface SkillContext {
   user: Fighter;
   target: Fighter;
+  targetWasIntercepted?: boolean;
+  interceptedProtectedTargetId?: string;
   currentTargets: Fighter[];
   fighters: Fighter[];
   turnCount: number;
@@ -584,6 +638,10 @@ export interface SkillContext {
   damageRedirectedByOriginiumCore?: boolean;
   /** Total damage resolved across originium crystals for the redirected primary hit. */
   redirectedOriginiumDamage?: number;
+  /** The primary hit was taken by 帝王之征 instead of landing on 鸮. */
+  damageRedirectedByOwlEmperor?: boolean;
+  /** Damage actually suffered by 帝王之征 for the redirected primary hit. */
+  redirectedOwlEmperorDamage?: number;
   /** Settlement result for the most recent hit in this skill context. */
   suppressOnHitStatuses?: boolean;
   suppressOnHitStatusTargetId?: string;

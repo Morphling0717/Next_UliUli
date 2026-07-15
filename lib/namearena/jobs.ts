@@ -185,6 +185,23 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
     ],
   },
 
+  // ── 鸮 / 雾隐罅中鸮系 ────────────────────────────────────────────────
+  OWL_HEAVEN_AVATAR: {
+    name: '天意的化身', icon: '🦉',
+    hp: 1.7, atk: 1.7, def: 1.25, spd: 1.4, agl: 1.35, mag: 1.7, res: 1.35, wis: 1.8,
+    skills: ['owl_benevolence_sword', 'owl_righteousness_sword', 'owl_nia', 'owl_yiling_fire', 'owl_shining_hopper'],
+  },
+  OWL_BOILED_HERO: {
+    name: '煮酒论英雄', icon: '⚡',
+    hp: 3.0, atk: 2.7, def: 2.5, spd: 2.35, agl: 2.15, mag: 3.1, res: 2.8, wis: 3.0,
+    skills: ['owl_seven_in_seven_out', 'owl_sweep_furry', 'owl_crossing_mark'],
+  },
+  OWL_DRAGON_SOVEREIGN: {
+    name: '龙，可是帝王之征啊！', icon: '🐉',
+    hp: 3.8, atk: 3.8, def: 3.2, spd: 2.8, agl: 2.4, mag: 4.0, res: 3.4, wis: 3.8,
+    skills: ['owl_bumper_harvest', 'owl_desk', 'owl_ruthless_sword', 'owl_enjoy', 'owl_great_wind', 'owl_bone_scrape'],
+  },
+
   // ── 基础职业与隐藏彩蛋 ──────────────────────────────────────────────────
   ONE_PUNCH: {
     name: '秃头披风侠', icon: '👊',
@@ -213,6 +230,14 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
   FATE_SERVANT:   { name: '从者',      icon: '🗡️', hp: 1.0, atk: 1.5, def: 1.0, spd: 1.5, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
   HSR_HUNTER:     { name: '星穹铁道猎人', icon: '🤖', hp: 1.0, atk: 1.2, def: 1.0, spd: 1.5, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
   ELDRAZI_TITAN:  { name: '埃尔德拉兹', icon: '🦑', hp: 1.0, atk: 1.0, def: 1.0, spd: 0.5, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['bash'] },
+  OWL_FOOD:       { name: '盖饭', icon: '🍚', hp: 1.0, atk: 0.1, def: 0.1, spd: 0.1, agl: 0.1, mag: 0.1, res: 0.1, wis: 0.1, skills: [] },
+  OWL_CRICKET:    { name: '有情有义的蛐蛐', icon: '🦗', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.6, res: 0.8, wis: 0.8, skills: ['owl_cricket_strike'] },
+  OWL_ZHAO_ADOU:  { name: '赵云&阿斗', icon: '🏇', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.5, res: 1.0, wis: 1.0, skills: ['owl_zhao_rampage'] },
+  OWL_SWIRE:      { name: '诗怀雅', icon: '🐯', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.7, res: 1.0, wis: 1.0, skills: ['owl_swire_strike'] },
+  OWL_LINLANG_SWIRE: { name: '琳琅诗怀雅', icon: '💰', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.8, res: 1.0, wis: 1.0, skills: ['owl_linlang_strike'] },
+  OWL_SPECTER:    { name: '幽灵鲨', icon: '🦈', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.6, res: 1.0, wis: 0.8, skills: ['owl_specter_saw'] },
+  OWL_SPALTER:    { name: '归溟幽灵鲨', icon: '🌊', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.9, res: 1.0, wis: 1.0, skills: ['owl_spalter_saw'] },
+  OWL_EMPEROR_DRAGON: { name: '帝王之征', icon: '🐲', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['owl_emperor_claw', 'owl_atomic_breath', 'owl_dragon_shock'] },
 };
 
 export const namerenaJobs = JOBS;

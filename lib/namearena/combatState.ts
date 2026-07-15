@@ -64,6 +64,8 @@ export function cloneFighter(fighter: Fighter): Fighter {
     })),
     emoteAdaptStats: fighter.emoteAdaptStats ? { ...fighter.emoteAdaptStats } : fighter.emoteAdaptStats,
     emoteOwnerBonus: fighter.emoteOwnerBonus ? { ...fighter.emoteOwnerBonus } : fighter.emoteOwnerBonus,
+    owlState: fighter.owlState ? { ...fighter.owlState } : fighter.owlState,
+    owlSummonState: fighter.owlSummonState ? { ...fighter.owlSummonState } : fighter.owlSummonState,
   };
 }
 

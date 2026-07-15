@@ -15,6 +15,7 @@ const CINEMATIC_ADVANCED_SUMMONS = new Set([
 export function getBattlePhase(fighter: Fighter): number {
   if (fighter.isPuruisaishi) return Math.max(1, fighter.puruisaishiPhase ?? 1);
   if (fighter.isYuzu) return Math.max(1, fighter.yuzuPhase ?? 1);
+  if (fighter.isOwl) return Math.max(1, fighter.owlState?.phase ?? 1);
   if (fighter.job === 'MIRACLE_MONSTER_BUJIN' || fighter.job === 'GOD_OF_TROLLS') return 3;
   return fighter.transformed ? 2 : 1;
 }

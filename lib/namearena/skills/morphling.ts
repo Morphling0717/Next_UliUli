@@ -20,7 +20,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     name: '深渊水牢', tag: SKILL_TAGS.MAG, mult: 1.5,
     text: '💧 {USER} 抬手升起一座深渊水牢！{TARGET} 引以为傲的反击姿态瞬间瓦解！只能在无尽的窒息中挣扎...',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || actualDmg <= 0 || ctx.target.currentHp <= 0) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || actualDmg <= 0 || ctx.target.currentHp <= 0) return;
       if (!ctx.applyStatus(ctx.target, 'WATER_PRISON', 3)) return;
       ctx.target.status = (ctx.target.status ?? []).filter((s) => s.type !== 'WAIT_COUNTER' && !s.type.startsWith('CTR_'));
       if (ctx.target.hpPct < 0.2) {
@@ -44,7 +44,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
         if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '神罚·灭世大洪水' };
         const actualDmg = ctx.applyDamage(e, dmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
         if (actualDmg > 0) {
           ctx.log('info', `🌊 狂暴洪水吞噬了 ${e.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -75,7 +75,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     name: '斯嘉蒂之眼', tag: SKILL_TAGS.MAG, mult: 2.5, status: 'FREEZE',
     text: '👁️ 感受极北的寒意！{USER} 凝聚斯嘉蒂之眼，射出霜寒水弹！{TARGET} 被绝对零度击中，生机与速度被彻底封印！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || actualDmg <= 0 || ctx.target.currentHp <= 0) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || actualDmg <= 0 || ctx.target.currentHp <= 0) return;
       ctx.applyStatus(ctx.target, 'YUZU_SLOW', 3);
       ctx.applyStatus(ctx.target, 'WEAK', 3);
       ctx.applyStatus(ctx.target, 'NO_HEAL', 3);

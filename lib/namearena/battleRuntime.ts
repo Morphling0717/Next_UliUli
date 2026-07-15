@@ -82,6 +82,7 @@ export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHoo
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     applyStatus: (target, type, duration, options) => host.applyStatus(target, type, duration, options),
+    markDefeated: (target, options) => host.markDefeated(target, options),
     handleTransformations: (fighter) => host.handleTransformations(fighter),
     flushDeferredDamageEvents: (fighter) => host.flushDeferredDamageEvents(fighter),
     executeSkillAction: (id, user, target, depth) => host.executeSkillAction(id, user, target, depth),

@@ -50,6 +50,7 @@ export function determineActor(
     if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.13;
     if (fighter.status.some((status) => status.type === 'RABBIT_ZERO_HASTE')) multiplier *= 1.26;
     if (fighter.status.some((status) => status.type === 'YUZU_SLOW')) multiplier *= 0.75;
+    if (fighter.status.some((status) => status.type === 'OWL_DRAGON_SLOW')) multiplier *= 0.72;
     return Math.max(1, Math.floor(fighter.spd * multiplier));
   };
   let ticket = Math.random() * actorPool.reduce((sum, fighter) => sum + actionWeight(fighter), 0);
@@ -88,6 +89,16 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
 export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter, priorBlockingStatusType?: string): void {
   if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
     runtime.log('info', `⛺ ${actor.name} 正在场外OB摸鱼，暂时不参与战斗！`);
+    return;
+  }
+
+  const owlBlockingStatus = actor.status.find((status) =>
+    status.type === 'OWL_FORM_DEFEAT' ||
+    status.type === 'OWL_ENJOYING' ||
+    status.type === 'OWL_SPALTER_DOLL',
+  );
+  if (owlBlockingStatus) {
+    runtime.log('info', `🦉 ${actor.name} 处于【${runtime.statusEffects[owlBlockingStatus.type]?.name ?? owlBlockingStatus.type}】状态，无法行动！`);
     return;
   }
 

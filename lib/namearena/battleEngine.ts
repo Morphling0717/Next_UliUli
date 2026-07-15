@@ -71,6 +71,7 @@ import {
 } from './skillResolution';
 import {
   getSelectableTargets,
+  findActivePuppetProtector,
   isSelectableTargetFor,
   resolveTarget,
   TargetingRuntime,
@@ -187,6 +188,16 @@ import {
   withTimedStatModifiersSuspended,
 } from './statModifiers';
 import { recordDamageSettlement } from './combatLedger';
+import {
+  ensureOwlState,
+  findOwlEmperor,
+  getOwlIncomingMultiplier,
+  getOwlOutgoingMultiplier,
+  markOwlSummonDeathSave,
+  owlResistsHostileStatus,
+  tryEnterOwlDefeat,
+  type OwlRuntime,
+} from './owlMechanics';
 
 const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   skill: '技能伤害',
@@ -196,6 +207,10 @@ const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   transfer: '转移伤害',
   yuzu_share: '镜界分摊伤害',
   originium_share: '阿喃那伤害均摊',
+  owl_redirect: '帝王之征承伤',
+  owl_coop: '过江协同伤害',
+  owl_explosion: '蛐蛐自爆伤害',
+  owl_cost: '鸮的机制消耗',
 };
 
 function getDamageSourceLabel(source: string): string {
@@ -299,6 +314,8 @@ type ActiveActionContext = {
   presentation: import('./types').SkillPresentation;
   triggerDepth: number;
   forcedTargetId?: string;
+  primaryTargetId?: string;
+  primaryPreDefenseDamage?: number;
 };
 
 export class BattleEngine {
@@ -348,6 +365,7 @@ export class BattleEngine {
     syncLargeRoundState(this.battleState, this.fighters);
     this.formSnapshots = new Map(this.fighters.map((fighter) => [fighter.id, readBattleFormIdentity(fighter)]));
     this.initializeYuzuOpeningShields();
+    this.initializeOwlStates();
   }
 
   log(type: string, text: string, metadata: BattleLogMetadata = {}): void {
@@ -447,9 +465,83 @@ export class BattleEngine {
   }
 
   endAction(action: ActiveActionContext): void {
+    this.resolveOwlCrossingAssists(action);
     this.recordEvent('action_end', 'action', `${action.actorName} 的【${action.skillName}】结算结束。`);
     const index = this.actionStack.lastIndexOf(action);
     if (index >= 0) this.actionStack.splice(index, 1);
+  }
+
+  resolveOwlCrossingAssists(action: ActiveActionContext): void {
+    if (
+      action.skillId === 'owl_crossing_assist' ||
+      !action.primaryTargetId ||
+      !action.primaryPreDefenseDamage ||
+      action.primaryPreDefenseDamage <= 0
+    ) return;
+    const victim = this.fighters.find((fighter) => fighter.id === action.primaryTargetId);
+    if (!victim || !this.isActiveCombatant(victim)) return;
+
+    const markedActorId = action.actorId;
+    const owls = this.fighters.filter((fighter) => {
+      if (!fighter.isOwl || !this.isActiveCombatant(fighter)) return false;
+      const state = ensureOwlState(fighter, this.turnCount);
+      return state.phase === 2 &&
+        state.riverMarkedTargetId === markedActorId &&
+        (state.riverMarkExpiresTurn ?? -1) > this.turnCount &&
+        !fighter.status.some((status) => status.type === 'OWL_FORM_DEFEAT');
+    });
+
+    for (const owl of owls) {
+      if (!this.isActiveCombatant(owl) || !this.isActiveCombatant(victim)) break;
+      const protector = findActivePuppetProtector(this.createTargetingRuntime(), victim, owl);
+      const target = protector ?? victim;
+      if (!this.isActiveCombatant(target)) continue;
+      const assistAction = this.beginAction('owl_crossing_assist', owl, target, action.triggerDepth + 1);
+      try {
+        this.log('skill', `🌊 【过江协同】${action.actorName} 攻向 ${victim.name}，触发 ${owl.name} 追击同一个受害者！`);
+        if (protector) {
+          this.log('info', `🛡️ 【傀儡援护】${protector.name} 挡在 ${victim.name} 身前，接管 ${owl.name} 的【过江协同】！`);
+        }
+        const skill = this.SKILLS.owl_crossing_assist;
+        if (skill && this.missesSkill(owl, target, skill, !!protector)) {
+          this.log('info', `💨 【过江协同】${owl.name} 追击 ${target.name}，但被对方闪开了！`);
+          continue;
+        }
+        if (target.id !== owl.id) {
+          if (this.handleWaitCounter(target, owl, action.triggerDepth + 1)) continue;
+          if (this.handleCounterStatus(target, owl) || !this.isActiveCombatant(owl)) continue;
+        }
+        const copied = Math.max(1, Math.floor(action.primaryPreDefenseDamage));
+        this.log('skill', `🌊 【过江协同】${owl.name} 同步过江，复制 ${copied} 点防御前冲击追击 ${target.name}！`);
+        const options: DamageApplicationOptions = {
+          actionName: '过江协同',
+          respectDefenses: true,
+          suppressOwlCooperation: true,
+        };
+        const actual = this.applyDamage(target, copied, 'skill', false, owl, options);
+        const resolved = options.redirectedJokerDamage ??
+          options.redirectedOriginiumDamage ??
+          options.redirectedOwlEmperorDamage ??
+          actual;
+        const redirected = !!(
+          options.redirectedByJoker ||
+          options.redirectedByOriginiumCore ||
+          options.redirectedByOwlEmperor
+        );
+        if (!redirected) {
+          this.log(resolved > 0 ? 'skill' : 'info', `🌊 【过江协同】${target.name} 实际承受 ${resolved} 点伤害。`);
+        }
+        if (actual > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(target);
+        if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
+          this.markDefeated(target, {
+            message: `💀 【过江协同】${target.name} 被 ${owl.name} 的协同追击击败！`,
+            killer: owl,
+          });
+        }
+      } finally {
+        this.endAction(assistAction);
+      }
+    }
   }
 
   queueOrLogDamageEvent(
@@ -510,6 +602,11 @@ export class BattleEngine {
     duration: number,
     options: StatusApplicationOptions = {},
   ): boolean {
+    if (owlResistsHostileStatus(target)) {
+      this.log('info', `🌫️ 【败兵抗性】${target.name} 在败阵混乱中避开了【${this.STATUS_EFFECTS[type]?.name ?? type}】！`);
+      this.recordEvent('status', 'status_blocked', `${target.name}:${type}`, { targetIds: [target.id] });
+      return false;
+    }
     const applied = tryApplyHostileStatusAction(
       this.createActionResolutionRuntime(),
       target,
@@ -527,6 +624,29 @@ export class BattleEngine {
     const runtime = this.createCharacterHookRuntime();
     this.fighters.forEach((fighter) => {
       if (fighter.isYuzu) ensureYuzuOpeningShield(runtime, fighter);
+    });
+  }
+
+  createOwlRuntime(): OwlRuntime {
+    return {
+      fighters: this.fighters,
+      jobs: this.JOBS,
+      turnCount: this.turnCount,
+      getTeamId: (fighter) => this.getTeamId(fighter),
+      isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
+      log: (type, text) => this.log(type, text),
+      syncHpPct: (fighter) => this.syncHpPct(fighter),
+      applyDamage: (target, amount, source, isTrueDamage, attacker, options) =>
+        this.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+      applyStatus: (target, type, duration, options) => this.applyStatus(target, type, duration, options),
+      markDefeated: (target, options) => this.markDefeated(target, options),
+      flushDeferredDamageEvents: (target) => this.flushDeferredDamageEvents(target),
+    };
+  }
+
+  initializeOwlStates(): void {
+    this.fighters.forEach((fighter) => {
+      if (fighter.isOwl) ensureOwlState(fighter, this.turnCount);
     });
   }
 
@@ -821,8 +941,67 @@ export class BattleEngine {
     amount = Math.max(0, Math.floor(amount));
     if (amount <= 0 || target.isDead || target.currentHp <= 0) return 0;
     if (target.status.some((s) => s.type === 'SYNERGY_SLACKING')) return 0;
+
+    const activeAction = this.actionStack[this.actionStack.length - 1];
+    if (
+      activeAction &&
+      activeAction.actorId === attacker?.id &&
+      activeAction.skillId !== 'owl_crossing_assist' &&
+      !options.suppressOwlCooperation &&
+      source === 'skill' &&
+      target.id !== attacker?.id &&
+      activeAction.primaryTargetId === undefined
+    ) {
+      activeAction.primaryTargetId = target.id;
+      activeAction.primaryPreDefenseDamage = amount;
+    }
+
+    if (target.owlSummonState?.kind === 'meal' || target.owlSummonState?.kind === 'rice') {
+      this.log('info', `🍚 ${target.name} 是不可选中的食物单位，这次伤害没有作用。`);
+      this.settleDamageRecord(target, attacker, source, amount, 0, 0, 0, options, 'prevented');
+      return 0;
+    }
+
+    if (!options.bypassOwlOutgoingModifier) {
+      amount = Math.max(1, Math.floor(amount * getOwlOutgoingMultiplier(attacker)));
+    }
     const attemptedDamage = amount;
     let shieldDamage = 0;
+
+    if (target.isOwl && !options.bypassOwlEmperorRedirect) {
+      const emperor = findOwlEmperor(this.createOwlRuntime(), target);
+      if (emperor) {
+        const emperorOptions: DamageApplicationOptions = {
+          deferTransform: options.deferTransform,
+          actionName: options.actionName,
+          respectDefenses: options.respectDefenses,
+          creditAttacker: options.creditAttacker,
+          bypassOwlEmperorRedirect: true,
+          bypassOwlOutgoingModifier: true,
+          suppressOwlCooperation: true,
+        };
+        const redirectedDamage = this.applyDamage(
+          emperor,
+          amount,
+          'owl_redirect',
+          isTrueDamage,
+          attacker,
+          emperorOptions,
+        );
+        options.redirectedByOwlEmperor = true;
+        options.redirectedOwlEmperorDamage = redirectedDamage;
+        this.log('info', `🐲 【帝王之征】${target.name} 将 ${amount} 点来袭伤害全部转给 ${emperor.name}，龙实际承受 ${redirectedDamage} 点！`);
+        if (redirectedDamage > 0 || (emperor.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(emperor);
+        if (emperor.currentHp <= 0 && !emperor.isDead && !emperor.isDeadAnnounced) {
+          this.markDefeated(emperor, {
+            message: `💀 【帝王之征】${emperor.name} 替 ${target.name} 承受致命伤后倒下！`,
+            killer: attacker,
+          });
+        }
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'redirected');
+        return 0;
+      }
+    }
 
     const originiumRedirect = redirectOriginiumCoreDamage(
       this.createPuruisaishiRuntime(),
@@ -857,6 +1036,11 @@ export class BattleEngine {
     }
 
     if (options.respectDefenses) {
+      if (target.owlSummonState?.kind === 'zhao_adou' && source !== 'status') {
+        this.log('info', `🏇 【七进七出】${target.name} 以 100% 闪避穿过攻击，没有受到伤害！`);
+        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'invulnerable');
+        return 0;
+      }
       const invul = findDefenseStatus(target, 'INVUL');
       if (invul) {
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
@@ -921,6 +1105,24 @@ export class BattleEngine {
         const reducedDamage = beforeYuzuReduction - amount;
         if (reducedDamage > 0) {
           this.log('info', `🪞 【镜界减伤】${target.name} 处于第 ${phase} 阶段，削减 ${reducedDamage} 点伤害。`);
+        }
+      }
+    }
+
+    if (target.isOwl && !options.bypassOwlIncomingModifier) {
+      const incomingMultiplier = getOwlIncomingMultiplier(target);
+      if (incomingMultiplier < 1) {
+        const beforeOwlReduction = amount;
+        amount = Math.max(1, Math.floor(amount * incomingMultiplier));
+        const reduced = beforeOwlReduction - amount;
+        if (reduced > 0) {
+          const state = ensureOwlState(target, this.turnCount);
+          const sourceName = state.warForm === 'defeat'
+            ? '败兵阵势'
+            : target.status.some((status) => status.type === 'OWL_EAR_GUARD')
+              ? '扎耳警觉'
+              : '不怕酸';
+          this.queueOrLogDamageEvent(target, options, 'info', `🦉 【${sourceName}】${target.name} 削减 ${reduced} 点伤害，剩余 ${amount} 点继续结算。`);
         }
       }
     }
@@ -1003,6 +1205,7 @@ export class BattleEngine {
     const isProtected =
       target.isMorphling || target.isJoker || target.isTokusatsu || target.isGacha ||
       target.isTing || target.isSuccubus || target.isSigua || target.isTuJuanJuan || target.isWT ||
+      target.isOwl ||
       (target.isYuzu && (target.yuzuPhase ?? 1) === 1);
     if (isProtected && !target.transformed && amount >= target.currentHp) {
       amount = Math.max(0, target.currentHp - 1);
@@ -1073,6 +1276,45 @@ export class BattleEngine {
       return 0;
     }
 
+    let pendingOwlSummonDeathSave: 'specter' | 'spalter' | null = null;
+    let triggerCricketExplosion = false;
+    const owlSummonState = target.owlSummonState;
+    if (
+      owlSummonState?.kind === 'cricket' &&
+      !owlSummonState.suicideTriggered &&
+      attacker && attacker.id !== target.id &&
+      source !== 'status' && source !== 'owl_explosion'
+    ) {
+      owlSummonState.lastAttackerId = attacker.id;
+      const threshold = Math.max(1, Math.floor(target.maxHp * 0.1));
+      if (target.currentHp - amount <= threshold) {
+        amount = Math.min(amount, Math.max(0, target.currentHp - 1));
+        triggerCricketExplosion = true;
+        this.queueOrLogDamageEvent(target, options, 'buff', `🦗 【自刎锁血】${target.name} 被压到 10% 生命线，强行留住最后一口气准备自爆！`);
+      }
+    }
+
+    if (
+      (owlSummonState?.kind === 'specter' || owlSummonState?.kind === 'spalter') &&
+      amount >= target.currentHp
+    ) {
+      const lockStatus = owlSummonState.kind === 'specter' ? 'OWL_SPECTER_LOCK' : 'OWL_SPALTER_LOCK';
+      const alreadyLocked = target.status.some((status) => status.type === lockStatus);
+      if (alreadyLocked || !owlSummonState.deathSaveUsed) {
+        amount = Math.max(0, target.currentHp - 1);
+        pendingOwlSummonDeathSave = alreadyLocked ? null : owlSummonState.kind;
+        this.queueOrLogDamageEvent(target, options, 'buff', `🦈 【濒死锁血】${target.name} 强行保留最后 1 点生命！`);
+      }
+    }
+
+    if (amount <= 0) {
+      if (pendingOwlSummonDeathSave) markOwlSummonDeathSave(target, this.turnCount);
+      this.syncHpPct(target);
+      this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'lockblood');
+      if (triggerCricketExplosion) this.triggerOwlCricketChain(target);
+      return 0;
+    }
+
     const hpBeforeDamage = target.currentHp;
     const resolvedIncomingDamage = amount;
     const hpDamage = Math.min(hpBeforeDamage, resolvedIncomingDamage);
@@ -1089,6 +1331,10 @@ export class BattleEngine {
       overkillDamage,
       options,
     );
+    if (pendingOwlSummonDeathSave) markOwlSummonDeathSave(target, this.turnCount);
+    if (triggerCricketExplosion) {
+      this.queueOrRunDamageAction(target, options, () => this.triggerOwlCricketChain(target));
+    }
     noteOriginiumDamageLanded(this.createPuruisaishiRuntime(), target, source, attacker);
     if (amount > 0) {
       target.lastDamage = {
@@ -1160,12 +1406,120 @@ export class BattleEngine {
         syncHpPct: (fighter) => this.syncHpPct(fighter),
       }, target);
     }
+    if (target.isOwl) tryEnterOwlDefeat(this.createOwlRuntime(), target);
+
+    if (
+      target.owlSummonState?.kind === 'emperor' &&
+      amount > 0 &&
+      source === 'skill' &&
+      attacker && attacker.id !== target.id
+    ) {
+      const owl = target.summonerId
+        ? this.fighters.find((fighter) => fighter.id === target.summonerId && fighter.isOwl)
+        : undefined;
+      if (owl && this.isActiveCombatant(owl)) {
+        const earOptions: DamageApplicationOptions = {
+          actionName: '扎龙自己的耳朵',
+          respectDefenses: false,
+          creditAttacker: false,
+          bypassOwlEmperorRedirect: true,
+          bypassOwlOutgoingModifier: true,
+          bypassOwlIncomingModifier: true,
+          suppressOwlCooperation: true,
+        };
+        const earCost = this.applyDamage(owl, 10, 'owl_cost', true, owl, earOptions);
+        grantStatus(owl, 'OWL_EAR_GUARD', 1, owl.id);
+        this.log('buff', `👂 【扎龙自己的耳朵！】${target.name} 被主动攻击，${owl.name} 损失 ${earCost} 点生命并获得 1 回合减伤。`);
+        if (owl.currentHp <= 0 && !owl.isDead && !owl.isDeadAnnounced) {
+          this.markDefeated(owl, {
+            message: `💀 【扎龙自己的耳朵！】${owl.name} 因反复扎耳耗尽生命！`,
+            awardKill: false,
+          });
+        }
+      }
+    }
     if (amount > 0) {
       target.isHit = true;
       if (!options.deferTransform) this.handleTransformations(target);
     }
     if (target.isDead || target.isDeadAnnounced) options.targetDefeatedDuringDamage = true;
     return amount;
+  }
+
+  triggerOwlCricketChain(firstCricket: Fighter): void {
+    const firstState = firstCricket.owlSummonState;
+    if (
+      firstState?.kind !== 'cricket' ||
+      firstState.suicideTriggered ||
+      firstCricket.isDead ||
+      firstCricket.isDeadAnnounced
+    ) return;
+    const target = firstState.lastAttackerId
+      ? this.fighters.find((fighter) => fighter.id === firstState.lastAttackerId)
+      : undefined;
+    if (!target) return;
+
+    const partner = this.fighters.find((fighter) =>
+      fighter.id !== firstCricket.id &&
+      fighter.isSummon &&
+      fighter.summonerId === firstCricket.summonerId &&
+      fighter.owlSummonState?.kind === 'cricket' &&
+      this.isActiveCombatant(fighter) &&
+      (!firstState.pairId || fighter.owlSummonState?.pairId === firstState.pairId),
+    ) ?? this.fighters.find((fighter) =>
+      fighter.id !== firstCricket.id &&
+      fighter.isSummon &&
+      fighter.summonerId === firstCricket.summonerId &&
+      fighter.owlSummonState?.kind === 'cricket' &&
+      this.isActiveCombatant(fighter),
+    );
+
+    const explode = (cricket: Fighter, chain: boolean) => {
+      const state = cricket.owlSummonState;
+      if (!state || state.suicideTriggered || cricket.isDead || cricket.isDeadAnnounced) return;
+      state.suicideTriggered = true;
+      const title = chain ? '有情有义' : '自刎归天';
+      this.log('skill', chain
+        ? `🦗 【有情有义】${cricket.name} 目睹同伴自爆，追随同伴化身奥特炸弹冲向 ${target.name}！`
+        : `🦗 【自刎归天】“战至最后一刻，自刎归天！”${cricket.name} 化身奥特炸弹冲向最后攻击者 ${target.name}！`);
+      if (this.isActiveCombatant(target)) {
+        const raw = Math.max(120, Math.floor(cricket.atk * 1.9 + cricket.maxHp * 0.32));
+        const damageOptions: DamageApplicationOptions = {
+          actionName: title,
+          respectDefenses: true,
+          suppressOwlCooperation: true,
+        };
+        const actual = this.applyDamage(target, raw, 'owl_explosion', false, cricket, damageOptions);
+        const resolved = damageOptions.redirectedJokerDamage ??
+          damageOptions.redirectedOriginiumDamage ??
+          damageOptions.redirectedOwlEmperorDamage ??
+          actual;
+        const redirected = !!(
+          damageOptions.redirectedByJoker ||
+          damageOptions.redirectedByOriginiumCore ||
+          damageOptions.redirectedByOwlEmperor
+        );
+        if (!redirected) {
+          this.log(resolved > 0 ? 'skill' : 'info', `💥 【${title}】爆炸在 ${target.name} 身上结算，实际造成 ${resolved} 点伤害！`);
+        }
+        if (actual > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(target);
+        if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
+          this.markDefeated(target, {
+            message: `💀 【${title}】${target.name} 被 ${cricket.name} 的奥特炸弹炸倒！`,
+            killer: cricket,
+          });
+        }
+      } else {
+        this.log('info', `💥 【${title}】${target.name} 已经倒下，${cricket.name} 仍在原处完成自爆。`);
+      }
+      this.markDefeated(cricket, {
+        message: `💀 【${title}】${cricket.name} 完成自爆，真实死亡！`,
+        awardKill: false,
+      });
+    };
+
+    explode(firstCricket, false);
+    if (partner) explode(partner, true);
   }
 
   activeFriendlySummonsFor(owner: Fighter): Fighter[] {

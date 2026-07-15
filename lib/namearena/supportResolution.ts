@@ -180,13 +180,16 @@ function applyChimeraSideDamage(
     canTriggerWaitCounter: false,
   };
   const actual = runtime.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, user, damageOptions);
-  const resolvedActual = damageOptions.redirectedOriginiumDamage ?? actual;
+  const resolvedActual = damageOptions.redirectedOriginiumDamage ?? damageOptions.redirectedOwlEmperorDamage ?? actual;
   if (damageOptions.redirectedByOriginiumCore) {
     runtime.log('skill', `🜚 【${actionName}】${user.name} 对 ${target.name} 的攻击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤！`);
   } else {
     runtime.log(actual > 0 ? 'skill' : 'info', logText(actual));
   }
-  const landedOnTarget = !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && actual > 0;
+  if (damageOptions.redirectedByOwlEmperor) {
+    runtime.log('info', `🐲 ${target.name} 的帝王之征接管了伤害，龙实际承受 ${resolvedActual} 点。`);
+  }
+  const landedOnTarget = !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor && actual > 0;
   if (landedOnTarget && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     runtime.markDefeated(target, {
       message: `💀 【${actionName}】${target.name} 被 ${user.name} 安装插件时爆发的异变余波击倒！`,

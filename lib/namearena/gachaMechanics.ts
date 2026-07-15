@@ -420,7 +420,7 @@ function damageFromSummon(
 ): number {
   const damageOptions: DamageApplicationOptions = { actionName };
   const actualDmg = ctx.applyDamage(target, amount, 'skill', trueDamage, summon, damageOptions);
-  if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) return 0;
+  if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) return 0;
   if (options.deferOutcome) return actualDmg;
   finalizeSummonDamage(ctx, summon, target, actionName);
   return actualDmg;
@@ -602,8 +602,8 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
       const dmg = Math.max(1, Math.floor((summon.atk + summon.mag) * 1.05));
       const damageOptions: DamageApplicationOptions = { actionName: '全军进击' };
       const actualDmg = ctx.applyDamage(target, dmg, 'skill', false, summon, damageOptions);
-      if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) {
-        ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 用随机恶作剧转移，原目标没有受伤；转移伤害已单独结算！`);
+      if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) {
+        ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 的防护机制转移，原目标没有受伤；转移伤害已单独结算！`);
         continue;
       }
       logGachaEffect(

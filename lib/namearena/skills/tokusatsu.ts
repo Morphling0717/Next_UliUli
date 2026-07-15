@@ -108,16 +108,7 @@ function markIfDefeated(ctx: SkillContext, target: Fighter, skillName: string): 
   });
 }
 
-function applyNamedDamage(
-  ctx: SkillContext,
-  target: Fighter,
-  amount: number,
-  actionName: string,
-  trueDamage = true,
-  respectDefenses = true,
-): number {
-  return applyNamedDamageDetailed(ctx, target, amount, actionName, trueDamage, respectDefenses).actual;
-}
+type NamedDamageRedirectKind = 'joker' | 'originium' | 'owl_emperor' | null;
 
 function applyNamedDamageDetailed(
   ctx: SkillContext,
@@ -126,20 +117,34 @@ function applyNamedDamageDetailed(
   actionName: string,
   trueDamage = true,
   respectDefenses = true,
-): { actual: number; redirected: boolean; defeatedDuringDamage: boolean } {
+): { actual: number; redirected: boolean; redirectedActual: number; redirectKind: NamedDamageRedirectKind; defeatedDuringDamage: boolean } {
   if (!isActive(target) || amount <= 0) {
-    return { actual: 0, redirected: false, defeatedDuringDamage: false };
+    return { actual: 0, redirected: false, redirectedActual: 0, redirectKind: null, defeatedDuringDamage: false };
   }
   const damageOptions: DamageApplicationOptions = {
     actionName,
     respectDefenses,
   };
   const actual = ctx.applyDamage(target, amount, 'skill', trueDamage, ctx.user, damageOptions);
-  if (actual > 0) {
-  }
+  const redirectKind: NamedDamageRedirectKind = damageOptions.redirectedByJoker
+    ? 'joker'
+    : damageOptions.redirectedByOriginiumCore
+      ? 'originium'
+      : damageOptions.redirectedByOwlEmperor
+        ? 'owl_emperor'
+        : null;
+  const redirectedActual = redirectKind === 'joker'
+    ? damageOptions.redirectedJokerDamage ?? 0
+    : redirectKind === 'originium'
+      ? damageOptions.redirectedOriginiumDamage ?? 0
+      : redirectKind === 'owl_emperor'
+        ? damageOptions.redirectedOwlEmperorDamage ?? 0
+        : actual;
   return {
     actual,
-    redirected: !!(damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore),
+    redirected: redirectKind !== null,
+    redirectedActual,
+    redirectKind,
     defeatedDuringDamage: !!damageOptions.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced,
   };
 }
@@ -207,17 +212,21 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const base = Math.floor(ctx.user.atk * 2.4 + ctx.user.spd * 0.45);
       ctx.log('skill', `🌑 【黑气斩波】${ctx.user.name} 挥出漆黑剑气，主斩 ${ctx.target.name}，余波追向附近敌人！`);
-      const primary = applyNamedDamage(ctx, ctx.target, base, '黑气斩波', true);
+      const primaryResult = applyNamedDamageDetailed(ctx, ctx.target, base, '黑气斩波', true);
       if (!userCanContinue(ctx)) return true;
-      ctx.log(primary > 0 ? 'skill' : 'info', `🌑 【黑气斩波】${ctx.target.name} 实际承受 ${primary} 点真实伤害！`);
-      ctx.flushDeferredDamageEvents?.();
-      markIfDefeated(ctx, ctx.target, '黑气斩波');
-      for (const enemy of chooseSplashTargets(ctx, ctx.target, 2)) {
-        const splash = applyNamedDamage(ctx, enemy, Math.floor(base * 0.3), '黑气斩波余波', true);
-        if (!userCanContinue(ctx)) return true;
-        ctx.log(splash > 0 ? 'skill' : 'info', `🌑 黑气余波扫过 ${enemy.name}，实际造成 ${splash} 点真实伤害！`);
+      if (!primaryResult.redirected) {
+        ctx.log(primaryResult.actual > 0 ? 'skill' : 'info', `🌑 【黑气斩波】${ctx.target.name} 实际承受 ${primaryResult.actual} 点真实伤害！`);
         ctx.flushDeferredDamageEvents?.();
-        markIfDefeated(ctx, enemy, '黑气斩波');
+        markIfDefeated(ctx, ctx.target, '黑气斩波');
+      }
+      for (const enemy of chooseSplashTargets(ctx, ctx.target, 2)) {
+        const splashResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * 0.3), '黑气斩波余波', true);
+        if (!userCanContinue(ctx)) return true;
+        if (!splashResult.redirected) {
+          ctx.log(splashResult.actual > 0 ? 'skill' : 'info', `🌑 黑气余波扫过 ${enemy.name}，实际造成 ${splashResult.actual} 点真实伤害！`);
+          ctx.flushDeferredDamageEvents?.();
+          markIfDefeated(ctx, enemy, '黑气斩波');
+        }
       }
       return true;
     },
@@ -230,7 +239,8 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const missingPct = 1 - ctx.user.hpPct;
       const base = Math.floor(ctx.user.atk * (2.35 + missingPct * 1.75) + ctx.user.spd * 0.5);
       ctx.log('skill', `⚔️ 【悲愿居合】${ctx.user.name} 把濒死压力压进刀锋，斩向 ${ctx.target.name}！`);
-      const actual = applyNamedDamage(ctx, ctx.target, base, '悲愿居合', true);
+      const damageResult = applyNamedDamageDetailed(ctx, ctx.target, base, '悲愿居合', true);
+      const actual = damageResult.actual;
       if (!userCanContinue(ctx)) return true;
       const healed = healAndSync(ctx.user, Math.floor(actual * 0.25));
       const recovery = actual > 0
@@ -238,12 +248,14 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
           ? `${ctx.user.name} 借悲愿回流恢复 ${healed} 点生命`
           : `${ctx.user.name} 生命已满，悲愿回流溢出`
         : '悲愿没有形成有效回流';
-      ctx.log(actual > 0 ? 'heal' : 'info', `⚔️ 【悲愿居合】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`);
-      ctx.flushDeferredDamageEvents?.();
-      if (isActive(ctx.target) && !ctx.target.status.some((status) => status.type === 'WEAK') && actual > 0) {
-        if (ctx.applyStatus(ctx.target, 'WEAK', 2)) ctx.log('debuff', `⚔️ 【悲愿居合】${ctx.target.name} 被悲愿压制，虚弱 2 回合！`);
+      if (!damageResult.redirected) {
+        ctx.log(actual > 0 ? 'heal' : 'info', `⚔️ 【悲愿居合】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`);
+        ctx.flushDeferredDamageEvents?.();
+        if (isActive(ctx.target) && !ctx.target.status.some((status) => status.type === 'WEAK') && actual > 0) {
+          if (ctx.applyStatus(ctx.target, 'WEAK', 2)) ctx.log('debuff', `⚔️ 【悲愿居合】${ctx.target.name} 被悲愿压制，虚弱 2 回合！`);
+        }
+        markIfDefeated(ctx, ctx.target, '悲愿居合');
       }
-      markIfDefeated(ctx, ctx.target, '悲愿居合');
       return true;
     },
   },
@@ -297,11 +309,13 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN',
     text: '🦀 {USER} 将怪兽能量集中到双臂，对 {TARGET} 发动能量粉碎！',
     onExecute: (ctx) => {
-      const removedStatus = removeOnePositiveStatus(ctx.target);
       const base = Math.floor(ctx.user.atk * 2.0 + ctx.user.mag * 1.0);
       ctx.log('skill', `🦀 【能量粉碎】${ctx.user.name} 用怪兽巨臂钳住 ${ctx.target.name}，炼金能量开始崩解护盾！`);
-      const actual = applyNamedDamage(ctx, ctx.target, base, '能量粉碎', true);
+      const damageResult = applyNamedDamageDetailed(ctx, ctx.target, base, '能量粉碎', true);
+      const actual = damageResult.actual;
       if (!userCanContinue(ctx)) return true;
+      if (damageResult.redirected) return true;
+      const removedStatus = actual > 0 ? removeOnePositiveStatus(ctx.target) : null;
       const removedName = removedStatus ? (ctx.STATUS_EFFECTS[removedStatus]?.name ?? removedStatus) : '';
       const statusText = removedStatus
         ? actual > 0
@@ -344,11 +358,13 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const base = Math.floor(ctx.user.atk * 1.25 + ctx.user.spd * 0.25);
       ctx.log('skill', `🗡️ 【武神怪兽连斩】${ctx.user.name} 以怪兽力量拖动武神之刃，连续斩击 ${hits.map((fighter) => fighter.name).join('、')}！`);
       for (const [index, enemy] of hits.entries()) {
-        const actual = applyNamedDamage(ctx, enemy, Math.floor(base * (index === 0 ? 1 : 0.72)), '武神怪兽连斩', true);
+        const damageResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * (index === 0 ? 1 : 0.72)), '武神怪兽连斩', true);
         if (!userCanContinue(ctx)) return true;
-        ctx.log(actual > 0 ? 'skill' : 'info', `🗡️ 第 ${index + 1} 斩命中 ${enemy.name}，实际造成 ${actual} 点真实伤害！`);
-        ctx.flushDeferredDamageEvents?.();
-        markIfDefeated(ctx, enemy, '武神怪兽连斩');
+        if (!damageResult.redirected) {
+          ctx.log(damageResult.actual > 0 ? 'skill' : 'info', `🗡️ 第 ${index + 1} 斩命中 ${enemy.name}，实际造成 ${damageResult.actual} 点真实伤害！`);
+          ctx.flushDeferredDamageEvents?.();
+          markIfDefeated(ctx, enemy, '武神怪兽连斩');
+        }
       }
       return true;
     },
@@ -364,8 +380,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const base = Math.floor(ctx.user.mag * 1.25 + ctx.user.atk * 0.28 + ctx.user.wis * 0.2);
       ctx.log('skill', `📣 【怪兽咆哮】${ctx.user.name} 发出压制性咆哮，炼金冲击波扫过 ${enemies.length} 名敌人！`);
       for (const enemy of enemies) {
-        const actual = applyNamedDamage(ctx, enemy, base, '怪兽咆哮', true);
+        const damageResult = applyNamedDamageDetailed(ctx, enemy, base, '怪兽咆哮', true);
+        const actual = damageResult.actual;
         if (!userCanContinue(ctx)) return true;
+        if (damageResult.redirected) continue;
         ctx.log(actual > 0 ? 'skill' : 'info', `📣 咆哮冲击命中 ${enemy.name}，实际造成 ${actual} 点真实伤害！`);
         ctx.flushDeferredDamageEvents?.();
         const appliedEffects: string[] = [];
@@ -412,7 +430,12 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
           : `${ctx.user.name} 生命已满，星光回流溢出`
         : '星光没有形成有效回流';
       if (damageResult.redirected) {
-        ctx.log('info', `⭐ 【GREAT MONSTER VICTORY】星光被随机恶作剧转移，原目标没有承受终结技伤害；转移伤害已单独结算，${recovery}！`);
+        const redirectText = damageResult.redirectKind === 'owl_emperor'
+          ? `被【帝王之征】全数接走，龙实际承受 ${damageResult.redirectedActual} 点伤害`
+          : damageResult.redirectKind === 'originium'
+            ? `被转入源石网络，源石结晶共结算 ${damageResult.redirectedActual} 点伤害`
+            : `被随机恶作剧转移，转移目标实际承受 ${damageResult.redirectedActual} 点伤害`;
+        ctx.log('info', `⭐ 【GREAT MONSTER VICTORY】星光${redirectText}，原目标没有承受终结技伤害；${recovery}！`);
       } else if (damageResult.defeatedDuringDamage) {
         ctx.log(actual > 0 ? 'heal' : 'info', `⭐ 【GREAT MONSTER VICTORY】星光造成 ${actual} 点真实伤害并触发致死连锁，后续退场已单独结算；${recovery}！`);
       } else {
@@ -442,17 +465,22 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const base = Math.floor(ctx.user.atk * 3.0 + ctx.user.mag * 1.45 + ctx.user.spd * 0.5);
       ctx.log('crit', `🌈 ${ctx.user.name} 点三下彩虹龙头："Gon Gon GonGonGonGon"！推动腰带拉杆发动【彩虹狂热】："GOTCHARD RAINBOW FEVER! FEVER! FEVER! FEVER!"`);
       ctx.log('crit', `🚂 巨型蒸汽列车模型被再炼成并巨大化，与 ${ctx.user.name} 的脚部一体化，火车头骑士踢贯穿 ${ctx.target.name}！`);
-      const primary = applyNamedDamage(ctx, ctx.target, base, '彩虹狂热', true, false);
+      const primaryResult = applyNamedDamageDetailed(ctx, ctx.target, base, '彩虹狂热', true, false);
+      const primary = primaryResult.actual;
       if (!userCanContinue(ctx)) return true;
-      ctx.log(primary > 0 ? 'crit' : 'info', `🌈 【彩虹狂热】${ctx.target.name} 实际承受 ${primary} 点真实伤害！`);
-      ctx.flushDeferredDamageEvents?.();
-      markIfDefeated(ctx, ctx.target, '彩虹狂热');
-      for (const enemy of chooseSplashTargets(ctx, ctx.target, 3)) {
-        const splash = applyNamedDamage(ctx, enemy, Math.floor(base * 0.18), '彩虹狂热余波', true);
-        if (!userCanContinue(ctx)) return true;
-        ctx.log(splash > 0 ? 'skill' : 'info', `🌈 彩虹列车余波撞上 ${enemy.name}，实际造成 ${splash} 点真实伤害！`);
+      if (!primaryResult.redirected) {
+        ctx.log(primary > 0 ? 'crit' : 'info', `🌈 【彩虹狂热】${ctx.target.name} 实际承受 ${primary} 点真实伤害！`);
         ctx.flushDeferredDamageEvents?.();
-        markIfDefeated(ctx, enemy, '彩虹狂热');
+        markIfDefeated(ctx, ctx.target, '彩虹狂热');
+      }
+      for (const enemy of chooseSplashTargets(ctx, ctx.target, 3)) {
+        const splashResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * 0.18), '彩虹狂热余波', true);
+        if (!userCanContinue(ctx)) return true;
+        if (!splashResult.redirected) {
+          ctx.log(splashResult.actual > 0 ? 'skill' : 'info', `🌈 彩虹列车余波撞上 ${enemy.name}，实际造成 ${splashResult.actual} 点真实伤害！`);
+          ctx.flushDeferredDamageEvents?.();
+          markIfDefeated(ctx, enemy, '彩虹狂热');
+        }
       }
       const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.18 + primary * 0.1));
       const cleanCount = activeNegativeCount(ctx.user) > 0 ? cleanseTokusatsu(ctx.user) : 0;

@@ -135,6 +135,21 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   YUZU_RES_DOWN: { name: '魔抗破坏', icon: '🪞', desc: '魔抗下降' },
   YUZU_ATK_DOWN: { name: '攻击破坏', icon: '🪞', desc: '攻击力下降' },
   YUZU_SLOW: { name: '减速', icon: '🪞', desc: '行动速度下降' },
+  OWL_FORM_VICTORY: { name: '胜兵', icon: '⚔️', desc: '天意正盛：全属性与伤害提高，击杀后转入骄兵' },
+  OWL_FORM_PRIDE: { name: '骄兵', icon: '🏳️', desc: '骄兵必败：防御与魔抗大幅降低，半血后转入败兵' },
+  OWL_FORM_DEFEAT: { name: '败兵', icon: '🌫️', desc: '十个全局行动回合无法行动，并获得 85% 减伤与异常抗性' },
+  OWL_FORM_SORROW: { name: '哀兵', icon: '🕯️', desc: '清除异常、回复生命并提高伤害，十回合后回到胜兵' },
+  OWL_RIVER_MARK: { name: '过江标记', icon: '🌊', desc: '该单位攻击时，鸮会协同攻击同一个受害者' },
+  OWL_ACID_FEARLESS: { name: '不怕酸', icon: '⚗️', desc: '煮酒论英雄形态常驻 25% 减伤并增加魔抗' },
+  OWL_IMPERIAL_SEAL: { name: '玉玺', icon: '🟨', desc: '帝王形态常驻攻击力强化' },
+  OWL_EAR_GUARD: { name: '扎耳警觉', icon: '👂', desc: '帝王之征受袭后获得的一回合减伤' },
+  OWL_SPECTER_LOCK: { name: '幽灵鲨锁血', icon: '🦈', desc: '濒死后强行保留 1 点生命，短时间内不会倒下' },
+  OWL_SPALTER_LOCK: { name: '归溟锁血', icon: '🌊', desc: '濒死后强行保留 1 点生命，即将进入替身形态' },
+  OWL_SPALTER_DOLL: { name: '替身形态', icon: '🪆', desc: '无法行动，三回合后归溟幽灵鲨回归' },
+  OWL_WILD: { name: '撒野', icon: '🐲', desc: '伏案带来的帝王之征攻击与速度强化' },
+  OWL_EVADE_DOWN: { name: '乘风失衡', icon: '🍃', desc: '被大风扰乱身位，闪避能力下降' },
+  OWL_DRAGON_SLOW: { name: '龙威迟滞', icon: '🐲', desc: '被帝王之征震慑，行动速度短暂下降' },
+  OWL_ENJOYING: { name: '乐不思蜀', icon: '🎶', desc: '宴饮享乐中，暂时不会发动攻击' },
 };
 
 export const COLORS: string[] = [

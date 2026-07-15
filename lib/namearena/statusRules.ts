@@ -37,6 +37,8 @@ export const COMMON_NEGATIVE_STATUS_TYPES: string[] = [
   'YUZU_RES_DOWN',
   'YUZU_ATK_DOWN',
   'YUZU_SLOW',
+  'OWL_EVADE_DOWN',
+  'OWL_DRAGON_SLOW',
   'VALO_VIPER_DECAY',
   'GAMER_READ_INPUTS',
 ];
@@ -55,6 +57,15 @@ export const GLOBAL_TIMED_STATUS_TYPES: string[] = [
   'SYNERGY_SLACKING',
   'TING_DEFIANCE',
   'TOKUSATSU_DEFIANCE',
+  'OWL_FORM_DEFEAT',
+  'OWL_FORM_SORROW',
+  'OWL_RIVER_MARK',
+  'OWL_EAR_GUARD',
+  'OWL_SPECTER_LOCK',
+  'OWL_SPALTER_LOCK',
+  'OWL_SPALTER_DOLL',
+  'OWL_ENJOYING',
+  'OWL_DRAGON_SLOW',
 ];
 
 export const TRIGGER_TIMED_STATUS_TYPES: string[] = [
@@ -87,6 +98,11 @@ export const PERMANENT_STATUS_TYPES: string[] = [
   'YUZU_MARKED',
   'ORIGINIUM_DISEASE',
   'PURUISAISHI_SHIELD',
+  'OWL_FORM_VICTORY',
+  'OWL_FORM_PRIDE',
+  'OWL_ACID_FEARLESS',
+  'OWL_IMPERIAL_SEAL',
+  'OWL_WILD',
 ];
 
 export const PERMANENT_STATUS_PREFIXES: string[] = [
@@ -133,6 +149,9 @@ export const REVIVE_CLEAN_STATUS_TYPES: string[] = [
   'YUZU_SLOW',
   'YUZU_TAUNT',
   'YUZU_MARKED',
+  'OWL_EVADE_DOWN',
+  'OWL_DRAGON_SLOW',
+  'OWL_RIVER_MARK',
 ];
 
 export function isStatusType(type: string, statusTypes: readonly string[]): boolean {

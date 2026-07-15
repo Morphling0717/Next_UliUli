@@ -20,6 +20,7 @@ function resolveSpecialJobKey(cleanName: string): string | null {
   if (cleanName === '兔卷卷' || cleanName === '兔卷卷curly') return 'Q_BUNNY';
   if (cleanName === '表情') return 'EMOTE_MAHORAGA';
   if (cleanName === '柚子') return 'YUZU_MIRROR_PARENT';
+  if (cleanName === '鸮' || cleanName === '雾隐罅中鸮') return 'OWL_HEAVEN_AVATAR';
   return null;
 }
 
@@ -52,6 +53,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
   const isMorphling = resolvedJobKey === 'SLIME';
   const isEmote = resolvedJobKey === 'EMOTE_MAHORAGA';
   const isYuzu = resolvedJobKey === 'YUZU_MIRROR_PARENT';
+  const isOwl = resolvedJobKey === 'OWL_HEAVEN_AVATAR';
   const baseHp = rng.nextInt(200, 300);
   const hp = isEmote ? 1 : Math.floor(baseHp * job.hp * (isMorphling ? 0.8 : 1.0));
   const stats = STAT_KEYS.reduce((acc, key) => {
@@ -89,6 +91,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     isWT: resolvedJobKey === 'WT_GRINDER',
     isEmote,
     isYuzu,
+    isOwl,
     transformed: false,
     resurrected: false,
     apm: 0,
@@ -163,6 +166,13 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     yuzuFuriosoCountedTurn: undefined,
     yuzuFuriosoReady: false,
     yuzuLastWeapon: undefined,
+    owlState: isOwl ? {
+      phase: 1,
+      warForm: 'victory',
+      warFormStartedTurn: 0,
+      heavenStacks: 0,
+      sweepUsed: false,
+    } : undefined,
     hasTriggeredSlacking: false,
     isActing: false,
     isHit: false,

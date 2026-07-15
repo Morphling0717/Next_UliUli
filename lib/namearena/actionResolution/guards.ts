@@ -24,6 +24,7 @@ export function missesSkill(
   ) ? 0 : target.agl;
   let targetAgl = target.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(effectiveTargetAgl * 1.2) : effectiveTargetAgl;
   if (target.status.some((status) => status.type === 'YUZU_EVADE_DOWN')) targetAgl = Math.floor(targetAgl * 0.55);
+  if (target.status.some((status) => status.type === 'OWL_EVADE_DOWN')) targetAgl = Math.floor(targetAgl * 0.55);
   let hitChance = 0.95 + (userAgl - targetAgl) * 0.005;
   const guaranteedHit =
     user.status.some((status) => status.type === 'AIM') ||

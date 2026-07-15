@@ -111,7 +111,7 @@ export const jokerHook: CharacterHook = {
           actionName: '谢幕返场',
         };
         const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
         if (actualDmg > 0) {
           runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害！`);
         } else {

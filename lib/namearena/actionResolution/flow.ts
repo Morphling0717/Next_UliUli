@@ -124,6 +124,7 @@ export function executeSkillAction(
   const targetSelection = resolveTarget(createTargetingRuntime(runtime), user, forcedTarget, currentTargets);
   if (!targetSelection) return;
   let { target, isIntercepted } = targetSelection;
+  const initiallyProtectedTarget = targetSelection.protectedTarget;
   let interceptionLabel = isIntercepted
     ? `【援护】${target.name} 冲了出来，替宿主挡下了 ${user.name} 的攻击`
     : '';
@@ -197,6 +198,8 @@ export function executeSkillAction(
     flushDeferredDamageEvents,
     (type, text) => queuedPreResolutionLogs.push({ type, text }),
   );
+  skillCtx.targetWasIntercepted = isIntercepted;
+  skillCtx.interceptedProtectedTargetId = initiallyProtectedTarget?.id;
   const skillVisualTargets = skill.tag === runtime.skillTags.HEAL || skill.tag === runtime.skillTags.BUFF
     ? [user.id]
     : [target.id];
@@ -357,10 +360,12 @@ export function executeSkillAction(
     user,
     damageOptions,
   );
-  const targetActualDmg = damageOptions.redirectedByOriginiumCore ? 0 : actualDmg;
-  const dealtDmg = damageOptions.redirectedOriginiumDamage ?? actualDmg;
+  const targetActualDmg = damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor ? 0 : actualDmg;
+  const dealtDmg = damageOptions.redirectedOriginiumDamage ?? damageOptions.redirectedOwlEmperorDamage ?? actualDmg;
   skillCtx.damageRedirectedByOriginiumCore = !!damageOptions.redirectedByOriginiumCore;
   skillCtx.redirectedOriginiumDamage = damageOptions.redirectedOriginiumDamage;
+  skillCtx.damageRedirectedByOwlEmperor = !!damageOptions.redirectedByOwlEmperor;
+  skillCtx.redirectedOwlEmperorDamage = damageOptions.redirectedOwlEmperorDamage;
   skillCtx.suppressOnHitStatuses = !!damageOptions.suppressOnHitStatuses;
   skillCtx.suppressOnHitStatusTargetId = target.id;
   if (isIntercepted) {
@@ -373,6 +378,7 @@ export function executeSkillAction(
     usesPreResolutionDamageLog &&
     !damageOptions.redirectedByJoker &&
     !damageOptions.redirectedByOriginiumCore &&
+    !damageOptions.redirectedByOwlEmperor &&
     !damageOptions.targetDefeatedDuringDamage
   ) {
     if (actualDmg > 0) {
@@ -387,6 +393,7 @@ export function executeSkillAction(
     !usesPreResolutionDamageLog &&
     !damageOptions.redirectedByJoker &&
     !damageOptions.redirectedByOriginiumCore &&
+    !damageOptions.redirectedByOwlEmperor &&
     !damageOptions.targetDefeatedDuringDamage
   ) {
     if (actualDmg > 0) {
@@ -402,7 +409,7 @@ export function executeSkillAction(
     });
   }
   const selfStatusResolvedThroughShield = skill.statusTarget === 'user' && (damageOptions.resolution?.shieldDamage ?? 0) > 0;
-  if ((actualDmg > 0 || selfStatusResolvedThroughShield) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore) {
+  if ((actualDmg > 0 || selfStatusResolvedThroughShield) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor) {
     if (skill.statusTarget === 'user' || (actualDmg > 0 && target.currentHp > 0)) {
       applySkillStatusEffect(runtime, skill, user, target, !damageOptions.suppressOnHitStatuses);
     }
@@ -416,7 +423,8 @@ export function executeSkillAction(
     preMitigationDmg > 0 &&
     actualDmg <= 0 &&
     !damageOptions.redirectedByJoker &&
-    !damageOptions.redirectedByOriginiumCore
+    !damageOptions.redirectedByOriginiumCore &&
+    !damageOptions.redirectedByOwlEmperor
   ) {
     const statusName = runtime.statusEffects[skill.status]?.name ?? skill.status;
     runtime.log('info', `📌 状态结算：${target.name} 没有承受生命伤害，本次【${statusName}】未生效。`);

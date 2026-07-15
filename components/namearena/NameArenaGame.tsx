@@ -747,6 +747,53 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
     }
   }
 
+  if (fighter.isOwl) {
+    const phase = Math.max(1, fighter.owlState?.phase ?? 1);
+    const formNames = { victory: '胜兵', pride: '骄兵', defeat: '败兵', sorrow: '哀兵' } as const;
+    const warForm = fighter.owlState?.warForm ?? 'victory';
+    chips.push({
+      icon: '🦉',
+      label: '天意形态',
+      value: `${phase}阶段·${formNames[warForm]}`,
+      title: getResourceTitle('鸮的阶段与兵势', `第 ${phase} 阶段 / ${formNames[warForm]}`),
+      tone: 'combat',
+      priority: 28,
+    });
+    if (phase === 2) {
+      chips.push({
+        icon: '⚡',
+        label: '天意',
+        value: `${fighter.owlState?.heavenStacks ?? 0}/7`,
+        title: getResourceTitle('天意层数', `${fighter.owlState?.heavenStacks ?? 0}/7`, '玩家或召唤物真实死亡时继承 10% 数值并增加一层'),
+        tone: 'tech',
+        priority: 29,
+      });
+      const marked = fighter.owlState?.riverMarkedTargetId
+        ? fighters.find((candidate) => candidate.id === fighter.owlState?.riverMarkedTargetId)
+        : undefined;
+      if (marked) {
+        chips.push({
+          icon: '🌊',
+          label: '过江',
+          value: marked.name,
+          title: getResourceTitle('过江协同目标', marked.name, `持续至第 ${fighter.owlState?.riverMarkExpiresTurn ?? turnCount} 回合`),
+          tone: 'support',
+          priority: 30,
+        });
+      }
+    }
+    if (activeSummons.length > 0) {
+      chips.push({
+        icon: phase >= 3 ? '🐲' : '🦗',
+        label: '麾下',
+        value: String(activeSummons.length),
+        title: getResourceTitle('鸮的场上单位', String(activeSummons.length), activeSummons.map((summon) => summon.name).join('、')),
+        tone: 'support',
+        priority: 31,
+      });
+    }
+  }
+
   if (fighter.isGacha) {
     if (typeof fighter.gachaLuck === 'number') {
       chips.push({
@@ -1774,7 +1821,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                 />
 
                                 <div className="mt-3 text-xs leading-5 text-slate-500">
-                                    特殊角色：<span className="text-cyan-200">水人、玄凝、屑、刺猬人、牢鳄、小汀、克蕾儿丝菲尔、丝瓜uli、兔卷卷、M1、柚子、表情</span>
+                                    特殊角色：<span className="text-cyan-200">水人、玄凝、屑、刺猬人、牢鳄、小汀、克蕾儿丝菲尔、丝瓜uli、兔卷卷、M1、柚子、表情、鸮</span>
                                 </div>
 
                                 <button onClick={async () => {

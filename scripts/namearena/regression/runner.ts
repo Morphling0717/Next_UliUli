@@ -13,6 +13,7 @@ import { runArchitectureCases } from './architectureCases';
 import { runDeathAccountingCases } from './deathAccountingCases';
 import { assertFactoryMapping } from './factoryMapping';
 import { runPuruisaishiCases } from './puruisaishiCases';
+import { runOwlCases } from './owlCases';
 import { runRuleContractCases } from './ruleContracts';
 import { runSlackingIsolation } from './slackingCases';
 import { runStatusClockCases } from './statusClockCases';
@@ -44,6 +45,7 @@ type RegressionSummary = {
   statusClockCaseCount: number;
   characterHookCaseCount: number;
   puruisaishiCaseCount: number;
+  owlCaseCount: number;
   architectureCaseCount: number;
   battleCount: number;
   failures: FailureSummary[];
@@ -65,6 +67,7 @@ export function main(): void {
   const statusClockCases = runStatusClockCases();
   const characterHookCases = runCharacterHookCases();
   const puruisaishiCases = runPuruisaishiCases();
+  const owlCases = runOwlCases();
   const architectureCases = runArchitectureCases();
   const specs = buildRegressionSpecs();
   const failures: Failure[] = [];
@@ -90,6 +93,7 @@ export function main(): void {
     statusClockCaseCount: statusClockCases.length,
     characterHookCaseCount: characterHookCases.length,
     puruisaishiCaseCount: puruisaishiCases.length,
+    owlCaseCount: owlCases.length,
     architectureCaseCount: architectureCases.length,
     battleCount: specs.length,
     failures: failures.map((failure) => ({

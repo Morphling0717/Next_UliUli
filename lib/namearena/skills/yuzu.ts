@@ -1,6 +1,7 @@
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
 import { healFighter } from '../combatState';
+import { consumeOwlFoodForYuzu } from '../owlMechanics';
 import { getFatigueDamageBonusForTurn } from '../damageResolution';
 import {
   activeYuzuTeammates,
@@ -15,7 +16,7 @@ import {
   type YuzuWeaponId,
   yuzuWeaponSummary,
 } from '../yuzuMechanics';
-import { isSelectableTargetFor } from '../targeting';
+import { findActivePuppetProtector, isSelectableTargetFor } from '../targeting';
 
 const { SKILL_TAGS } = Data;
 
@@ -40,6 +41,11 @@ type YuzuAttackPlan = {
   presentation?: SkillDefinition['presentation'];
 };
 
+type YuzuTargetSelection = {
+  target: Fighter;
+  protectedTarget?: Fighter;
+};
+
 function isActive(fighter: Fighter): boolean {
   return !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0;
 }
@@ -62,23 +68,47 @@ function enemyTargets(ctx: SkillContext): Fighter[] {
   );
 }
 
-function chooseYuzuTarget(ctx: SkillContext, plan: YuzuAttackPlan): Fighter | undefined {
+function resolveYuzuPuppetInterception(ctx: SkillContext, intendedTarget: Fighter): YuzuTargetSelection {
+  const protector = findActivePuppetProtector(yuzuRuntime(ctx), intendedTarget, ctx.user);
+  return protector
+    ? { target: protector, protectedTarget: intendedTarget }
+    : { target: intendedTarget };
+}
+
+function chooseYuzuTarget(ctx: SkillContext, plan: YuzuAttackPlan): YuzuTargetSelection | undefined {
   const runtime = yuzuRuntime(ctx);
+  let intendedTarget: Fighter | undefined;
   if ((ctx.user.yuzuPhase ?? 1) >= 3 && !plan.group) {
     const marked = ensureYuzuMarkedTarget(runtime, ctx.user);
-    if (marked && isActive(marked)) return marked;
+    if (marked && isActive(marked)) intendedTarget = marked;
   }
 
-  if (plan.group) {
+  if (!intendedTarget && !plan.group && ctx.targetWasIntercepted && ctx.interceptedProtectedTargetId) {
+    intendedTarget = ctx.fighters.find((fighter) =>
+      fighter.id === ctx.interceptedProtectedTargetId &&
+      isActive(fighter) &&
+      ctx.getTeamId(fighter) !== ctx.getTeamId(ctx.user),
+    );
+  }
+
+  if (!intendedTarget && plan.group) {
     const targets = enemyTargets(ctx);
-    return targets[Math.floor(Math.random() * targets.length)];
+    intendedTarget = targets[Math.floor(Math.random() * targets.length)];
   }
 
-  if (ctx.target && isActive(ctx.target) && ctx.getTeamId(ctx.target) !== ctx.getTeamId(ctx.user)) {
-    return ctx.target;
+  if (
+    !intendedTarget &&
+    ctx.target &&
+    isActive(ctx.target) &&
+    ctx.getTeamId(ctx.target) !== ctx.getTeamId(ctx.user)
+  ) {
+    intendedTarget = ctx.target;
   }
-  const targets = enemyTargets(ctx);
-  return targets[Math.floor(Math.random() * targets.length)];
+  if (!intendedTarget) {
+    const targets = enemyTargets(ctx);
+    intendedTarget = targets[Math.floor(Math.random() * targets.length)];
+  }
+  return intendedTarget ? resolveYuzuPuppetInterception(ctx, intendedTarget) : undefined;
 }
 
 function applyRandomYuzuDebuff(ctx: SkillContext, target: Fighter): void {
@@ -155,6 +185,7 @@ function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon):
   } else {
     ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但生命已满，随后继续攻击！`);
   }
+  consumeOwlFoodForYuzu(ctx.fighters, ctx.user, (type, text) => ctx.log(type, text));
 }
 
 type YuzuHitResult = {
@@ -166,7 +197,15 @@ function isCurrentMarkedTarget(ctx: SkillContext, target: Fighter): boolean {
   return (ctx.user.yuzuPhase ?? 1) >= 3 && ctx.user.yuzuMarkedTargetId === target.id;
 }
 
-function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan, index: number, forcedWeapon?: YuzuWeaponId, fatigueBonus = 0): YuzuHitResult {
+function executeYuzuHit(
+  ctx: SkillContext,
+  target: Fighter,
+  protectedTarget: Fighter | undefined,
+  plan: YuzuAttackPlan,
+  index: number,
+  forcedWeapon?: YuzuWeaponId,
+  fatigueBonus = 0,
+): YuzuHitResult {
   if (!resolveYuzuAttackGuards(ctx, target, plan.actionName)) {
     return { canContinue: false, hitMarkedTarget: false };
   }
@@ -181,18 +220,23 @@ function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan
   const actual = ctx.applyDamage(target, amount + fatigueBonus, 'skill', false, ctx.user, options);
   const redirectedByJoker = !!options.redirectedByJoker;
   const redirectedByOriginiumCore = !!options.redirectedByOriginiumCore;
-  const redirected = redirectedByJoker || redirectedByOriginiumCore;
+  const redirectedByOwlEmperor = !!options.redirectedByOwlEmperor;
+  const redirected = redirectedByJoker || redirectedByOriginiumCore || redirectedByOwlEmperor;
   const resolvedActual = redirectedByJoker
     ? options.redirectedJokerDamage ?? actual
     : redirectedByOriginiumCore
       ? options.redirectedOriginiumDamage ?? actual
-      : actual;
+      : redirectedByOwlEmperor
+        ? options.redirectedOwlEmperorDamage ?? actual
+        : actual;
 
   const hitLabel = `${index + 1}/${plan.hits}`;
   if (redirectedByJoker) {
     ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移目标实际承受 ${resolvedActual} 点伤害。`);
   } else if (redirectedByOriginiumCore) {
     ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤。`);
+  } else if (redirectedByOwlEmperor) {
+    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`);
   } else if (resolvedActual <= 0) {
     const outcome = options.resolution?.outcome;
     const outcomeText = outcome === 'spell_blocked'
@@ -226,7 +270,10 @@ function executeYuzuHit(ctx: SkillContext, target: Fighter, plan: YuzuAttackPlan
   }
   return {
     canContinue: isActive(ctx.user),
-    hitMarkedTarget: resolvedActual > 0 && !redirected && isCurrentMarkedTarget(ctx, target),
+    hitMarkedTarget: resolvedActual > 0 && !redirected && (
+      isCurrentMarkedTarget(ctx, target) ||
+      (!!protectedTarget && isCurrentMarkedTarget(ctx, protectedTarget))
+    ),
   };
 }
 
@@ -234,6 +281,7 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
   ctx.log('skill', `🪞 【${plan.actionName}】${ctx.user.name}：${plan.quote}`);
   let markedTargetHitThisSkill: Fighter | undefined;
   const fatigueBonus = getFatigueDamageBonusForTurn(ctx.turnCount);
+  const loggedPuppetInterceptions = new Set<string>();
 
   const registerMarkedSkillIfNeeded = () => {
     if (plan.furioso || !markedTargetHitThisSkill) return;
@@ -241,15 +289,26 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
   };
 
   for (let i = 0; i < plan.hits; i += 1) {
-    const target = chooseYuzuTarget(ctx, plan);
-    if (!target) {
+    const targetSelection = chooseYuzuTarget(ctx, plan);
+    if (!targetSelection) {
       ctx.log('info', `🪞 【${plan.actionName}】镜界里已经找不到可以处刑的目标。`);
       registerMarkedSkillIfNeeded();
       return true;
     }
+    const { target, protectedTarget } = targetSelection;
+    if (protectedTarget) {
+      const interceptionKey = `${protectedTarget.id}:${target.id}`;
+      if (!loggedPuppetInterceptions.has(interceptionKey)) {
+        loggedPuppetInterceptions.add(interceptionKey);
+        const markText = ctx.user.yuzuMarkedTargetId === protectedTarget.id
+          ? '镜界标记仍保留在宿主身上，'
+          : '';
+        ctx.log('info', `🛡️ 【傀儡援护】${target.name} 挡在 ${protectedTarget.name} 身前，${markText}${ctx.user.name} 的【${plan.actionName}】先由傀儡承受！`);
+      }
+    }
     const forcedWeapon = plan.furioso && i === plan.hits - 1 ? 'scythe' : undefined;
-    const hitResult = executeYuzuHit(ctx, target, plan, i, forcedWeapon, fatigueBonus);
-    if (hitResult.hitMarkedTarget) markedTargetHitThisSkill = target;
+    const hitResult = executeYuzuHit(ctx, target, protectedTarget, plan, i, forcedWeapon, fatigueBonus);
+    if (hitResult.hitMarkedTarget) markedTargetHitThisSkill = protectedTarget ?? target;
     if (!hitResult.canContinue) {
       registerMarkedSkillIfNeeded();
       return true;

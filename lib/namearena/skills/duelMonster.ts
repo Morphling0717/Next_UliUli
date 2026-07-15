@@ -53,7 +53,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     status: 'STUN',
     text: '🔒 {USER} 展开封印锁链束缚 {TARGET}，造成 {VAL} 点伤害并封锁行动！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { atk: 0.85, mag: 0.85 });
       ctx.log('info', `🔒 ${ctx.target.name} 被封印锁链压制，攻击与魔力下降！`);
     },
@@ -81,7 +81,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: 'Exodia Obliterate' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🧙‍♂️ 黑暗大法师的怒火命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -128,7 +128,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '白龙扫射余波' };
         const actualDmg = ctx.applyDamage(enemy, splashDmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🌪️ 白龙扫射的余波命中 ${enemy.name}，实际造成 ${actualDmg} 点溅射伤害！`);
         } else {
@@ -149,7 +149,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     status: 'STUN',
     text: '🐉 {USER} 发出震天龙吼，压制 {TARGET}，造成 {VAL} 点伤害并震慑目标！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { res: 0.9 });
       ctx.log('info', `🐉 ${ctx.target.name} 被白龙威压震慑，魔抗下降！`);
     },
@@ -173,7 +173,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '究极爆裂疾风弹' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🐉 究极龙息命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -208,8 +208,13 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         const dmg = Math.floor(ctx.user.atk * 1.55 + ctx.user.mag * 0.7);
         const damageOptions: DamageApplicationOptions = { actionName: '三重龙首' };
         const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) {
-          ctx.log('info', `🐉 第 ${i} 颗龙首的攻击被 ${ctx.target.name} 用随机恶作剧转移，原目标没有受伤；转移伤害已单独结算！`);
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) {
+          const redirectText = damageOptions.redirectedByJoker
+            ? `被 ${ctx.target.name} 用随机恶作剧转移`
+            : damageOptions.redirectedByOriginiumCore
+              ? `被 ${ctx.target.name} 转入源石网络`
+              : `被 ${ctx.target.name} 的【帝王之征】接走`;
+          ctx.log('info', `🐉 第 ${i} 颗龙首的攻击${redirectText}，原目标没有受伤；转移伤害已单独结算！`);
           continue;
         }
         total += actualDmg;
@@ -259,7 +264,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     status: 'STUN',
     text: '☀️ {USER} 释放神之威压，压制 {TARGET}，造成 {VAL} 点伤害并震慑！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { atk: 0.82, mag: 0.82, res: 0.9 });
       ctx.log('info', `☀️ ${ctx.target.name} 被太阳神威压削弱，攻击、魔力与魔抗下降！`);
     },

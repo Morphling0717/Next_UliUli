@@ -128,7 +128,7 @@ function applyTrackedDamage(
 ): { actualDmg: number; redirected: boolean } {
   const options: DamageApplicationOptions = { actionName, deferTransform: true, respectDefenses: true };
   const actualDmg = ctx.applyDamage(target, Math.max(0, amount), 'skill', trueDamage, ctx.user, options);
-  if (options.redirectedByJoker || options.redirectedByOriginiumCore) return { actualDmg: 0, redirected: true };
+  if (options.redirectedByJoker || options.redirectedByOriginiumCore || options.redirectedByOwlEmperor) return { actualDmg: 0, redirected: true };
   if (actualDmg > 0 && (options.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced)) {
     ctx.log('info', `${logPrefix}，这一击造成 ${actualDmg} 点${trueDamage ? '真实' : ''}伤害并触发了致死连锁；${target.name} 已在后续效果中退场！`);
   } else if (actualDmg > 0) {
@@ -325,7 +325,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
         const totalLabel = redirectedAny ? '对未被转移的目标总计造成' : '本次团战连招总计造成';
         ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} ${totalLabel} ${totalDmg} 点伤害！`);
       } else if (redirectedAny) {
-        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} 的部分伤害被随机恶作剧转移，转移伤害已单独结算！`);
+        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} 的部分伤害被目标防护机制转移，转移伤害已单独结算！`);
       } else {
         ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} 这轮团战连招没有打出有效伤害！`);
       }

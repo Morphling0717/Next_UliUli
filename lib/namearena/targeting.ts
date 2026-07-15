@@ -10,6 +10,7 @@ export interface TargetingRuntime {
 export interface TargetSelectionResult {
   target: Fighter;
   isIntercepted: boolean;
+  protectedTarget?: Fighter;
 }
 
 type OriginiumTargetingState = {
@@ -37,6 +38,20 @@ export function isSelectableTargetFor(
 
 export function getSelectableTargets(runtime: TargetingRuntime, user: Fighter): Fighter[] {
   return runtime.fighters.filter((fighter) => isSelectableTargetFor(runtime, user, fighter));
+}
+
+export function findActivePuppetProtector(
+  runtime: TargetingRuntime,
+  protectedTarget: Fighter,
+  attacker?: Fighter,
+): Fighter | undefined {
+  return runtime.fighters.find((fighter) =>
+    fighter.isSummon &&
+    fighter.summonerId === protectedTarget.id &&
+    (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
+    runtime.isActiveCombatant(fighter) &&
+    fighter.id !== attacker?.id,
+  );
 }
 
 function getOriginiumTargetingState(runtime: TargetingRuntime): OriginiumTargetingState {
@@ -117,17 +132,14 @@ export function resolveTarget(
   else if (markedWarThunderTarget) target = markedWarThunderTarget;
   else target = pickWeightedTarget(runtime, currentTargets);
   let isIntercepted = false;
-  const protector = runtime.fighters.find((fighter) =>
-    fighter.isSummon &&
-    fighter.summonerId === target.id &&
-    (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
-    runtime.isActiveCombatant(fighter),
-  );
-  if (protector && protector.id !== user.id) {
+  let protectedTarget: Fighter | undefined;
+  const protector = findActivePuppetProtector(runtime, target, user);
+  if (protector) {
+    protectedTarget = target;
     target = protector;
     isIntercepted = true;
   }
 
   if (!target || !runtime.isActiveCombatant(target) || target.id === user.id) return null;
-  return { target, isIntercepted };
+  return { target, isIntercepted, protectedTarget };
 }

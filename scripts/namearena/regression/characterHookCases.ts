@@ -3035,6 +3035,100 @@ export function runCharacterHookCases(): string[] {
 
   {
     const yuzu = makeFighter('柚子@A');
+    const puppetOwner = makeFighter('傀儡宿主@B');
+    const puppet = makeFighter('傀儡护卫@B');
+    const { engine, logs } = makeDeathEngine([yuzu, puppetOwner, puppet]);
+    const engineYuzu = engine.fighters[0];
+    const engineOwner = engine.fighters[1];
+    const enginePuppet = engine.fighters[2];
+
+    bindAsGachaSummon(engineOwner, enginePuppet, '小汀(傀儡)');
+    enginePuppet.name = '小汀(傀儡)';
+    enginePuppet.maxHp = 100000;
+    localProject.setCurrentHp(enginePuppet, 100000);
+    enginePuppet.def = 0;
+    engineOwner.maxHp = 100000;
+    localProject.setCurrentHp(engineOwner, 100000);
+    engineOwner.def = 0;
+    engineYuzu.yuzuPhase = 3;
+    engineYuzu.yuzuMarkedTargetId = engineOwner.id;
+    engineYuzu.yuzuMarkedHitCount = 0;
+    engineYuzu.yuzuFuriosoCountedTurn = undefined;
+    engineOwner.status.push({ type: 'YUZU_MARKED', duration: 999 });
+    engineYuzu.atk = 1000;
+    engineYuzu.wis = 300;
+
+    const ownerHpBeforeGuard = engineOwner.currentHp;
+    const puppetHpBeforeGuard = enginePuppet.currentHp;
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_customized_fool', engineYuzu, engineOwner);
+    });
+
+    assert(engineOwner.currentHp === ownerHpBeforeGuard, `Yuzu marked attacks should not bypass an active puppet, owner lost ${ownerHpBeforeGuard - engineOwner.currentHp} HP`);
+    assert(enginePuppet.currentHp < puppetHpBeforeGuard, 'Puppet Ting should take the intercepted Yuzu damage');
+    assert(engineYuzu.yuzuMarkedHitCount === 1, `A skill that hits Puppet Ting while aimed at the marked owner should charge Furioso once, got ${engineYuzu.yuzuMarkedHitCount}`);
+    assert(logs.some((entry) => entry.text.includes('【傀儡援护】') && entry.text.includes('镜界标记仍保留在宿主身上')), 'Yuzu puppet interception should explain both the guard and retained mark');
+    assert(!logs.some((entry) => entry.text.includes('【定制愚者】第') && entry.text.includes('命中 傀儡宿主')), 'A living puppet should keep every hit of the marked skill off its owner');
+
+    const secondSkillLogStart = logs.length;
+    localProject.setCurrentHp(enginePuppet, 1);
+    engine.battleState.largeRound.number += 1;
+    const ownerHpBeforeBreak = engineOwner.currentHp;
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_customized_fool', engineYuzu, engineOwner);
+    });
+    const secondSkillLogs = logs.slice(secondSkillLogStart);
+
+    assert(enginePuppet.currentHp <= 0 || enginePuppet.isDead, 'Puppet Ting should be defeated by the first hit when only 1 HP remains');
+    assert(engineOwner.currentHp < ownerHpBeforeBreak, 'Remaining multi-hit attacks should reach the marked owner after the puppet falls');
+    assert(Number(engineYuzu.yuzuMarkedHitCount) === 2, `The next large-round skill should add only one more Furioso count after breaking through the puppet, got ${engineYuzu.yuzuMarkedHitCount}`);
+    assert(secondSkillLogs.some((entry) => entry.text.includes('命中 小汀(傀儡)')), 'The breaking hit should be logged on Puppet Ting');
+    assert(secondSkillLogs.some((entry) => entry.text.includes('命中 傀儡宿主')), 'Later hits should visibly return to the marked owner after the puppet falls');
+    cases.push('Yuzu marked multi-hit respects Puppet Ting interception');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
+    const puppetOwner = makeFighter('Furioso宿主@B');
+    const puppet = makeFighter('Furioso傀儡@B');
+    const { engine, logs } = makeDeathEngine([yuzu, puppetOwner, puppet]);
+    const engineYuzu = engine.fighters[0];
+    const engineOwner = engine.fighters[1];
+    const enginePuppet = engine.fighters[2];
+
+    bindAsGachaSummon(engineOwner, enginePuppet, '小汀(傀儡)');
+    enginePuppet.name = '小汀(傀儡)';
+    enginePuppet.maxHp = 1000000;
+    localProject.setCurrentHp(enginePuppet, 1000000);
+    enginePuppet.def = 0;
+    engineOwner.maxHp = 100000;
+    localProject.setCurrentHp(engineOwner, 100000);
+    engineOwner.def = 0;
+    engineYuzu.yuzuPhase = 3;
+    engineYuzu.yuzuMarkedTargetId = engineOwner.id;
+    engineYuzu.yuzuMarkedHitCount = 9;
+    engineYuzu.yuzuFuriosoReady = true;
+    engineOwner.status.push({ type: 'YUZU_MARKED', duration: 999 });
+    engineYuzu.atk = 1000;
+    engineYuzu.wis = 300;
+
+    const ownerHpBefore = engineOwner.currentHp;
+    const puppetHpBefore = enginePuppet.currentHp;
+    withRandomSequence([0.5], () => {
+      engine.executeSkillAction('yuzu_furioso_replica', engineYuzu, engineOwner);
+    });
+    const furiosoHitLogs = logs.filter((entry) => entry.text.includes('【Furioso-Replica】第'));
+
+    assert(furiosoHitLogs.length === 9, `Furioso should always resolve exactly 9 total hits through a puppet guard, got ${furiosoHitLogs.length}`);
+    assert(furiosoHitLogs.every((entry) => entry.text.includes('命中 小汀(傀儡)')), 'A surviving Puppet Ting should absorb all 9 Furioso hits without extra owner hits');
+    assert(engineOwner.currentHp === ownerHpBefore, 'Furioso should not add replacement hits against the marked owner after all 9 are intercepted');
+    assert(enginePuppet.currentHp < puppetHpBefore, 'Puppet Ting should actually take Furioso damage');
+    assert(!engineYuzu.yuzuFuriosoReady && Number(engineYuzu.yuzuMarkedHitCount) === 0, 'Furioso should end and reset normally after its fixed 9 intercepted hits');
+    cases.push('Furioso keeps a fixed nine-hit budget through Puppet Ting interception');
+  }
+
+  {
+    const yuzu = makeFighter('柚子@A');
     const enemy = makeFighter('普通敌人@B');
     const { engine } = makeDeathEngine([yuzu, enemy]);
     const engineYuzu = engine.fighters[0];

@@ -210,6 +210,7 @@ function getFighterAccent(fighter?: Fighter) {
   if (fighter.isSigua) return "#39d9ff";
   if (fighter.isTokusatsu) return "#42b9ff";
   if (fighter.isYuzu) return "#f266ff";
+  if (fighter.isOwl) return "#ff9a55";
   if (fighter.isWT) return "#77db82";
   if (fighter.isGamer) return "#b6ed55";
   if (fighter.isEmote) return "#d8b4fe";

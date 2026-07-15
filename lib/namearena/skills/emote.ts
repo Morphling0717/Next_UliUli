@@ -17,7 +17,7 @@ type EmoteDamageResult = {
   actual: number;
   interrupted: boolean;
   redirected: boolean;
-  redirectKind: 'joker' | 'originium' | null;
+  redirectKind: 'joker' | 'originium' | 'owl_emperor' | null;
 };
 
 function canContinueEmoteAction(fighter: Fighter): boolean {
@@ -74,18 +74,24 @@ function applyEmoteDamage(
     ? 'joker'
     : damageOptions.redirectedByOriginiumCore
       ? 'originium'
-      : null;
+      : damageOptions.redirectedByOwlEmperor
+        ? 'owl_emperor'
+        : null;
   const redirected = redirectKind !== null;
   const resolvedActual = redirectKind === 'joker'
     ? damageOptions.redirectedJokerDamage ?? actual
     : redirectKind === 'originium'
       ? damageOptions.redirectedOriginiumDamage ?? actual
+      : redirectKind === 'owl_emperor'
+        ? damageOptions.redirectedOwlEmperorDamage ?? actual
       : actual;
   if (!canContinueEmoteAction(ctx.user)) {
     return { actual: resolvedActual, interrupted: true, redirected, redirectKind };
   }
 
-  ctx.log(resolvedActual > 0 ? 'skill' : 'info', logText(resolvedActual, redirectKind));
+  ctx.log(resolvedActual > 0 ? 'skill' : 'info', redirectKind === 'owl_emperor'
+    ? `🐲 【${actionName}】${ctx.user.name} 对 ${target.name} 的攻击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`
+    : logText(resolvedActual, redirectKind));
   if (resolvedActual > 0) ctx.flushDeferredDamageEvents?.();
   if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     ctx.markDefeated(target, {

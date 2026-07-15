@@ -127,6 +127,11 @@ export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter):
     if (actor.currentHp <= 0 || actor.isDead || actor.isDeadAnnounced) break;
 
     if (isStatusType(status.type, CONTROL_STATUS_TYPES)) canAct = false;
+    if (
+      status.type === 'OWL_FORM_DEFEAT' ||
+      status.type === 'OWL_ENJOYING' ||
+      status.type === 'OWL_SPALTER_DOLL'
+    ) canAct = false;
     if (!isSlacking && isStatusType(status.type, DOT_STATUS_TYPES)) {
       const dmgAmt = status.type === 'WATER_PRISON' ? Math.floor(actor.maxHp * 0.08) : Math.floor(actor.maxHp * 0.05);
       const statusInfo = runtime.statusEffects[status.type];

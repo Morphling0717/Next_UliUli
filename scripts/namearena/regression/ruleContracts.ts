@@ -219,6 +219,7 @@ function assertSpecialMappings(): void {
     ['M1A2_abrams_sep', 'WT_GRINDER'],
     ['表情', 'EMOTE_MAHORAGA'],
     ['柚子', 'YUZU_MIRROR_PARENT'],
+    ['鸮', 'OWL_HEAVEN_AVATAR'],
   ]);
   expected.forEach((jobId, name) => {
     assert(makeFighter(name).job === jobId, `${name} should map to ${jobId}`);

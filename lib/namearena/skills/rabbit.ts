@@ -104,7 +104,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         if ((ctx.target.status ?? []).some((s) => s.type === 'ETHEREAL')) finalDmg = Math.floor(finalDmg * 2.0);
         const damageOptions: DamageApplicationOptions = { actionName };
         const actualDmg = ctx.applyDamage(ctx.target, finalDmg, 'skill', false, ctx.user, damageOptions);
-        return { actualDmg, redirected: !!(damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) };
+        return { actualDmg, redirected: !!(damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) };
       };
 
       if (roll.type === '114514') {
@@ -361,7 +361,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
     text: '💥 {USER} 抡起巨大的发声计算器，狠狠地拍在了 {TARGET} 脸上！造成了 {VAL} 点骨折伤害！',
     alwaysCrit: true,
     afterExecute: (ctx) => {
-      if (ctx.damageRedirectedByOriginiumCore) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor) return;
       const realtimeHpPct = ctx.target.currentHp / ctx.target.maxHp;
       if (
         (ctx.user.status ?? []).some((s) => ['STYLE_ANGRY', 'STYLE_EMPEROR'].includes(s.type)) &&
@@ -427,7 +427,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((s) => s.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '扩音处刑' };
         const actualDmg = ctx.applyDamage(e, dmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
         if (damageOptions.targetDefeatedDuringDamage || e.isDead || e.isDeadAnnounced) {
           ctx.flushDeferredDamageEvents?.();
           continue;
