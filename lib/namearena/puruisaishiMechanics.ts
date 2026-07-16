@@ -667,7 +667,7 @@ export function grantOriginiumCrystalBreakReward(
   if (beneficiary.isNpc || beneficiary.cannotWin || beneficiary.isDead || beneficiary.currentHp <= 0) return;
 
   const reduced = reduceOriginiumInfection(beneficiary, CRYSTAL_BREAK_CLEANSE_STACKS);
-  const healed = healFighter(beneficiary, Math.floor(beneficiary.maxHp * CRYSTAL_BREAK_HEAL_RATIO));
+  const healed = healFighter(beneficiary, Math.floor(beneficiary.maxHp * CRYSTAL_BREAK_HEAL_RATIO), runtime.log);
   const recovery = [
     reduced > 0 ? `矿石病 -${reduced} 层（当前 ${beneficiary.originiumInfectionStacks ?? 0}/${ORIGINIUM_MAX_STACKS}）` : '没有可清除的矿石病层数',
     healed > 0 ? `恢复 ${healed} 点生命` : '生命已满',

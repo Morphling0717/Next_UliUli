@@ -9,7 +9,7 @@ export const DIVA_BUFF_POOL: GachaEntry[] = [
   { text: "🎸 {USER} 摇滚时刻！全队获得反击护盾！(Counter)", tag: SKILL_TAGS.BUFF, status: 'COUNTER' },
   { text: "🎧 {USER} 戴上耳机，隔绝噪音！全队获得【耳机隔音】，魔抗大幅提升！", tag: SKILL_TAGS.BUFF, status: 'DIVA_HEADPHONE_GUARD', statBuff: { res: 1.5 } },
   { text: "📢 {USER} 大声应援！所有队友技能冷却刷新！（攻击力小幅提升）", tag: SKILL_TAGS.BUFF, statBuff: { atk: 1.2 } },
-  { text: "💃 {USER} 绝美舞姿！魅惑了 {TARGET}，让它无法行动！", tag: SKILL_TAGS.DEBUFF, status: 'CHARMED' },
+  { text: "💃 {USER} 绝美舞姿！魅惑了 {TARGET}，让它不忍对魅惑来源下狠手！", tag: SKILL_TAGS.DEBUFF, status: 'CHARMED' },
   { text: "🌟 {USER} 星光闪耀！全队展开舞台星光护幕！", tag: SKILL_TAGS.BUFF, status: 'INVUL', statusSource: 'diva_starlight' },
   { text: "💊 {USER} 投喂润喉糖！全队解除了所有异常状态！", tag: SKILL_TAGS.HEAL, mult: 0.5, cleanStatus: true },
   { text: "🎶 {USER} 节奏加速！全队速度提升！", tag: SKILL_TAGS.BUFF, statBuff: { spd: 1.5 } },

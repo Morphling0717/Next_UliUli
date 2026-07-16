@@ -316,7 +316,7 @@ export function applyGachaSummonLifesteal(
   }
 
   const healPct = summoner.gachaSummonLifestealPct ?? GACHA_SUMMON_LIFESTEAL_PCT;
-  const healed = healFighter(summoner, Math.floor(healBase * healPct));
+  const healed = healFighter(summoner, Math.floor(healBase * healPct), runtime.log);
   if (healed > 0) {
     runtime.log(
       'heal',
@@ -664,7 +664,7 @@ export const GACHA_SUMMON_RECYCLE_CARD: GachaEntry = {
     );
     ctx.markDefeated(victim, { message: `💀 【召唤物回收】${victim.name} 被 ${ctx.user.name} 回收为卡组资源！`, awardKill: false });
     victim.isDead = true;
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.18));
+    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.18), ctx.log);
     const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
     ctx.log(
       healed > 0 ? 'heal' : 'info',
@@ -774,6 +774,7 @@ export const GACHA_BLACK_LOTUS_CARD: GachaEntry = {
 export const GACHA_BLUE_EYES_BURST_CARD: GachaEntry = {
   text: '🐲 {USER} 抽到「毁灭爆裂疾风弹」，命令青眼白龙释放龙息！',
   tag: 'special',
+  directTarget: true,
   visualEffect: 'gacha_blue_eyes_burst',
   requiresFriendlySummon: '青眼白龙',
   onExecute: (ctx) => {
@@ -809,7 +810,7 @@ export const GACHA_TRUE_LIGHT_CARD: GachaEntry = {
     refreshStatus(blueEyes, 'SPELL_BLOCK', 3, 'gacha_true_light');
     refreshStatus(blueEyes, 'BKB', 2, 'gacha_true_light');
     refreshStatus(blueEyes, 'REGEN', 3);
-    const healed = blueEyes.hpPct <= 0.55 ? healFighter(blueEyes, Math.floor(blueEyes.maxHp * 0.22)) : 0;
+    const healed = blueEyes.hpPct <= 0.55 ? healFighter(blueEyes, Math.floor(blueEyes.maxHp * 0.22), ctx.log) : 0;
     consumeGachaLuck(ctx.user, 1);
     logGachaEffect(
       ctx,
@@ -832,7 +833,7 @@ export const GACHA_ANCIENT_CHANT_CARD: GachaEntry = {
     if (!ra) return false;
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
     refreshStatus(ra, 'SPELL_BLOCK', 2, 'gacha_ancient_chant');
-    const healed = healFighter(ra, Math.floor(ra.maxHp * 0.18));
+    const healed = healFighter(ra, Math.floor(ra.maxHp * 0.18), ctx.log);
     logGachaEffect(
       ctx,
       'buff',
@@ -847,6 +848,7 @@ export const GACHA_ANCIENT_CHANT_CARD: GachaEntry = {
 export const GACHA_BLAZE_CANNON_CARD: GachaEntry = {
   text: '🔥 {USER} 发动「太阳神火焰加农」，命令翼神龙燃烧生命！',
   tag: 'special',
+  directTarget: true,
   visualEffect: 'gacha_blaze_cannon',
   requiresFriendlySummon: '翼神龙',
   onExecute: (ctx) => {
@@ -921,7 +923,7 @@ export const GACHA_RA_TRIBUTE_ASCENSION_CARD: GachaEntry = {
     );
     ctx.markDefeated(victim, { message: `💀 【献祭升格】${victim.name} 化作 ${ra.name} 的太阳神力！`, awardKill: false });
     victim.isDead = true;
-    const healed = healFighter(ra, Math.floor(ra.maxHp * 0.28));
+    const healed = healFighter(ra, Math.floor(ra.maxHp * 0.28), ctx.log);
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
     const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
     ctx.log(
@@ -940,7 +942,7 @@ export const GACHA_SMALL_PITY_CARD: GachaEntry = {
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, 3);
     cleanseLuckEmperor(ctx.user);
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.22 + power * 0.03)));
+    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.22 + power * 0.03)), ctx.log);
     refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_small_pity');
     refreshStatus(ctx.user, 'REGEN', 3);
     const healText = healed > 0 ? `恢复了 ${healed} 点生命` : '生命已满，治疗溢出';
@@ -1031,7 +1033,7 @@ export const GACHA_WHALE_REWRITE_CARD: GachaEntry = {
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, 3);
     cleanseLuckEmperor(ctx.user);
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.18 + power * 0.04)));
+    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.18 + power * 0.04)), ctx.log);
     refreshStatus(ctx.user, 'BKB', 1, 'gacha_whale_rewrite');
     refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_whale_rewrite');
     refreshStatus(ctx.user, 'REGEN', 3);

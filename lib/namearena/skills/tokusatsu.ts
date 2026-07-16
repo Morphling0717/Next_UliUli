@@ -31,7 +31,6 @@ const POSITIVE_STATUS_TYPES = new Set([
   'VALO_ULT_RUN_IT_BACK',
   'VALO_HOLDING_ANGLE',
   'VALO_HARBOR_WALL',
-  'DIVA_SONG',
   'DIVA_HEADPHONE_GUARD',
   'DIVA_FINAL_CHORUS',
   'BABY_LOVE_BOTTLE',
@@ -149,8 +148,8 @@ function applyNamedDamageDetailed(
   };
 }
 
-function healAndSync(fighter: Fighter, amount: number): number {
-  const healed = healFighter(fighter, amount);
+function healAndSync(ctx: SkillContext, fighter: Fighter, amount: number): number {
+  const healed = healFighter(fighter, amount, ctx.log);
   syncHpPct(fighter);
   return healed;
 }
@@ -194,7 +193,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     text: '🔥 {USER} 靠特摄魂咬牙稳住身体，等待真正的变身时刻！',
     onExecute: (ctx) => {
       const cleanCount = cleanseTokusatsu(ctx.user);
-      const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.16 + ctx.user.wis * 2));
+      const healed = healAndSync(ctx, ctx.user, Math.floor(ctx.user.maxHp * 0.16 + ctx.user.wis * 2));
       refreshStatus(ctx.user, 'REGEN', 3);
       refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'tokusatsu_soul');
       if (ctx.user.hpPct <= 0.5) refreshStatus(ctx.user, 'BKB', 1, 'tokusatsu_soul');
@@ -233,6 +232,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
   },
   adversity_flash: {
     name: '悲愿居合', tag: SKILL_TAGS.PHYS,
+    directTarget: true,
     condition: (u) => !!u.isTokusatsu && !!u.transformed,
     text: '⚔️ {USER} 以悲愿驱动武刃，踏步居合斩向 {TARGET}！',
     onExecute: (ctx) => {
@@ -242,7 +242,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const damageResult = applyNamedDamageDetailed(ctx, ctx.target, base, '悲愿居合', true);
       const actual = damageResult.actual;
       if (!userCanContinue(ctx)) return true;
-      const healed = healAndSync(ctx.user, Math.floor(actual * 0.25));
+      const healed = healAndSync(ctx, ctx.user, Math.floor(actual * 0.25));
       const recovery = actual > 0
         ? healed > 0
           ? `${ctx.user.name} 借悲愿回流恢复 ${healed} 点生命`
@@ -265,7 +265,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     text: '✨ {USER} 展开奇迹炼金阵，修复装甲并重构异常状态！',
     onExecute: (ctx) => {
       const cleanCount = cleanseTokusatsu(ctx.user);
-      const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.22 + ctx.user.mag * 1.8 + ctx.user.wis));
+      const healed = healAndSync(ctx, ctx.user, Math.floor(ctx.user.maxHp * 0.22 + ctx.user.mag * 1.8 + ctx.user.wis));
       refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'tokusatsu_miracle_alchemy');
       refreshStatus(ctx.user, 'REGEN', 4);
       if (ctx.user.hpPct <= 0.48 || cleanCount > 0) refreshStatus(ctx.user, 'BKB', 1, 'tokusatsu_miracle_alchemy');
@@ -306,6 +306,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
   monster_punch: { name: '怪兽重拳', tag: SKILL_TAGS.PHYS, mult: 3.3, minDamagePct: 0.75, status: 'AIRBORNE', text: '🦖 {USER} 挥动巨大的星形拳套，一拳将 {TARGET} 轰飞！造成 {VAL} 伤害并击飞！' },
   energy_crush: {
     name: '能量粉碎', tag: SKILL_TAGS.PHYS,
+    directTarget: true,
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN',
     text: '🦀 {USER} 将怪兽能量集中到双臂，对 {TARGET} 发动能量粉碎！',
     onExecute: (ctx) => {
@@ -337,7 +338,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     text: '🌈 {USER} 以彩虹炼金术重铸怪兽装甲！',
     onExecute: (ctx) => {
       const cleanCount = cleanseTokusatsu(ctx.user);
-      const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.26 + ctx.user.mag * 2.2));
+      const healed = healAndSync(ctx, ctx.user, Math.floor(ctx.user.maxHp * 0.26 + ctx.user.mag * 2.2));
       applyTemporaryTokusatsuStats(ctx.user, 'TOKUSATSU_MIRACLE_ARMOR', 4, { def: 1.12, res: 1.12 });
       refreshStatus(ctx.user, 'BKB', 2, 'tokusatsu_miracle_armor');
       refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'tokusatsu_miracle_armor');
@@ -403,6 +404,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
   },
   great_monster_victory: {
     name: '怪兽胜利', tag: SKILL_TAGS.PHYS, presentation: 'finisher', mult: 7.0, ignoreDef: true, alwaysHit: true,
+    directTarget: true,
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN' && !u.hasUsedGreatMonsterVictory,
     text: '⭐ {USER} 触发必杀！【GREAT MONSTER VICTORY】！星光粉碎了 {TARGET}，造成 {VAL} 伤害！',
     onExecute: (ctx) => {
@@ -421,7 +423,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const damageResult = applyNamedDamageDetailed(ctx, ctx.target, base, 'GREAT MONSTER VICTORY', true, false);
       const actual = damageResult.actual;
       if (!userCanContinue(ctx)) return true;
-      const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.12 + actual * 0.12));
+      const healed = healAndSync(ctx, ctx.user, Math.floor(ctx.user.maxHp * 0.12 + actual * 0.12));
       refreshStatus(ctx.user, 'BKB', 1, 'tokusatsu_great_monster_victory');
       refreshStatus(ctx.user, 'REGEN', 3);
       const recovery = actual > 0
@@ -482,7 +484,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
           markIfDefeated(ctx, enemy, '彩虹狂热');
         }
       }
-      const healed = healAndSync(ctx.user, Math.floor(ctx.user.maxHp * 0.18 + primary * 0.1));
+      const healed = healAndSync(ctx, ctx.user, Math.floor(ctx.user.maxHp * 0.18 + primary * 0.1));
       const cleanCount = activeNegativeCount(ctx.user) > 0 ? cleanseTokusatsu(ctx.user) : 0;
       refreshStatus(ctx.user, 'BKB', 2, 'tokusatsu_rainbow_fever');
       refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'tokusatsu_rainbow_fever');

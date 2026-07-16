@@ -65,7 +65,7 @@ export interface BattleRuntimeHost {
   ) => void;
   formatSkillText: (skill: SkillDefinition, text: string) => string;
   handleTransformations: (fighter: Fighter) => void;
-  flushDeferredDamageEvents: (fighter: Fighter) => void;
+  flushDeferredDamageEvents: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
   isPassiveCharmCounter: (fighter: Fighter, counterType: string) => boolean;
   spreadDivaSupport: (skill: SkillDefinition, user: Fighter, userTeamId: string) => void;
   syncPuppetMasterStatus: (fighter: Fighter) => void;
@@ -119,7 +119,7 @@ export function buildStatusProcessingRuntime(host: BattleRuntimeHost): StatusPro
     log: (type, text) => host.log(type, text),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     markDefeated: (target, options) => host.markDefeated(target, options),
-    flushDeferredDamageEvents: (fighter) => host.flushDeferredDamageEvents(fighter),
+    flushDeferredDamageEvents: (fighter, phase) => host.flushDeferredDamageEvents(fighter, phase),
     syncHpPct: (fighter) => host.syncHpPct(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
   };
@@ -176,7 +176,7 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     calculateDamage: (user, target, skill, userTeamId, usedSkillId) =>
       host.calculateDamage(user, target, skill, userTeamId, usedSkillId),
     handleTransformations: (fighter) => host.handleTransformations(fighter),
-    flushDeferredDamageEvents: (fighter) => host.flushDeferredDamageEvents(fighter),
+    flushDeferredDamageEvents: (fighter, phase) => host.flushDeferredDamageEvents(fighter, phase),
     executeSkillAction: (skillId, user, forcedTarget, triggerDepth) =>
       host.executeSkillAction(skillId, user, forcedTarget, triggerDepth),
     executeSummonSkill: (skill, user, userTeamId) => host.executeSummonSkill(skill, user, userTeamId),

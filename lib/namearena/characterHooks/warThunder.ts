@@ -13,6 +13,7 @@ const WT_REPAIR_STATUS_TYPES = new Set([
   'STUN',
   'FREEZE',
   'CONFUSED',
+  'EMBARRASSED',
   'CHARMED',
   'WT_SUPPRESS',
   'WT_AIRBORNE',
@@ -27,6 +28,7 @@ const WT_REPAIR_STATUS_TYPES = new Set([
   'ZEROED',
   'WEAK',
   'NO_HEAL',
+  'BLEED',
 ]);
 
 function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {

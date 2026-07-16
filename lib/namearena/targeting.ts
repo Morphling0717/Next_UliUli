@@ -30,14 +30,31 @@ export function isSelectableTargetFor(
 ): boolean {
   if (target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) return false;
   if ((target.untargetableUntilTurn ?? -1) >= runtime.turnCount) return false;
+  const confusedFriendlyTarget = user.confusedForcedTargetId === target.id;
   return runtime.isActiveCombatant(target) &&
     target.id !== user.id &&
-    runtime.getTeamId(target) !== runtime.getTeamId(user) &&
+    (confusedFriendlyTarget || runtime.getTeamId(target) !== runtime.getTeamId(user)) &&
     !target.status.some((status) => status.type === 'SYNERGY_SLACKING');
 }
 
 export function getSelectableTargets(runtime: TargetingRuntime, user: Fighter): Fighter[] {
   return runtime.fighters.filter((fighter) => isSelectableTargetFor(runtime, user, fighter));
+}
+
+export function getConfusionTargets(runtime: TargetingRuntime, user: Fighter): Fighter[] {
+  const candidates = runtime.fighters.filter((target) =>
+    target.id !== user.id &&
+    runtime.isActiveCombatant(target) &&
+    !(target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) &&
+    target.owlSummonState?.kind !== 'meal' &&
+    target.owlSummonState?.kind !== 'rice' &&
+    (target.untargetableUntilTurn ?? -1) < runtime.turnCount &&
+    !target.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+  );
+  const charmSourceId = user.status.find((status) => status.type === 'CHARMED')?.applierId;
+  if (!charmSourceId) return candidates;
+  const alternatives = candidates.filter((target) => target.id !== charmSourceId);
+  return alternatives.length > 0 ? alternatives : candidates;
 }
 
 export function findActivePuppetProtector(
@@ -119,18 +136,27 @@ export function resolveTarget(
 ): TargetSelectionResult | null {
   if (currentTargets.length === 0) return null;
 
-  const forcedTargetValid = forcedTarget ? isSelectableTargetFor(runtime, user, forcedTarget) : false;
-  const tauntingTargets = currentTargets.filter((candidate) =>
+  const charmSourceId = user.status.find((status) => status.type === 'CHARMED')?.applierId;
+  const charmAlternatives = charmSourceId
+    ? currentTargets.filter((candidate) => candidate.id !== charmSourceId)
+    : currentTargets;
+  const availableTargets = charmSourceId && charmAlternatives.length > 0
+    ? charmAlternatives
+    : currentTargets;
+  const forcedTargetValid = forcedTarget
+    ? availableTargets.some((candidate) => candidate.id === forcedTarget.id) && isSelectableTargetFor(runtime, user, forcedTarget)
+    : false;
+  const tauntingTargets = availableTargets.filter((candidate) =>
     candidate.isYuzu && candidate.status.some((status) => status.type === 'YUZU_TAUNT'),
   );
   const markedWarThunderTarget = user.isWT && user.wtMarkedTargetId
-    ? currentTargets.find((candidate) => candidate.id === user.wtMarkedTargetId)
+    ? availableTargets.find((candidate) => candidate.id === user.wtMarkedTargetId)
     : undefined;
   let target: Fighter;
   if (forcedTargetValid) target = forcedTarget!;
   else if (tauntingTargets.length > 0) target = pickWeightedTarget(runtime, tauntingTargets);
   else if (markedWarThunderTarget) target = markedWarThunderTarget;
-  else target = pickWeightedTarget(runtime, currentTargets);
+  else target = pickWeightedTarget(runtime, availableTargets);
   let isIntercepted = false;
   let protectedTarget: Fighter | undefined;
   const protector = findActivePuppetProtector(runtime, target, user);

@@ -142,14 +142,14 @@ export function runStatusClockCases(): string[] {
     const canAct = engine.processStatus(engine.fighters[0]);
     const remainingTypes = engine.fighters[0].status.map((status) => status.type);
 
-    assert(!canAct, 'lethal DoT defiance should not turn a controlled self tick into a normal action');
+    assert(canAct, 'lethal DoT defiance should cleanse soft control and leave the queued instant action available');
     assert(engine.fighters[0].currentHp > 0, 'Tokusatsu defiance should survive lethal DoT during status processing');
     assert(!remainingTypes.includes('CONFUSED'), 'cleansed control should not be restored after lethal DoT defiance');
     assert(!remainingTypes.includes('POISON'), 'cleansed DoT should not be restored after lethal DoT defiance');
     assert(remainingTypes.includes('TOKUSATSU_DEFIANCE'), 'defiance status should remain visible after status processing');
     assert(remainingTypes.includes('BKB'), 'newly granted control immunity should survive status processing');
     assert(engine.fighters[0].tokusatsuInstantActionQueued, 'lethal DoT defiance should queue the instant counter');
-    cases.push('lethal DoT defiance does not restore cleansed statuses');
+    cases.push('lethal DoT defiance cleanses soft control without restoring it');
   }
 
   {

@@ -14,7 +14,7 @@ function namesOf(fighters: Fighter[]): string {
 function consumeAreaStatusSpellBlock(ctx: Parameters<NonNullable<SkillDefinition['onExecute']>>[0], target: Fighter, actionName: string): boolean {
   const spellBlock = consumeSpellBlock(target);
   if (!spellBlock) return false;
-  const healed = healFighter(target, Math.floor(target.maxHp * 0.15));
+  const healed = healFighter(target, Math.floor(target.maxHp * 0.15), ctx.log);
   const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
   ctx.log('info', formatPreSkillSpellBlock(spellBlock, ctx.user.name, actionName, target.name, healText));
   return true;
@@ -122,7 +122,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         a.status = a.status ?? [];
         grantStatus(a, 'INVUL', 1, 'valorant_astra_cosmic_divide');
         a.status = a.status.filter(
-          (s) => !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK'].includes(s.type),
+          (s) => !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK'].includes(s.type),
         );
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === a.id);
         if (idx !== -1) ctx.fighters[idx] = a;

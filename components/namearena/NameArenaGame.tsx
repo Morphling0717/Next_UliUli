@@ -292,11 +292,11 @@ const STATUS_CATEGORY_STYLES: Record<StatusCategory, string> = {
 };
 
 const STATUS_DISPLAY_FALLBACKS: Record<string, StatusEffectInfo> = {
-  BLEED: { name: '流血', icon: '🩸', desc: '持续流血伤害' },
+  BLEED: { name: '流血', icon: '🩸', desc: '自身行动开始损失 4% 最大生命，受到的治疗、再生与吸血降低 25%' },
   YUZU_BARRIER: { name: '镜界护盾', icon: '🛡️', desc: '柚子施加的数值护盾，会先于生命承受伤害' },
   YUZU_TAUNT: { name: '满级嘲讽', icon: '🪞', desc: '柚子抽到盾牌后吸引敌方火力' },
   YUZU_MARKED: { name: '镜界标记', icon: '🎯', desc: '柚子三阶段定制目标，承受柚子更高伤害' },
-  YUZU_EVADE_DOWN: { name: '闪避破坏', icon: '🪞', desc: '闪避率下降' },
+  YUZU_EVADE_DOWN: { name: '闪避破坏', icon: '🪞', desc: '敏捷按 55% 计算' },
   YUZU_DEF_DOWN: { name: '防御破坏', icon: '🪞', desc: '防御力下降' },
   YUZU_RES_DOWN: { name: '魔抗破坏', icon: '🪞', desc: '魔抗下降' },
   YUZU_ATK_DOWN: { name: '攻击破坏', icon: '🪞', desc: '攻击力下降' },
@@ -338,6 +338,7 @@ const CONTROL_STATUS_TYPES = new Set([
   'STUN',
   'FREEZE',
   'CONFUSED',
+  'EMBARRASSED',
   'CHARMED',
   'SILENCE',
   'WATER_PRISON',
@@ -383,6 +384,7 @@ const DAMAGE_STATUS_TYPES = new Set([
   'YUZU_ATK_DOWN',
   'YUZU_SLOW',
   'ORIGINIUM_DISEASE',
+  'OWL_EVADE_DOWN',
 ]);
 
 const RECOVERY_STATUS_TYPES = new Set([
@@ -394,7 +396,6 @@ const RECOVERY_STATUS_TYPES = new Set([
 
 const SPECIAL_STATUS_TYPES = new Set([
   'SYNERGY_SLACKING',
-  'SLACKING',
   'SPINAL_SWORD',
   'PUPPET_MASTER',
   'GAMER_WORLD_STAGE',
@@ -415,11 +416,11 @@ const SPECIAL_STATUS_TYPES = new Set([
 
 const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   SYNERGY_SLACKING: 0,
-  SLACKING: 0,
   STUN: 5,
   FREEZE: 6,
   CHARMED: 7,
   CONFUSED: 8,
+  EMBARRASSED: 8,
   WATER_PRISON: 9,
   WT_SUPPRESS: 10,
   WT_AIRBORNE: 11,
@@ -450,6 +451,7 @@ const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   YUZU_RES_DOWN: 64,
   YUZU_ATK_DOWN: 64,
   YUZU_SLOW: 64,
+  OWL_EVADE_DOWN: 64,
   BURN: 60,
   POISON: 61,
   BLEED: 61,
@@ -471,7 +473,7 @@ const getStatusCategory = (type: string, isUnknown: boolean): StatusCategory => 
   ) {
     return 'special';
   }
-  if (['RAGE', 'AIM', 'DIVA_SONG', 'DIVA_HEADPHONE_GUARD', 'DIVA_FINAL_CHORUS', 'BABY_LOVE_BOTTLE', 'Q_BUNNY_IDOL_AGL'].includes(type)) return 'buff';
+  if (['RAGE', 'AIM', 'DIVA_HEADPHONE_GUARD', 'DIVA_FINAL_CHORUS', 'BABY_LOVE_BOTTLE', 'Q_BUNNY_IDOL_AGL'].includes(type)) return 'buff';
   if (['BLIND', 'VALO_FLASH'].includes(type)) return 'debuff';
   return 'buff';
 };
@@ -554,20 +556,25 @@ const buildStatusDisplayItems = (statuses: StatusEntry[]): StatusDisplayItem[] =
 };
 
 const formatStatusTitle = (item: StatusDisplayItem) => {
+  const stackText = item.status.type === 'POISON' ? `（${Math.max(1, item.status.stacks ?? 1)} 层）` : '';
   const lines = [
-    `${item.info.name}${item.count > 1 ? ` x${item.count}` : ''}`,
+    `${item.info.name}${stackText}${item.count > 1 ? ` x${item.count}` : ''}`,
     item.info.desc,
   ];
   if (item.info.durationLabel) lines.push(`剩余：${item.info.durationLabel}`);
   if (item.info.sourceName && item.info.sourceName !== item.info.name) {
     lines.push(`来源：${item.info.sourceName}`);
   }
+  if (item.status.applierName) lines.push(`施加者：${item.status.applierName}`);
   if (item.info.isUnknown) lines.push(`原始状态：${item.info.type}`);
   return lines.join('\n');
 };
 
 function StatusChip({ item, compact = false }: { item: StatusDisplayItem; compact?: boolean }) {
-  const label = compact ? `${item.info.name}${item.info.durationLabel ? ` ${item.info.durationLabel}` : ''}` : item.info.name;
+  const stackText = item.status.type === 'POISON' ? ` x${Math.max(1, item.status.stacks ?? 1)}` : '';
+  const label = compact
+    ? `${item.info.name}${stackText}${item.info.durationLabel ? ` ${item.info.durationLabel}` : ''}`
+    : `${item.info.name}${stackText}`;
   return (
     <span
       title={formatStatusTitle(item)}

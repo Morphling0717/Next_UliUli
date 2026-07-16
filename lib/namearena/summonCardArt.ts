@@ -18,6 +18,12 @@ type SummonAssetOptions = {
   avatar?: boolean;
 };
 
+const PUBLIC_ASSET_VERSION = process.env.NEXT_PUBLIC_ASSET_VERSION?.trim() || 'dev';
+
+function versionPublicAsset(path: string): string {
+  return `${path}?v=${encodeURIComponent(PUBLIC_ASSET_VERSION)}`;
+}
+
 const slot = (
   key: string,
   name: string,
@@ -35,9 +41,9 @@ const slot = (
     accent,
     sigil,
     expectedPath,
-    imagePath: assets.card ? expectedPath : undefined,
-    cutinPath: assets.cutin ? `/namearena/cards/monster_cutin/${key}.webp` : undefined,
-    avatarPath: assets.avatar ? `/namearena/cards/avatar/${key}.webp` : undefined,
+    imagePath: assets.card ? versionPublicAsset(expectedPath) : undefined,
+    cutinPath: assets.cutin ? versionPublicAsset(`/namearena/cards/monster_cutin/${key}.webp`) : undefined,
+    avatarPath: assets.avatar ? versionPublicAsset(`/namearena/cards/avatar/${key}.webp`) : undefined,
   };
 };
 

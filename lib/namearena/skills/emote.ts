@@ -109,7 +109,7 @@ function hasStatus(fighter: Fighter, type: string): boolean {
 function executeMemeSlap(ctx: SkillContext): boolean {
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
   const amount = ctx.user.mag * 1.2 + ctx.user.wis * 0.8 + ctx.user.maxHp * 0.045 + adaptTotal * 0.08;
-  const statusPool = ['WEAK', 'CONFUSED', 'NO_HEAL'];
+  const statusPool = ['WEAK', 'EMBARRASSED', 'NO_HEAL'];
   const status = statusPool[Math.floor(Math.random() * statusPool.length)] ?? 'WEAK';
   const { actual, interrupted, redirected } = applyEmoteDamage(
     ctx,
@@ -295,7 +295,7 @@ function executeAllMastersReturn(ctx: SkillContext): boolean {
   const killsAfter = getEmoteClaimableKills(chosen);
   ctx.log('debuff', `🔁 【认主账本回拨】${chosen.name} 被 ${ctx.user.name} 的账本划掉一笔，账本余额 ${killsBefore} -> ${killsAfter}；真实击杀统计不变。`);
   if (killsBefore > 0 && killsAfter === 0) {
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.wis + adaptTotal * 0.08));
+    const healed = healFighter(ctx.user, Math.floor(ctx.user.wis + adaptTotal * 0.08), ctx.log);
     if (healed > 0) {
       ctx.log('heal', `🔁 【零杀锚点】场上出现新的 0 击杀玩家，${ctx.user.name} 的复活锚点发亮，恢复 ${healed} 点生命。`);
     }
@@ -307,12 +307,14 @@ export const emoteSkills: Record<string, SkillDefinition> = {
   emote_meme_slap: {
     name: '表情包糊脸',
     tag: SKILL_TAGS.MAG,
+    directTarget: true,
     rate: 0.45,
     onExecute: executeMemeSlap,
   },
   emote_tenth_claim: {
     name: '十分之一索赔',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     rate: 0.42,
     onExecute: executeTenthClaim,
   },
@@ -326,12 +328,14 @@ export const emoteSkills: Record<string, SkillDefinition> = {
   emote_mark_owner: {
     name: '先认个脸熟',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     rate: 0.32,
     onExecute: executeMarkOwner,
   },
   emote_wheel_cleave: {
     name: '退魔之剑',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     rate: 0.38,
     onExecute: executeWheelCleave,
   },

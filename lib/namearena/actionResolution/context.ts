@@ -1,5 +1,6 @@
 import type {
   Fighter,
+  SkillDefinition,
   SkillContext,
 } from '../types';
 import {
@@ -7,6 +8,7 @@ import {
   handleWaitCounter,
 } from './counters';
 import type { ActionResolutionRuntime } from './types';
+import { consumeOwlEvadeOpening } from './guards';
 
 export function createSkillContext(
   runtime: ActionResolutionRuntime,
@@ -18,7 +20,9 @@ export function createSkillContext(
   trackDeferredDamageTarget?: (fighter: Fighter) => void,
   flushDeferredDamageEvents?: () => void,
   queuePreResolutionLog?: (type: string, text: string) => void,
+  skill?: SkillDefinition,
 ): SkillContext {
+  let customDirectOpeningConsumed = false;
   const context: SkillContext = {
     user,
     target,
@@ -41,6 +45,20 @@ export function createSkillContext(
         respectDefenses: options?.respectDefenses ?? (source === 'skill' && damageTarget.id !== damageAttacker.id),
       };
       const actualDmg = runtime.applyDamage(damageTarget, amount, source, trueDamage, attacker ?? user, damageOptions);
+      const blockedOutcome = damageOptions.resolution?.outcome === 'spell_blocked' ||
+        damageOptions.resolution?.outcome === 'invulnerable' ||
+        damageOptions.resolution?.outcome === 'prevented';
+      if (
+        skill?.directTarget &&
+        source === 'skill' &&
+        !customDirectOpeningConsumed &&
+        !blockedOutcome &&
+        consumeOwlEvadeOpening(damageTarget, { ...skill, mult: skill.mult ?? 1 }, false)
+      ) {
+        customDirectOpeningConsumed = true;
+        runtime.log('debuff', `🍃 【乘风失衡】${damageTarget.name} 的身位破绽被 ${damageAttacker.name} 抓住，这次直接单体攻击必定命中！`);
+      }
+      runtime.flushDeferredDamageEvents(damageTarget, 'mitigation');
       if (options) {
         if (damageOptions.redirectedByJoker) options.redirectedByJoker = true;
         if (damageOptions.redirectedJokerDamage !== undefined) options.redirectedJokerDamage = damageOptions.redirectedJokerDamage;
@@ -73,7 +91,11 @@ export function createSkillContext(
       ) {
         return false;
       }
-      return runtime.applyStatus(statusTarget, type, duration, options);
+      return runtime.applyStatus(statusTarget, type, duration, {
+        ...options,
+        applierId: options?.applierId ?? user.id,
+        applierName: options?.applierName ?? user.name,
+      });
     },
     handleWaitCounter: (counterTarget, counterUser, counterActionName) =>
       handleWaitCounter(runtime, counterTarget, counterUser, triggerDepth, counterActionName ?? actionName),

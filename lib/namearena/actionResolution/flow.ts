@@ -36,7 +36,9 @@ import {
 } from './effects';
 import {
   breakAbsoluteDefense,
+  canTriggerOwlEvadeOpening,
   canTouchDamagePlane,
+  consumeOwlEvadeOpening,
   dodgesWithPassiveSkill,
   missesSkill,
 } from './guards';
@@ -197,6 +199,7 @@ export function executeSkillAction(
     trackDeferredDamageTarget,
     flushDeferredDamageEvents,
     (type, text) => queuedPreResolutionLogs.push({ type, text }),
+    skill,
   );
   skillCtx.targetWasIntercepted = isIntercepted;
   skillCtx.interceptedProtectedTargetId = initiallyProtectedTarget?.id;
@@ -226,7 +229,7 @@ export function executeSkillAction(
     ) return false;
 
     const spellBlock = consumeSpellBlock(target);
-    const healed = healFighter(target, Math.floor(target.maxHp * 0.15));
+    const healed = healFighter(target, Math.floor(target.maxHp * 0.15), runtime.log);
     const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
     runtime.log('info', spellBlock
       ? formatPreSkillSpellBlock(spellBlock, user.name, skill.name, target.name, healText)
@@ -249,7 +252,8 @@ export function executeSkillAction(
     return;
   }
 
-  if (missesSkill(user, target, skill, isIntercepted)) {
+  const owlOpeningReady = canTriggerOwlEvadeOpening(target, skill, isIntercepted);
+  if (!owlOpeningReady && missesSkill(user, target, skill, isIntercepted)) {
     runtime.log('info', `💨 ${user.name} 的 ${skill.name ?? '攻击'} 被 ${target.name} 闪避了！`);
     refundInterruptedGacha('被闪避');
     return;
@@ -272,13 +276,17 @@ export function executeSkillAction(
     refundInterruptedGacha('用于击破绝对防御');
     return;
   }
-  if (dodgesWithPassiveSkill(runtime, user, target, incomingActionName)) {
+  if (!owlOpeningReady && dodgesWithPassiveSkill(runtime, user, target, incomingActionName)) {
     refundInterruptedGacha('被特殊闪避');
     return;
   }
   if (!canTouchDamagePlane(runtime, user, target, skill)) {
     refundInterruptedGacha('无法触碰目标');
     return;
+  }
+
+  if (owlOpeningReady && consumeOwlEvadeOpening(target, skill, isIntercepted)) {
+    runtime.log('debuff', `🍃 【乘风失衡】${target.name} 的身位破绽被 ${user.name} 抓住，这次直接单体攻击必定命中！`);
   }
 
   const damageResult = runtime.calculateDamage(user, target, skill, userTeamId, skillId);
@@ -360,6 +368,7 @@ export function executeSkillAction(
     user,
     damageOptions,
   );
+    runtime.flushDeferredDamageEvents(target, 'mitigation');
   const targetActualDmg = damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor ? 0 : actualDmg;
   const dealtDmg = damageOptions.redirectedOriginiumDamage ?? damageOptions.redirectedOwlEmperorDamage ?? actualDmg;
   skillCtx.damageRedirectedByOriginiumCore = !!damageOptions.redirectedByOriginiumCore;

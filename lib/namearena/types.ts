@@ -47,6 +47,12 @@ export interface StatusEntry {
    * "Linken" or every control immunity "BKB".
    */
   sourceId?: string;
+  /** Fighter that most recently applied this hostile status. */
+  applierId?: string;
+  /** Snapshot used by logs/UI even if the applier has already left the field. */
+  applierName?: string;
+  /** Mechanical stacks for statuses such as POISON. */
+  stacks?: number;
   /** Engine turn when a globally-timed status was first observed. */
   appliedTurn?: number;
   /** Optional display metadata for generated temporary effects. */
@@ -134,6 +140,8 @@ export interface DamageApplicationOptions {
 
 export interface StatusApplicationOptions {
   sourceId?: string;
+  applierId?: string;
+  applierName?: string;
   effectName?: string;
   logBlocked?: boolean;
 }
@@ -142,6 +150,8 @@ export interface PendingDamageEvent {
   type: string;
   text: string;
   metadata?: BattleLogMetadata;
+  phase?: 'mitigation' | 'aftermath';
+  dedupeKey?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +466,8 @@ export interface Fighter {
   transformed?: boolean;
   isActing?: boolean;
   isHit?: boolean;
+  /** Transient target override used only while resolving a confused basic attack. */
+  confusedForcedTargetId?: string;
   defeatHooksResolved?: boolean;
   lastDamage?: LastDamageRecord;
   pendingDamageEvents?: PendingDamageEvent[];
@@ -714,6 +726,8 @@ export interface GachaEntry {
   requiresBlueEyesFusion?: boolean;
   /** Default skills are blocked before casting; custom multi-hit skills resolve each impact themselves. */
   spellBlockMode?: 'precast' | 'afterSetup' | 'perHit';
+  /** Custom executor resolves one direct target; used by shared hit-opening rules. */
+  directTarget?: boolean;
   onExecute?: (ctx: SkillContext) => boolean;
   afterExecute?: (
     ctx: SkillContext,
@@ -776,6 +790,8 @@ export interface SkillDefinition {
   requiresBlueEyesFusion?: boolean;
   /** Default skills are blocked before casting; custom multi-hit skills resolve each impact themselves. */
   spellBlockMode?: 'precast' | 'afterSetup' | 'perHit';
+  /** Custom executor resolves one direct target; used by shared hit-opening rules. */
+  directTarget?: boolean;
   condition?: (user: Fighter) => boolean;
   onExecute?: (ctx: SkillContext) => boolean;
   afterExecute?: (

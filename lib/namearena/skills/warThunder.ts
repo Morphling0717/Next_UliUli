@@ -12,6 +12,7 @@ import {
 import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
 import { consumeStatusCharge } from '../statusLifecycle';
+import { WT_REPAIRING_PROFILE } from '../statusRules';
 
 const { SKILL_TAGS } = Data;
 
@@ -29,7 +30,7 @@ const WT_CAS_COST = 5;
 const WT_PRECISE_CAS_COST = 4;
 
 const WT_CONTROL_CLEAN = new Set([
-  'STUN', 'FREEZE', 'CONFUSED', 'CHARMED', 'WT_SUPPRESS', 'WT_AIRBORNE', 'AIRBORNE', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED',
+  'STUN', 'FREEZE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'WT_SUPPRESS', 'WT_AIRBORNE', 'AIRBORNE', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED',
 ]);
 
 const WT_MODULE_STATUSES = new Set(['WT_BREECH_DAMAGED', 'WT_TRACK_DAMAGED', 'WT_AMMO_EXPOSED', 'WT_SCOUTED']);
@@ -175,21 +176,25 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '快捷语音', tag: SKILL_TAGS.BUFF,
     text: '📻 {USER} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 {USER} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！',
     onExecute: (ctx) => {
-      grantStatus(ctx.user, 'CONFUSED', 2);
+      const confused = ctx.applyStatus(ctx.user, 'CONFUSED', 2, {
+        applierId: ctx.user.id,
+        applierName: ctx.user.name,
+        effectName: 'D点无线电混乱',
+      });
       const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && ctx.getTeamId(f) === ctx.getTeamId(ctx.user));
       allies.forEach((ally) => grantStatus(ally, 'WT_RADIO_MORALE', 3));
-      ctx.log('buff', `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 ${ctx.user.name} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！`);
+      ctx.log('buff', confused
+        ? `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 ${ctx.user.name} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！`
+        : `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n控制免疫滤掉了无线电噪声，但己方火力系统仍然受到动员（攻击力上升）！`);
       return true;
     },
   },
   wt_repair: {
     name: '长按F修车', tag: SKILL_TAGS.HEAL, condition: (u) => u.hpPct < 0.6,
-    text: '🔧 {USER} 载具受损！黑炮管了！"长按F进行战地抢修（50秒）"\n{USER} 原地瘫痪（眩晕），但装甲逐渐恢复，回复了海量生命值！',
+    text: '🔧 {USER} 载具受损！黑炮管了！"长按F进行战地抢修（50秒）"\n{USER} 停车抢修，装甲正在逐步恢复！',
     onExecute: (ctx) => {
-      grantStatus(ctx.user, 'STUN', 2);
-      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.4));
-      const healText = healed > 0 ? `实际恢复 ${healed} 点生命` : '生命已满，治疗溢出';
-      ctx.log('heal', `🔧 【战地抢修】履带接上了！炮闩修好了！${ctx.user.name} ${healText}！`);
+      grantStatus(ctx.user, 'WT_REPAIRING', WT_REPAIRING_PROFILE.duration);
+      ctx.log('buff', `🔧 【战地抢修】${ctx.user.name} 停车长按 F：接下来 ${WT_REPAIRING_PROFILE.duration} 次行动机会无法行动，每次恢复 20% 最大生命；停车暴露期间受到非持续伤害提高 30%！`);
       return true;
     },
   },
@@ -200,6 +205,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       u.status.some((status) =>
         status.type === 'BURN' ||
         status.type === 'POISON' ||
+        status.type === 'BLEED' ||
         WT_CONTROL_CLEAN.has(status.type) ||
         WT_MODULE_STATUSES.has(status.type),
       ),
@@ -207,6 +213,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const hadBurn = hasStatus(ctx.user, 'BURN');
       const hadPoison = hasStatus(ctx.user, 'POISON');
+      const hadBleed = hasStatus(ctx.user, 'BLEED');
       const fpeUsed = hadBurn && (ctx.user.wtFpeCharges ?? 0) > 0;
       const nbcsUsed = hadPoison && (ctx.user.wtNbcsCharges ?? 0) > 0;
       const hadCrewControl = ctx.user.status.some((status) => WT_CONTROL_CLEAN.has(status.type));
@@ -220,11 +227,12 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       ctx.user.status = ctx.user.status.filter((s) => {
         if (s.type === 'BURN') return !fpeUsed;
         if (s.type === 'POISON') return !nbcsUsed;
+        if (s.type === 'BLEED') return false;
         return !WT_CONTROL_CLEAN.has(s.type) && !WT_MODULE_STATUSES.has(s.type) && !['BLIND', 'SILENCE', 'WT_REPAIRING', 'NO_HEAL', 'WEAK'].includes(s.type);
       });
 
       const healPct = spentSp ? 0.46 : 0.26;
-      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * healPct));
+      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * healPct), ctx.log);
       const healText = healed > 0 ? `实际恢复 ${healed} 点生命` : '生命已满，治疗溢出';
       if (fpeUsed) {
         ctx.log('heal', `🧯 【FPE灭火】${ctx.user.name} 拉下灭火系统，扑灭舱内火势！（剩余 FPE ${ctx.user.wtFpeCharges ?? 0}）`);
@@ -235,6 +243,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         ctx.log('heal', `☣️ 【核生化洗消】${ctx.user.name} 启动滤毒与洗消流程，压下中毒侵蚀！（剩余洗消 ${ctx.user.wtNbcsCharges ?? 0}）`);
       } else if (hadPoison) {
         ctx.log('info', `☣️ ${ctx.user.name} 仍受到毒性侵蚀，核生化洗消包已经耗尽！`);
+      }
+      if (hadBleed) {
+        ctx.log('heal', `🩹 【乘员急救】${ctx.user.name} 的乘员完成压迫止血与伤口包扎，清除了流血状态！`);
       }
       if (hadCrewControl || hadModuleDamage) {
         ctx.log('buff', `🔧 【王牌乘员】${ctx.user.name} 更换乘员、接上履带、修复炮闩，重新获得作战能力！`);
@@ -325,7 +336,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     },
   },
   wt_t58_knockup: {
-    name: 'T-58 碎甲轰击', tag: SKILL_TAGS.PHYS, mult: 4.35, ignoreDef: true, status: 'WT_AIRBORNE',
+    name: 'T-58 碎甲轰击', tag: SKILL_TAGS.PHYS, mult: 4.35, ignoreDef: true, status: 'AIRBORNE',
     text: '💥 {USER} 召唤 T-58 重型坦克！155毫米线膛炮锁定！\n"一发入魂！" 粗壮的钢针瞬间粉碎了 {TARGET} 的装甲，造成 {VAL} 真实伤害并将其当场【击飞】！',
     afterExecute: (ctx, actualDmg) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user)) return;
@@ -387,7 +398,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         const spellBlock = consumeSpellBlock(e);
         if (spellBlock) {
-          const healed = healFighter(e, Math.floor(e.maxHp * 0.15));
+          const healed = healFighter(e, Math.floor(e.maxHp * 0.15), ctx.log);
           const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
           ctx.log('info', formatSpellBlock(spellBlock, e.name, `${ctx.user.name}的【苏-30SM2空袭】`, healText));
           continue;
@@ -413,7 +424,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         ctx.flushDeferredDamageEvents?.();
         if (actualDmg > 0 && !airborneImmune && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
-          ctx.applyStatus(e, isPrimary ? 'WT_AIRBORNE' : 'WT_SUPPRESS', isPrimary ? 2 : 1);
+          ctx.applyStatus(e, isPrimary ? 'AIRBORNE' : 'WT_SUPPRESS', 1, {
+            sourceId: isPrimary ? 'war_thunder_airborne' : undefined,
+          });
         }
 
         const ammoRackPct = isPrimary

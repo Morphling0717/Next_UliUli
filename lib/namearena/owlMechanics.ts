@@ -209,7 +209,7 @@ export function switchOwlWarForm(runtime: OwlRuntime, owl: Fighter, next: OwlWar
     owl.status = owl.status.filter((status) =>
       status.type === statusType || !REVIVE_CLEAN_STATUS_TYPES.includes(status.type),
     );
-    const healed = healFighter(owl, Math.floor(owl.maxHp * 0.3));
+    const healed = healFighter(owl, Math.floor(owl.maxHp * 0.3), runtime.log);
     runtime.log('heal', healed > 0
       ? `🕯️ 【哀兵】${owl.name} 清除全部异常与减益，恢复 ${healed} 点生命！`
       : `🕯️ 【哀兵】${owl.name} 清除全部异常与减益；生命已经全满。`);
@@ -465,7 +465,7 @@ export function consumeOwlFoodForYuzu(
     .sort((a, b) => (a.owlSummonState?.spawnedTurn ?? 0) - (b.owlSummonState?.spawnedTurn ?? 0))[0];
   if (!food) return 0;
   const kindName = food.owlSummonState?.kind === 'rice' ? '被扒回碗里的米饭' : '一碗盖饭';
-  const healed = healFighter(yuzu, Math.floor(yuzu.maxHp * 0.1));
+  const healed = healFighter(yuzu, Math.floor(yuzu.maxHp * 0.1), log);
   const index = fighters.findIndex((fighter) => fighter.id === food.id);
   if (index >= 0) fighters.splice(index, 1);
   log('heal', healed > 0
@@ -490,7 +490,7 @@ function processOwlSummonLifecycle(runtime: OwlRuntime, summon: Fighter): void {
   if (state.kind === 'rice' && state.expiresAtTurn !== undefined && runtime.turnCount >= state.expiresAtTurn) {
     const owl = summon.summonerId ? runtime.fighters.find((fighter) => fighter.id === summon.summonerId) : undefined;
     if (owl && runtime.isActiveCombatant(owl)) {
-      const healed = healFighter(owl, Math.floor(owl.maxHp * 0.1));
+      const healed = healFighter(owl, Math.floor(owl.maxHp * 0.1), runtime.log);
       runtime.log('heal', healed > 0
         ? `🍚 【开饭】${owl.name} 吃掉 ${summon.name}，恢复 ${healed} 点生命；米饭作为消耗品退场。`
         : `🍚 【开饭】${owl.name} 吃掉 ${summon.name}；生命已满，米饭作为消耗品退场。`);
@@ -508,7 +508,7 @@ function processOwlSummonLifecycle(runtime: OwlRuntime, summon: Fighter): void {
     delete state.lockUntilTurn;
     state.dollUntilTurn = runtime.turnCount + 3;
     summon.cannotAct = true;
-    const healed = healFighter(summon, Math.floor(summon.maxHp * 0.3));
+    const healed = healFighter(summon, Math.floor(summon.maxHp * 0.3), runtime.log);
     grantStatus(summon, 'OWL_SPALTER_DOLL', 3, summon.summonerId);
     runtime.log('heal', healed > 0
       ? `🌊 【替身切换】${summon.name} 转入替身形态，恢复 ${healed} 点生命，三回合内无法行动。`

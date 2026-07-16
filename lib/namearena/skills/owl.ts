@@ -168,8 +168,8 @@ function executeBumperHarvest(ctx: SkillContext): boolean {
     fighter.id !== ctx.user.id && !fighter.isNpc && isActiveCombatant(fighter),
   );
   const speaker = speakers[Math.floor(Math.random() * speakers.length)];
-  const selfHeal = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.2));
-  const dragonHeal = emperor ? healFighter(emperor, Math.floor(emperor.maxHp * 0.2)) : 0;
+  const selfHeal = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.2), ctx.log);
+  const dragonHeal = emperor ? healFighter(emperor, Math.floor(emperor.maxHp * 0.2), ctx.log) : 0;
   const selfText = selfHeal > 0 ? `${ctx.user.name} 恢复 ${selfHeal} 点生命` : `${ctx.user.name} 生命已满`;
   const dragonText = emperor
     ? dragonHeal > 0 ? `${emperor.name} 恢复 ${dragonHeal} 点生命` : `${emperor.name} 生命已满`
@@ -191,7 +191,7 @@ function executeDesk(ctx: SkillContext): boolean {
 }
 
 function executeEnjoy(ctx: SkillContext): boolean {
-  const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.28));
+  const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.28), ctx.log);
   grantStatus(ctx.user, 'OWL_ENJOYING', 3, ctx.user.id);
   ctx.log('heal', healed > 0
     ? `🎶 【乐不思蜀】${ctx.user.name}：“我打了一辈子仗就不能享受享受吗！接着奏乐，接着舞！”恢复 ${healed} 点生命，接下来 3 回合不进行攻击。`
@@ -216,7 +216,7 @@ function executeBoneScrape(ctx: SkillContext): boolean {
   };
   const actualCost = ctx.applyDamage(ctx.user, rawCost, 'owl_cost', true, ctx.user, options);
   if (actualCost > 0 || (ctx.user.pendingDamageEvents?.length ?? 0) > 0) ctx.flushDeferredDamageEvents?.();
-  const healed = emperor ? healFighter(emperor, Math.floor(actualCost * 1.6)) : 0;
+  const healed = emperor ? healFighter(emperor, Math.floor(actualCost * 1.6), ctx.log) : 0;
   const emperorText = emperor
     ? healed > 0 ? `并为 ${emperor.name} 恢复 ${healed} 点` : `，${emperor.name} 生命已满`
     : '，但已经没有帝王之征可以治疗';
@@ -349,12 +349,12 @@ export const owlSkills: Record<string, SkillDefinition> = {
     name: '蛐蛐猛扑', tag: SKILL_TAGS.PHYS, rate: 0.8, mult: 1.25,
     text: '🦗 {USER} 奋力扑向 {TARGET}，造成 {VAL} 点伤害！',
   },
-  owl_zhao_rampage: { name: '长坂冲阵', tag: SKILL_TAGS.SPECIAL, rate: 1, onExecute: executeZhaoRampage },
+  owl_zhao_rampage: { name: '长坂冲阵', tag: SKILL_TAGS.SPECIAL, rate: 1, directTarget: true, onExecute: executeZhaoRampage },
   owl_swire_strike: { name: '笑面虎强袭', tag: SKILL_TAGS.PHYS, rate: 0.9, mult: 1.65, text: '🐯 {USER} 猛攻 {TARGET}，造成 {VAL} 点伤害！' },
   owl_linlang_strike: { name: '琳琅重击', tag: SKILL_TAGS.PHYS, rate: 0.9, mult: 1.85, text: '💰 {USER} 以重装火力压向 {TARGET}，造成 {VAL} 点伤害！' },
   owl_specter_saw: { name: '链锯狂袭', tag: SKILL_TAGS.PHYS, rate: 0.9, mult: 1.7, text: '🦈 {USER} 挥动链锯切向 {TARGET}，造成 {VAL} 点伤害！' },
   owl_spalter_saw: { name: '归溟回旋', tag: SKILL_TAGS.PHYS, rate: 0.9, mult: 1.75, text: '🌊 {USER} 旋身切开 {TARGET}，造成 {VAL} 点伤害！' },
   owl_emperor_claw: { name: '帝征爪击', tag: SKILL_TAGS.PHYS, rate: 1, mult: 1.7, text: '🐲 【帝征爪击】{USER} 以龙爪撕击 {TARGET}，造成 {VAL} 点物理伤害！' },
-  owl_atomic_breath: { name: '原子吐息', tag: SKILL_TAGS.SPECIAL, rate: 1, presentation: 'skill', spellBlockMode: 'perHit', onExecute: executeAtomicBreath },
+  owl_atomic_breath: { name: '原子吐息', tag: SKILL_TAGS.SPECIAL, rate: 1, presentation: 'skill', directTarget: true, spellBlockMode: 'perHit', onExecute: executeAtomicBreath },
   owl_dragon_shock: { name: '龙威震荡', tag: SKILL_TAGS.MAG, rate: 1, presentation: 'skill', spellBlockMode: 'perHit', onExecute: executeDragonShock },
 };

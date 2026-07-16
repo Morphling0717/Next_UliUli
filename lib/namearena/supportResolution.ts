@@ -94,7 +94,7 @@ export function spreadDivaSupport(
   teammates.forEach((mate) => {
     if (skill.tag === runtime.skillTags.HEAL) {
       if (!mate.status.some((status) => status.type === 'NO_HEAL')) {
-        healFighter(mate, Math.floor(Math.max(user.atk, user.mag) * (skill.mult ?? 1)));
+        healFighter(mate, Math.floor(Math.max(user.atk, user.mag) * (skill.mult ?? 1)), runtime.log);
       }
     }
     if (skill.tag === runtime.skillTags.BUFF) {
@@ -207,7 +207,7 @@ function applyChimeraInstallSideEffect(
   if (!user.isSuccubus || !user.transformed || !skill.status?.startsWith('PLUG_')) return;
 
   if (skill.status === 'PLUG_HEART') {
-    const healed = healFighter(user, Math.floor(user.maxHp * 0.12));
+    const healed = healFighter(user, Math.floor(user.maxHp * 0.12), runtime.log);
     const cleaned = cleanseOneCommonNegativeStatus(user);
     grantStatus(user, 'REGEN', 3);
     runtime.syncHpPct(user);
@@ -218,7 +218,7 @@ function applyChimeraInstallSideEffect(
   }
 
   if (skill.status === 'PLUG_SKIN') {
-    const healed = healFighter(user, Math.floor(user.maxHp * 0.06));
+    const healed = healFighter(user, Math.floor(user.maxHp * 0.06), runtime.log);
     grantStatus(user, 'BKB', 1, 'chimera_adaptive_skin');
     grantStatus(user, 'SPELL_BLOCK', 1, 'chimera_adaptive_skin');
     runtime.syncHpPct(user);
@@ -245,7 +245,7 @@ function applyChimeraInstallSideEffect(
       '暴食之口启动',
       (damage) => `🦷 【暴食之口启动】${user.name} 的新口器咬向 ${enemy.name}，实际造成 ${damage} 点伤害！`,
     );
-    const healed = healFighter(user, Math.floor(result.actual * 0.45));
+    const healed = healFighter(user, Math.floor(result.actual * 0.45), runtime.log);
     runtime.syncHpPct(user);
     if (healed > 0) runtime.log('heal', `🦷 【暴食回流】${user.name} 吞下生命力，恢复 ${healed} 点生命！`);
     return;
@@ -289,7 +289,11 @@ function applyChimeraInstallSideEffect(
         ? `👁️ 【石化魔眼校准】${user.name} 看穿 ${enemy.name} 的破绽，实际造成 ${damage} 点魔法伤害！`
         : `👁️ 【石化魔眼校准】${user.name} 试图看穿 ${enemy.name} 的破绽，但没有造成实际伤害，虚弱没有生效！`,
     );
-    if (result.landedOnTarget && runtime.isActiveCombatant(enemy) && runtime.applyStatus(enemy, 'WEAK', 2, { effectName: '石化魔眼校准的虚弱效果' })) {
+    if (result.landedOnTarget && runtime.isActiveCombatant(enemy) && runtime.applyStatus(enemy, 'WEAK', 2, {
+      effectName: '石化魔眼校准的虚弱效果',
+      applierId: user.id,
+      applierName: user.name,
+    })) {
       runtime.log('debuff', `👁️ 【石化魔眼校准】${enemy.name} 被施加虚弱 2 回合！`);
     }
     return;
@@ -306,7 +310,11 @@ function applyChimeraInstallSideEffect(
         ? `🦂 【灾厄毒尾甩击】${user.name} 的毒尾扫中 ${enemy.name}，实际造成 ${damage} 点伤害！`
         : `🦂 【灾厄毒尾甩击】${user.name} 的毒尾扫过 ${enemy.name}，但没有造成实际伤害！`,
     );
-    if (result.landedOnTarget && runtime.isActiveCombatant(enemy) && runtime.applyStatus(enemy, 'POISON', 2, { effectName: '灾厄毒尾甩击的剧毒效果' })) {
+    if (result.landedOnTarget && runtime.isActiveCombatant(enemy) && runtime.applyStatus(enemy, 'POISON', 2, {
+      effectName: '灾厄毒尾甩击的剧毒效果',
+      applierId: user.id,
+      applierName: user.name,
+    })) {
       runtime.log('debuff', `🦂 【灾厄毒尾甩击】${enemy.name} 被注入剧毒 2 回合！`);
     }
   }
@@ -322,7 +330,7 @@ function applyChimeraMilestoneRewards(
 
   if (currentMilestone < 2 && plugCount >= 2) {
     target.chimeraMilestoneLevel = 2;
-    const healed = healFighter(target, Math.floor(target.maxHp * 0.155));
+    const healed = healFighter(target, Math.floor(target.maxHp * 0.155), runtime.log);
     const cleaned = cleanseOneCommonNegativeStatus(target);
     grantStatus(target, 'REGEN', 3);
     runtime.syncHpPct(target);
@@ -389,7 +397,7 @@ export function executeSupportSkill(
       return true;
     }
     const heal = Math.floor(Math.max(user.atk, user.mag) * (skill.mult ?? 1));
-    const healed = healFighter(targetForBuff, heal);
+    const healed = healFighter(targetForBuff, heal, runtime.log);
     if (skill.cleanStatus) cleanseCommonNegativeStatuses(targetForBuff);
     if (healed <= 0) {
       const cleanText = skill.cleanStatus ? '，并清除了异常状态' : '';

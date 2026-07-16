@@ -70,6 +70,7 @@ import {
   resolveSkillDefinition,
 } from './skillResolution';
 import {
+  getConfusionTargets,
   getSelectableTargets,
   findActivePuppetProtector,
   isSelectableTargetFor,
@@ -87,7 +88,11 @@ import {
   handleSelfTimedStatusExpiry,
   handleSpinalSwordDrop,
   processStatus,
+  processStatusTurn,
+  resolveAirborneLanding,
   StatusProcessingRuntime,
+  StatusTurnOptions,
+  StatusTurnResult,
   syncPuppetMasterStatus,
   syncSpinalSwordState,
 } from './statusProcessing';
@@ -132,7 +137,11 @@ import {
   isLuckEmperor,
   triggerGachaDeathSave,
 } from './gachaMechanics';
-import { CONTROL_STATUS_TYPES, REVIVE_CLEAN_STATUS_TYPES, isStatusType } from './statusRules';
+import {
+  REVIVE_CLEAN_STATUS_TYPES,
+  WT_REPAIRING_PROFILE,
+  shouldTrackStatusApplier,
+} from './statusRules';
 import {
   consumeSpellBlock,
   findDefenseStatus,
@@ -140,6 +149,7 @@ import {
   formatSpellBlock,
   grantStatus,
 } from './defenseStatus';
+
 import {
   addTokusatsuThroneResonance,
   canUseTokusatsuThrone,
@@ -198,6 +208,15 @@ import {
   tryEnterOwlDefeat,
   type OwlRuntime,
 } from './owlMechanics';
+
+const SINGLE_INSTANCE_HOSTILE_STATUS_TYPES = new Set([
+  'BURN',
+  'POISON',
+  'BLEED',
+  'CHARMED',
+  'AIRBORNE',
+  'OWL_EVADE_DOWN',
+]);
 
 const DAMAGE_SOURCE_LABELS: Record<string, string> = {
   skill: '技能伤害',
@@ -550,10 +569,13 @@ export class BattleEngine {
     type: string,
     text: string,
     metadata?: BattleLogMetadata,
+    phase: 'mitigation' | 'aftermath' = 'aftermath',
+    dedupeKey?: string,
   ): void {
     if (options.deferTransform) {
       target.pendingDamageEvents = target.pendingDamageEvents ?? [];
-      target.pendingDamageEvents.push({ type, text, metadata });
+      if (dedupeKey && target.pendingDamageEvents.some((event) => event.dedupeKey === dedupeKey)) return;
+      target.pendingDamageEvents.push({ type, text, metadata, phase, dedupeKey });
       return;
     }
     this.log(type, text, metadata);
@@ -569,7 +591,16 @@ export class BattleEngine {
     this.deferredDamageActions.set(target.id, queued);
   }
 
-  flushDeferredDamageEvents(fighter: Fighter): void {
+  flushDeferredDamageEvents(fighter: Fighter, phase: 'mitigation' | 'all' = 'all'): void {
+    if (phase === 'mitigation') {
+      const pendingEvents = fighter.pendingDamageEvents ?? [];
+      const mitigationEvents = pendingEvents.filter((event) => event.phase === 'mitigation');
+      const aftermathEvents = pendingEvents.filter((event) => event.phase !== 'mitigation');
+      mitigationEvents.forEach((event) => this.log(event.type, event.text, event.metadata));
+      if (aftermathEvents.length > 0) fighter.pendingDamageEvents = aftermathEvents;
+      else delete fighter.pendingDamageEvents;
+      return;
+    }
     let needsTransformCheck = true;
     while (needsTransformCheck || (fighter.pendingDamageEvents?.length ?? 0) > 0 || this.deferredDamageActions.has(fighter.id)) {
       const pendingEvents = fighter.pendingDamageEvents ?? [];
@@ -602,19 +633,103 @@ export class BattleEngine {
     duration: number,
     options: StatusApplicationOptions = {},
   ): boolean {
+    const requestedType = type;
+    const canonicalType = type === 'WT_AIRBORNE' ? 'AIRBORNE' : type;
+    const canonicalDuration = canonicalType === 'AIRBORNE'
+      ? 1
+      : canonicalType === 'OWL_EVADE_DOWN'
+        ? Math.min(2, duration)
+        : duration;
+    const existing = target.status.find((status) =>
+      status.type === canonicalType || (canonicalType === 'AIRBORNE' && status.type === 'WT_AIRBORNE'),
+    );
+    const previousPoisonStacks = canonicalType === 'POISON'
+      ? Math.max(1, Math.min(3, existing?.stacks ?? 1))
+      : 0;
+
     if (owlResistsHostileStatus(target)) {
-      this.log('info', `🌫️ 【败兵抗性】${target.name} 在败阵混乱中避开了【${this.STATUS_EFFECTS[type]?.name ?? type}】！`);
-      this.recordEvent('status', 'status_blocked', `${target.name}:${type}`, { targetIds: [target.id] });
+      this.log('info', `🌫️ 【败兵抗性】${target.name} 在败阵混乱中避开了【${this.STATUS_EFFECTS[canonicalType]?.name ?? canonicalType}】！`);
+      this.recordEvent('status', 'status_blocked', `${target.name}:${canonicalType}`, { targetIds: [target.id] });
       return false;
     }
     const applied = tryApplyHostileStatusAction(
       this.createActionResolutionRuntime(),
       target,
-      type,
-      duration,
-      options,
+      canonicalType,
+      canonicalDuration,
+      SINGLE_INSTANCE_HOSTILE_STATUS_TYPES.has(canonicalType) ? { ...options, sourceId: undefined } : options,
     );
-    this.recordEvent('status', applied ? 'status_applied' : 'status_blocked', `${target.name}:${type}`, {
+    if (applied) {
+      const status = target.status.find((entry) => entry.type === canonicalType);
+      if (status) {
+        if (shouldTrackStatusApplier(canonicalType)) {
+          if (options.applierId) status.applierId = options.applierId;
+          if (options.applierName) status.applierName = options.applierName;
+          if (!status.applierName && status.applierId) {
+            status.applierName = this.fighters.find((fighter) => fighter.id === status.applierId)?.name;
+          }
+        }
+        if (canonicalType === 'POISON') {
+          status.stacks = existing
+            ? Math.min(3, previousPoisonStacks + 1)
+            : 1;
+          if (existing) {
+            this.log('poison', `🤢 【毒素累积】${target.name} 的中毒升至 ${status.stacks} 层，持续时间刷新！`);
+          }
+        }
+        if (canonicalType === 'AIRBORNE' && requestedType === 'WT_AIRBORNE') {
+          status.sourceId = 'war_thunder_airborne';
+        }
+        if (canonicalType === 'AIRBORNE') {
+          status.duration = 1;
+          status.remainingTurns = 1;
+          status.tickMode = 'self';
+          status.expiresOn = 'self_turn_end';
+        }
+        if (canonicalType === 'OWL_EVADE_DOWN' && status.duration > 2) {
+          status.duration = 2;
+          status.remainingTurns = 2;
+        }
+        if (canonicalType === 'CHARMED') {
+          target.status = target.status.filter((entry) => entry.type !== 'CHARMED' || entry === status);
+        }
+      }
+      if (canonicalType === 'AIRBORNE') {
+        target.status = target.status.filter((entry) => entry.type !== 'WT_AIRBORNE');
+      }
+
+      if (canonicalType === 'BURN' && existing && target.currentHp > 0 && !target.isDead && !target.isDeadAnnounced) {
+        const applier = options.applierId
+          ? this.fighters.find((fighter) => fighter.id === options.applierId)
+          : undefined;
+        const burstOptions: DamageApplicationOptions = {
+          deferTransform: true,
+          actionName: '灼烧爆燃',
+        };
+        const burstDamage = this.applyDamage(
+          target,
+          Math.max(1, Math.floor(target.maxHp * 0.03)),
+          'status',
+          true,
+          applier,
+          burstOptions,
+        );
+        this.flushDeferredDamageEvents(target, 'mitigation');
+        this.log(
+          burstDamage > 0 ? 'poison' : 'info',
+          `🔥 【爆燃】${target.name} 身上的火势被再次引爆，实际损失 ${burstDamage} 点生命，灼烧持续时间刷新！`,
+        );
+        if (burstDamage > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(target);
+        if (target.currentHp <= 0) {
+          this.markDefeated(target, {
+            message: `💀 ${target.name} 被连续点燃引发的爆燃吞没！`,
+            killer: applier,
+            awardKill: !!applier,
+          });
+        }
+      }
+    }
+    this.recordEvent('status', applied ? 'status_applied' : 'status_blocked', `${target.name}:${canonicalType}`, {
       targetIds: [target.id],
     });
     return applied;
@@ -965,6 +1080,33 @@ export class BattleEngine {
     if (!options.bypassOwlOutgoingModifier) {
       amount = Math.max(1, Math.floor(amount * getOwlOutgoingMultiplier(attacker)));
     }
+    const charmStatus = attacker?.status.find((status) =>
+      status.type === 'CHARMED' && status.applierId === target.id,
+    );
+    if (
+      charmStatus &&
+      attacker &&
+      source !== 'status' &&
+      source !== 'transfer' &&
+      source !== 'yuzu_share' &&
+      attacker.id !== target.id
+    ) {
+      const beforeCharm = amount;
+      amount = Math.max(1, Math.floor(amount * 0.4));
+      this.log('info', `😍 【魅惑牵制】${attacker.name} 无法对 ${target.name} 彻底下狠手，伤害由 ${beforeCharm} 降至 ${amount}！`);
+    }
+    if (source !== 'status' && target.status.some((status) => status.type === 'WT_REPAIRING')) {
+      const beforeRepairExposure = amount;
+      amount = Math.max(1, Math.floor(amount * WT_REPAIRING_PROFILE.incomingDamageMultiplier));
+      this.queueOrLogDamageEvent(
+        target,
+        options,
+        'info',
+        `🔧 【抢修暴露】${target.name} 停车维修无法规避火力，来袭伤害由 ${beforeRepairExposure} 放大至 ${amount}！`,
+        undefined,
+        'mitigation',
+      );
+    }
     const attemptedDamage = amount;
     let shieldDamage = 0;
 
@@ -1031,7 +1173,10 @@ export class BattleEngine {
       if (marked && marked.id !== attacker.id) {
         const beforeUniqueTarget = amount;
         amount = Math.max(1, Math.floor(amount * 0.2));
-        this.log('info', `🪞 【唯一目标】${target.name} 只承认 ${marked.name} 的苦痛，来自 ${attacker.name} 的伤害被镜界偏折 ${beforeUniqueTarget - amount} 点，剩余 ${amount} 点继续结算。`);
+        const reducedDamage = beforeUniqueTarget - amount;
+        if (reducedDamage > 0) {
+          this.log('info', `🪞 【唯一目标】${target.name} 只承认 ${marked.name} 的苦痛，来自 ${attacker.name} 的伤害被镜界偏折 ${reducedDamage} 点，剩余 ${amount} 点继续结算。`);
+        }
       }
     }
 
@@ -1052,7 +1197,7 @@ export class BattleEngine {
       const spellBlock = target.status.find((status) => status.type === 'SPELL_BLOCK');
       if (spellBlock && (source === 'skill' || source === 'transfer')) {
         consumeSpellBlock(target);
-        const healed = healFighter(target, Math.floor(target.maxHp * 0.15));
+        const healed = healFighter(target, Math.floor(target.maxHp * 0.15), (type, text) => this.log(type, text));
         const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
         this.log('info', formatSpellBlock(spellBlock, target.name, incomingSource, healText));
@@ -1093,6 +1238,8 @@ export class BattleEngine {
         options,
         'buff',
         `🧿 【适应转轮】${target.name} 记录 ${attacker.name} 的攻击模式，${reductionText}，并复制 3% 属性（${formatEmoteStats(gain)}）；${attacker.name} 属性不降低。`,
+        undefined,
+        'mitigation',
       );
     }
 
@@ -1122,7 +1269,14 @@ export class BattleEngine {
             : target.status.some((status) => status.type === 'OWL_EAR_GUARD')
               ? '扎耳警觉'
               : '不怕酸';
-          this.queueOrLogDamageEvent(target, options, 'info', `🦉 【${sourceName}】${target.name} 削减 ${reduced} 点伤害，剩余 ${amount} 点继续结算。`);
+          this.queueOrLogDamageEvent(
+            target,
+            options,
+            'info',
+            `🦉 【${sourceName}】${target.name} 削减 ${reduced} 点伤害，剩余 ${amount} 点继续结算。`,
+            undefined,
+            'mitigation',
+          );
         }
       }
     }
@@ -1130,7 +1284,8 @@ export class BattleEngine {
     const shieldResult = consumeYuzuShield(target, amount);
     if (shieldResult.absorbed > 0) {
       shieldDamage += shieldResult.absorbed;
-      this.log('info', `🛡️ 【镜界护盾】${target.name} 的护盾吸收 ${shieldResult.absorbed} 点伤害，剩余 ${target.yuzuShield ?? 0}。`);
+      const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
+      this.log('info', `🛡️ 【镜界护盾】${target.name} 的护盾挡下 ${incomingSource} 的 ${shieldResult.absorbed} 点伤害，护盾剩余 ${target.yuzuShield ?? 0}。`);
       amount = shieldResult.remaining;
       if (
         shieldResult.broke &&
@@ -1209,7 +1364,15 @@ export class BattleEngine {
       (target.isYuzu && (target.yuzuPhase ?? 1) === 1);
     if (isProtected && !target.transformed && amount >= target.currentHp) {
       amount = Math.max(0, target.currentHp - 1);
-      this.queueOrLogDamageEvent(target, options, 'info', `🛡️ ${target.name} 触发了锁血保护，强制保留最后 1 点生命！`);
+      this.queueOrLogDamageEvent(
+        target,
+        options,
+        'info',
+        `🛡️ ${target.name} 触发了锁血保护，强制保留最后 1 点生命！`,
+        undefined,
+        'aftermath',
+        'phase-lockblood',
+      );
       if (amount === 0) {
         this.syncHpPct(target);
         this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'lockblood');
@@ -1606,7 +1769,9 @@ export class BattleEngine {
         respectDefenses: true,
       });
       if (actualRetaliation > 0 || (attacker.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(attacker);
-      if (!hasStatus(attacker, 'BURN')) refreshStatus(attacker, 'BURN', 2);
+      if (this.isActiveCombatant(attacker)) {
+        this.applyStatus(attacker, 'BURN', 2, { applierId: ra.id, applierName: ra.name });
+      }
       emit(
         'crit',
         `☀️ 【护主神炎】翼神龙 反灼 ${attacker.name}，实际造成 ${actualRetaliation} 点真实伤害！`,
@@ -1760,7 +1925,7 @@ export class BattleEngine {
     refreshStatus(killer, 'BKB', 2, 'ting_croc_kill_embers');
     refreshStatus(killer, 'SPELL_BLOCK', 1, 'ting_croc_kill_embers');
     refreshStatus(killer, 'REGEN', 4);
-    const healed = healFighter(killer, Math.floor(killer.maxHp * 0.35));
+    const healed = healFighter(killer, Math.floor(killer.maxHp * 0.35), (type, text) => this.log(type, text));
     const cleanseText = cleansed ? '，清除负面状态' : '';
     const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
     this.log('buff', `🩸 【爆鳄余烬】${killer.name} 亲手击倒 ${target.name}，怨念回流${cleanseText}，${healText}，并获得爆鳄余烬护体、怨念抗性、法术抵挡与再生！`);
@@ -2103,6 +2268,10 @@ export class BattleEngine {
     return processStatus(this.createStatusProcessingRuntime(), actor);
   }
 
+  processStatusTurn(actor: Fighter, options?: StatusTurnOptions): StatusTurnResult {
+    return processStatusTurn(this.createStatusProcessingRuntime(), actor, options);
+  }
+
   isPassiveCharmCounter(fighter: Fighter, counterType: string): boolean {
     return counterType === 'CTR_CHARM' && fighter.status.some((s) => s.type === 'STYLE_SEXY' || s.type === 'STYLE_EMPEROR');
   }
@@ -2418,20 +2587,41 @@ export class BattleEngine {
     notePuruisaishiRoundActor(this.createPuruisaishiRuntime(), actor);
     this.handleSpinalSwordDrop(actor, spinalSwordRef);
 
-    const blockingStatusTypeAtTurnStart = actor.status.find((status) =>
-      isStatusType(status.type, CONTROL_STATUS_TYPES),
-    )?.type;
-    const canAct = this.processStatus(actor);
+    const statusTurn = this.processStatusTurn(actor, {
+      deferAirborneLanding: true,
+      deferActionBlockExpiry: true,
+    });
     this.handleTransformations(actor);
 
     if (actor.currentHp <= 0) {
       this.finishStep(spinalSwordRef);
       return false;
     }
-    if (!canAct) {
-      logUnableToAct(this.createTurnFlowRuntime(), actor, blockingStatusTypeAtTurnStart);
+    if (!statusTurn.canAct) {
+      logUnableToAct(this.createTurnFlowRuntime(), actor, statusTurn.blockingStatusType);
+      if (statusTurn.pendingActionBlockExpiry) {
+        handleSelfTimedStatusExpiry(
+          this.createStatusProcessingRuntime(),
+          actor,
+          statusTurn.pendingActionBlockExpiry.type,
+          statusTurn.pendingActionBlockExpiry,
+        );
+      }
+      if (statusTurn.pendingAirborneLanding) {
+        resolveAirborneLanding(this.createStatusProcessingRuntime(), actor, statusTurn.pendingAirborneLanding);
+        this.handleTransformations(actor);
+      }
       this.finishStep(spinalSwordRef);
       return false;
+    }
+
+    if (statusTurn.embarrassed) {
+      if (Math.random() < 0.5) {
+        this.log('info', `🥶 【尴尬】${actor.name} 当场僵住，没能完成这次行动！`);
+        this.finishStep(spinalSwordRef);
+        return false;
+      }
+      this.log('info', `😤 【强装镇定】${actor.name} 顶住了尴尬，仍然完成本次行动！`);
     }
 
     const waitingCounter = getWaitingCounterStatus(this.createTurnFlowRuntime(), actor);
@@ -2445,8 +2635,25 @@ export class BattleEngine {
       grantGachaLuck(actor, 1, (type, text, metadata) => this.log(type, text, metadata), '残血仍然行动');
     }
 
-    const skId = this.selectSkill(actor);
-    this.executeSkillAction(skId, actor);
+    if (statusTurn.confused) {
+      const confusionTargets = getConfusionTargets(this.createTargetingRuntime(), actor);
+      if (confusionTargets.length === 0) {
+        this.log('info', `🌀 【混乱】${actor.name} 分不清敌我，却找不到可以攻击的其他单位！`);
+        this.finishStep(spinalSwordRef);
+        return false;
+      }
+      const confusedTarget = confusionTargets[Math.floor(Math.random() * confusionTargets.length)];
+      actor.confusedForcedTargetId = confusedTarget.id;
+      this.log('info', `🌀 【混乱】${actor.name} 认错了目标，只能用普通攻击打向 ${confusedTarget.name}！`);
+      try {
+        this.executeSkillAction(null, actor, confusedTarget);
+      } finally {
+        delete actor.confusedForcedTargetId;
+      }
+    } else {
+      const skId = this.selectSkill(actor);
+      this.executeSkillAction(skId, actor);
+    }
     this.advanceBunnyStyleClock(actor);
     this.finishStep(spinalSwordRef);
     return false;

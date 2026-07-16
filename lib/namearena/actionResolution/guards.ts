@@ -24,7 +24,6 @@ export function missesSkill(
   ) ? 0 : target.agl;
   let targetAgl = target.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(effectiveTargetAgl * 1.2) : effectiveTargetAgl;
   if (target.status.some((status) => status.type === 'YUZU_EVADE_DOWN')) targetAgl = Math.floor(targetAgl * 0.55);
-  if (target.status.some((status) => status.type === 'OWL_EVADE_DOWN')) targetAgl = Math.floor(targetAgl * 0.55);
   let hitChance = 0.95 + (userAgl - targetAgl) * 0.005;
   const guaranteedHit =
     user.status.some((status) => status.type === 'AIM') ||
@@ -43,6 +42,32 @@ export function missesSkill(
   }
 
   return Math.random() > hitChance;
+}
+
+export function canTriggerOwlEvadeOpening(
+  target: Fighter,
+  skill: SkillDefinition,
+  isIntercepted: boolean,
+): boolean {
+  if (
+    isIntercepted ||
+    skill.tag === 'heal' ||
+    skill.tag === 'buff' ||
+    (skill.mult ?? 0) <= 0
+  ) return false;
+  return target.status.some((status) => status.type === 'OWL_EVADE_DOWN');
+}
+
+export function consumeOwlEvadeOpening(
+  target: Fighter,
+  skill: SkillDefinition,
+  isIntercepted: boolean,
+): boolean {
+  if (!canTriggerOwlEvadeOpening(target, skill, isIntercepted)) return false;
+  const opening = target.status.find((status) => status.type === 'OWL_EVADE_DOWN');
+  if (!opening) return false;
+  target.status = target.status.filter((status) => status !== opening);
+  return true;
 }
 
 export function breakAbsoluteDefense(

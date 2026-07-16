@@ -85,7 +85,7 @@ function enterClutch(actor: Fighter, runtime: ValorantRuntime, reason: string, p
 
 function hasDangerousStatus(actor: Fighter): boolean {
   return actor.status.some((status) =>
-    ['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'NO_HEAL'].includes(status.type),
+    ['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'NO_HEAL'].includes(status.type),
   );
 }
 

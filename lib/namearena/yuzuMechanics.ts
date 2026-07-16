@@ -336,7 +336,11 @@ export function applyYuzuWeaponEffects(runtime: YuzuRuntime, user: Fighter, targ
 
   const applyHostileStatus = (type: string, duration: number) => {
     if (!runtime.isActiveCombatant(target)) return false;
-    if (runtime.applyStatus) return runtime.applyStatus(target, type, duration, { sourceId: user.id });
+    if (runtime.applyStatus) return runtime.applyStatus(target, type, duration, {
+      sourceId: user.id,
+      applierId: user.id,
+      applierName: user.name,
+    });
     refreshStatus(target, type, duration, user.id);
     return true;
   };

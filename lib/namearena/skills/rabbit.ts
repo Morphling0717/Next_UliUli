@@ -35,7 +35,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       const healedNames: string[] = [];
       allies.forEach((a) => {
         if (!(a.status ?? []).some((s) => s.type === 'NO_HEAL')) {
-          const healed = healFighter(a, healAmt);
+          const healed = healFighter(a, healAmt, ctx.log);
           if (healed > 0) {
             totalHealed += healed;
             healedNames.push(a.name);
@@ -84,6 +84,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
 
   v_rabbit_calc_rng: {
     name: '计算器盲按', tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     spellBlockMode: 'perHit',
     text: '🧮 {USER} 掏出她的发声计算器，开始疯狂盲按...',
     onExecute: (ctx) => {
@@ -155,7 +156,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         const healedNames: string[] = [];
         allies.forEach((a) => {
           if (!(a.status ?? []).some((s) => s.type === 'NO_HEAL')) {
-            const healed = healFighter(a, healAmt);
+            const healed = healFighter(a, healAmt, ctx.log);
             if (healed > 0) {
               totalHealed += healed;
               healedNames.push(a.name);
@@ -247,7 +248,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         });
       }
       const preservedDebuffs = new Set([
-        'STUN', 'FREEZE', 'CONFUSED', 'CHARMED', 'WATER_PRISON', 'WT_SUPPRESS', 'WT_AIRBORNE', 'AIRBORNE', 'WT_REPAIRING',
+        'STUN', 'FREEZE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'WATER_PRISON', 'WT_SUPPRESS', 'WT_AIRBORNE', 'AIRBORNE', 'WT_REPAIRING',
         'POISON', 'BURN', 'BLIND', 'SILENCE', 'NO_HEAL', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK',
         'ETHEREAL', 'ZEROED',
       ]);
@@ -391,12 +392,12 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       allies.forEach((a) => {
         const wasZeroed = a.status.some((status) => status.type === 'ZEROED');
         a.status = (a.status ?? []).filter((s) => {
-          return !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'CHARMED', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED'].includes(s.type);
+          return !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED'].includes(s.type);
         });
         if (wasZeroed || a.baseStatsForZero) clearZeroedStatPenalty(a);
         cleanupOrphanedTimedStatModifiers(a);
         if (!(a.status ?? []).some((s) => s.type === 'NO_HEAL')) {
-          const healed = healFighter(a, healAmt);
+          const healed = healFighter(a, healAmt, ctx.log);
           if (healed > 0) {
             totalHealed += healed;
             healedNames.push(a.name);

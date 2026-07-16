@@ -77,10 +77,17 @@ function resolveYuzuPuppetInterception(ctx: SkillContext, intendedTarget: Fighte
 
 function chooseYuzuTarget(ctx: SkillContext, plan: YuzuAttackPlan): YuzuTargetSelection | undefined {
   const runtime = yuzuRuntime(ctx);
+  const charmSourceId = ctx.user.status.find((status) => status.type === 'CHARMED')?.applierId;
+  const charmAlternatives = charmSourceId
+    ? enemyTargets(ctx).filter((fighter) => fighter.id !== charmSourceId)
+    : [];
+  const mustAvoidCharmSource = !!charmSourceId && charmAlternatives.length > 0;
   let intendedTarget: Fighter | undefined;
   if ((ctx.user.yuzuPhase ?? 1) >= 3 && !plan.group) {
     const marked = ensureYuzuMarkedTarget(runtime, ctx.user);
-    if (marked && isActive(marked)) intendedTarget = marked;
+    if (marked && isActive(marked) && (!mustAvoidCharmSource || marked.id !== charmSourceId)) {
+      intendedTarget = marked;
+    }
   }
 
   if (!intendedTarget && !plan.group && ctx.targetWasIntercepted && ctx.interceptedProtectedTargetId) {
@@ -179,7 +186,7 @@ function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon):
   if (healRatio <= 0) return;
 
   const healAmount = Math.floor(ctx.user.maxHp * healRatio);
-  const healed = healFighter(ctx.user, healAmount);
+  const healed = healFighter(ctx.user, healAmount, ctx.log);
   if (healed > 0) {
     ctx.log('heal', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，恢复 ${healed} 点生命（按最大生命的 ${Math.round(healRatio * 100)}% 计算），随后继续攻击！`);
   } else {
@@ -307,7 +314,11 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
       }
     }
     const forcedWeapon = plan.furioso && i === plan.hits - 1 ? 'scythe' : undefined;
+    const targetJobBeforeHit = target.job;
     const hitResult = executeYuzuHit(ctx, target, protectedTarget, plan, i, forcedWeapon, fatigueBonus);
+    if (i < plan.hits - 1 && isActive(target) && target.job !== targetJobBeforeHit) {
+      ctx.log('info', `🪞 【镜界追击】${target.name} 在本击结算后以【${target.jobData.name}】形态重返战场，${ctx.user.name} 的后续连击重新锁定该目标！`);
+    }
     if (hitResult.hitMarkedTarget) markedTargetHitThisSkill = protectedTarget ?? target;
     if (!hitResult.canContinue) {
       registerMarkedSkillIfNeeded();
@@ -331,6 +342,7 @@ function makeYuzuSkill(plan: YuzuAttackPlan, rate: number): SkillDefinition {
     tag: SKILL_TAGS.SPECIAL,
     presentation: plan.presentation,
     spellBlockMode: 'perHit',
+    directTarget: !plan.group,
     rate,
     onExecute: (ctx) => executeYuzuAttackPlan(ctx, plan),
   };

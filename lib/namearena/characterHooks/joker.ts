@@ -122,7 +122,7 @@ export const jokerHook: CharacterHook = {
           !enemy.isDead &&
           !enemy.isDeadAnnounced &&
           !damageOptions.suppressOnHitStatuses &&
-          runtime.applyStatus(enemy, 'CONFUSED', 1);
+          runtime.applyStatus(enemy, 'CONFUSED', 1, { applierId: fighter.id, applierName: fighter.name });
         if (confused) {
           runtime.log('debuff', `🌀 【谢幕返场】${enemy.name} 被地狱笑话扰乱，陷入 1 回合混乱！`);
         }

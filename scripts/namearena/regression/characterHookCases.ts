@@ -1057,7 +1057,7 @@ export function runCharacterHookCases(): string[] {
     });
 
     assert(engine.fighters[0].hasUsedGachaDeathSave && engine.fighters[0].currentHp > 0, 'T-58 lethal hit should trigger and respect the Luck Emperor death save');
-    assert(!engine.fighters[0].status.some((status) => ['WT_AIRBORNE', 'WT_AMMO_EXPOSED'].includes(status.type)), 'T-58 must not reapply airborne or ammo exposure after a cleansing death-save');
+    assert(!engine.fighters[0].status.some((status) => ['WT_AIRBORNE', 'AIRBORNE', 'WT_AMMO_EXPOSED'].includes(status.type)), 'T-58 must not reapply airborne or ammo exposure after a cleansing death-save');
     assert(!logs.some((entry) => entry.text.includes('弹药架殉爆')), 'T-58 must not immediately execute a target that just consumed a cleansing death-save');
     cases.push('cleansing death-save suppresses War Thunder module and execution follow-ups');
   }
@@ -1923,11 +1923,12 @@ export function runCharacterHookCases(): string[] {
 
     engine.executeSkillAction('bujin_monster_combo', engine.fighters[0], engine.fighters[1]);
 
+    const openingIndex = logs.findIndex((entry) => entry.text.includes('以怪兽力量拖动武神之刃'));
     const hitIndex = logs.findIndex((entry) => entry.text.includes('第 1 斩命中'));
     const adaptIndex = logs.findIndex((entry) => entry.text.includes('【适应转轮】') && entry.text.includes('记录'));
     const deathIndex = logs.findIndex((entry) => entry.text.includes('【武神怪兽连斩】') && entry.type === 'death');
-    assert(hitIndex >= 0 && adaptIndex > hitIndex && deathIndex > adaptIndex, 'Per-target adaptation should be logged after its hit and before the resulting death');
-    cases.push('Tokusatsu multi-hit flushes target reactions before death');
+    assert(openingIndex >= 0 && adaptIndex > openingIndex && hitIndex > adaptIndex && deathIndex > hitIndex, 'Per-target mitigation should follow the attack cause, then precede final damage and death');
+    cases.push('Tokusatsu multi-hit logs cause, mitigation, final damage, and death in order');
   }
 
   {
@@ -1982,6 +1983,53 @@ export function runCharacterHookCases(): string[] {
     assert(engine.fighters[0].status.some((status) => status.type === 'SPELL_BLOCK'), 'War Thunder hook should apply SPELL_BLOCK');
     assert(logs.some((entry) => entry.text.includes('顶级备用载具')), 'War Thunder hook should keep the original transform log');
     cases.push('War Thunder transform hook');
+  }
+
+  {
+    const wt = makeFighter('M1A2_abrams_sep@A');
+    const { engine, logs } = makeDeathEngine([wt, makeFighter('抢修旁观者@B')]);
+    const engineWt = engine.fighters[0];
+    localProject.setCurrentHp(engineWt, Math.floor(engineWt.maxHp * 0.5));
+    const hpBeforeRepair = engineWt.currentHp;
+    const expectedTickHeal = Math.floor(engineWt.maxHp * 0.2);
+
+    engine.executeSkillAction('wt_repair', engineWt, engine.fighters[1]);
+
+    assert(engineWt.status.some((status) => status.type === 'WT_REPAIRING'), 'Long-F repair should enter WT_REPAIRING');
+    assert(!engineWt.status.some((status) => status.type === 'STUN'), 'Long-F repair should use its dedicated state instead of generic stun');
+    assert(engineWt.currentHp === hpBeforeRepair, 'Long-F repair healing should happen over repair turns instead of instantly');
+
+    const firstCanAct = engine.processStatus(engineWt);
+    assert(!firstCanAct, 'War Thunder should not act during the first repair turn');
+    assert(engineWt.currentHp === hpBeforeRepair + expectedTickHeal, `First repair turn should heal 20% max HP, got ${engineWt.currentHp - hpBeforeRepair}`);
+    assert(engineWt.status.some((status) => status.type === 'WT_REPAIRING'), 'Repair should remain active after its first healing turn');
+
+    const secondCanAct = engine.processStatus(engineWt);
+    assert(!secondCanAct, 'War Thunder should not act during the second repair turn');
+    assert(engineWt.currentHp === hpBeforeRepair + expectedTickHeal * 2, `Two repair turns should heal 40% max HP total, got ${engineWt.currentHp - hpBeforeRepair}`);
+    assert(!engineWt.status.some((status) => status.type === 'WT_REPAIRING'), 'Repair should end after two repair turns');
+    assert(logs.filter((entry) => entry.text.includes('【抢修进度】')).length === 2, 'Each repair turn should log its healing progress');
+    assert(logs.some((entry) => entry.text.includes('【抢修完成】')), 'Repair expiry should log restored mobility');
+    cases.push('War Thunder long-F repair heals over two locked turns');
+  }
+
+  {
+    const wt = makeFighter('M1A2_abrams_sep@A');
+    const attacker = makeFighter('抢修火力测试@B');
+    const { engine, logs } = makeDeathEngine([wt, attacker]);
+    const engineWt = engine.fighters[0];
+    engineWt.maxHp = 10000;
+    localProject.setCurrentHp(engineWt, 5000);
+    engine.executeSkillAction('wt_repair', engineWt, engine.fighters[1]);
+    localProject.setCurrentHp(engineWt, engineWt.maxHp);
+
+    const directDamage = engine.applyDamage(engineWt, 1000, 'skill', true, engine.fighters[1], { actionName: '抢修暴露测试' });
+    const statusDamage = engine.applyDamage(engineWt, 1000, 'status', true, undefined, { actionName: '持续伤害测试' });
+
+    assert(directDamage === 1300, `Repair exposure should amplify direct damage by 30%, got ${directDamage}`);
+    assert(statusDamage === 1000, `Repair exposure should not amplify damage-over-time effects, got ${statusDamage}`);
+    assert(logs.filter((entry) => entry.text.includes('【抢修暴露】')).length === 1, 'Only direct damage should log repair exposure amplification');
+    cases.push('War Thunder repair exposure amplifies direct but not status damage');
   }
 
   {
@@ -2051,7 +2099,7 @@ export function runCharacterHookCases(): string[] {
     const expectedMainDamage = Math.floor(wt.atk * 2.78);
     const primaryTargets = damagedTargets.filter((target) => target.stats.dmgTaken === expectedMainDamage);
     assert(primaryTargets.length === 1, `Su-30 primary target should take full main damage once, got ${primaryTargets.length}`);
-    assert(primaryTargets[0]?.status.some((status) => status.type === 'WT_AIRBORNE'), 'Su-30 primary target should be knocked airborne');
+    assert(primaryTargets[0]?.status.some((status) => status.type === 'AIRBORNE'), 'Su-30 primary target should use canonical airborne');
     assert(suppressedTargets.length >= 2, `Su-30 splash targets should be suppressed instead of all knocked airborne, got ${suppressedTargets.length}`);
     assert(!logs.some((entry) => entry.text.includes('CAS击杀') || entry.text.includes('弹药架殉爆')), 'Su-30 high-health spread test should not randomly wipe targets');
     cases.push('War Thunder Su-30 CAS uses primary-and-splash damage profile');
@@ -2590,7 +2638,7 @@ export function runCharacterHookCases(): string[] {
 
     const revivedEmote = engine.fighters[2];
     assert(revivedEmote.emoteFinalChallengeUsed && !revivedEmote.isDead, 'Lethal T-58 hit should allow Emote to consume its final owner challenge');
-    assert(!revivedEmote.status.some((status) => ['WT_AIRBORNE', 'WT_AMMO_EXPOSED'].includes(status.type)), 'An old T-58 hit must not attach post-hit module effects to Emote after revival');
+    assert(!revivedEmote.status.some((status) => ['WT_AIRBORNE', 'AIRBORNE', 'WT_AMMO_EXPOSED'].includes(status.type)), 'An old T-58 hit must not attach post-hit module effects to Emote after revival');
     const challengeIndex = logs.findIndex((entry) => entry.text.includes('【最终认主挑战】'));
     assert(challengeIndex >= 0, 'T-58 Emote regression should trigger the final owner challenge');
     assert(!logs.slice(challengeIndex + 1).some((entry) => entry.text.includes('弹药架暴露') && entry.text.includes('表情')), 'T-58 must not expose the ammo rack of Emote\'s newly revived body');
@@ -2615,9 +2663,9 @@ export function runCharacterHookCases(): string[] {
     const adaptIndex = logs.findIndex((entry) => entry.text.includes('【适应转轮】') && entry.text.includes('记录'));
     const deathIndex = logs.findIndex((entry) => entry.type === 'death' && entry.text.includes('表情'));
     assert(settlementIndex >= 0, 'A mitigated lethal hit should still report its actual HP settlement');
-    assert(adaptIndex > settlementIndex, 'Deferred adaptation detail should follow the lethal hit settlement');
-    assert(deathIndex > adaptIndex, 'Lethal hit death should be announced after mitigation detail');
-    cases.push('mitigated lethal hit logs settlement before reactions and death');
+    assert(adaptIndex >= 0 && settlementIndex > adaptIndex, 'Adaptation mitigation should be explained before the final HP settlement');
+    assert(deathIndex > settlementIndex, 'Lethal hit death should be announced after final settlement');
+    cases.push('mitigated lethal hit logs mitigation before settlement and death');
   }
 
   {

@@ -1,6 +1,6 @@
 import type { Fighter, StatusEffectsMap } from './types';
 import { canActNormally, isWinningCombatant } from './combatState';
-import { CONTROL_STATUS_TYPES, COUNTER_STANCE_STATUS_TYPES, isStatusType } from './statusRules';
+import { ACTION_BLOCKING_STATUS_TYPES, COUNTER_STANCE_STATUS_TYPES, isStatusType } from './statusRules';
 import type { CharacterHookRuntime } from './characterHooks';
 import { shouldCharacterPreventWin } from './characterHooks';
 
@@ -92,6 +92,11 @@ export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter, priorBl
     return;
   }
 
+  if (priorBlockingStatusType === 'AIRBORNE' || priorBlockingStatusType === 'WT_AIRBORNE') {
+    runtime.log('info', `💫 ${actor.name} 处于【${runtime.statusEffects.AIRBORNE?.name ?? '击飞'}】状态，无法行动！`);
+    return;
+  }
+
   const owlBlockingStatus = actor.status.find((status) =>
     status.type === 'OWL_FORM_DEFEAT' ||
     status.type === 'OWL_ENJOYING' ||
@@ -103,9 +108,9 @@ export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter, priorBl
   }
 
   const blockingStatus = actor.status.find((status) =>
-    isStatusType(status.type, CONTROL_STATUS_TYPES),
+    isStatusType(status.type, ACTION_BLOCKING_STATUS_TYPES),
   );
-  const blockingStatusType = blockingStatus?.type ?? priorBlockingStatusType;
+  const blockingStatusType = priorBlockingStatusType ?? blockingStatus?.type;
   if (blockingStatusType) {
     runtime.log('info', `💫 ${actor.name} 处于【${runtime.statusEffects[blockingStatusType]?.name ?? blockingStatusType}】状态，无法行动！`);
   }

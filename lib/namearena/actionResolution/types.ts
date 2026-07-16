@@ -41,7 +41,7 @@ export interface ActionResolutionRuntime {
     usedSkillId: string | null,
   ) => DamageResult;
   handleTransformations: (fighter: Fighter) => void;
-  flushDeferredDamageEvents: (fighter: Fighter) => void;
+  flushDeferredDamageEvents: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
   executeSkillAction: (
     skillId: string | null,
     user: Fighter,

@@ -72,7 +72,7 @@ export function handleCounterStatus(
     consumeStatusCharge(target, counterStatus);
   }
   if (counterType === 'CTR_CHARM') {
-    if (!runtime.applyStatus(user, 'CHARMED', 2, { effectName: '魅惑反击' })) {
+    if (!runtime.applyStatus(user, 'CHARMED', 2, { effectName: '魅惑反击', applierId: target.id, applierName: target.name })) {
       runtime.log('info', `😍 【魅惑反击】${target.name} 的魅惑被 ${user.name} 的抗性化解，原攻击继续结算！`);
       return false;
     }
@@ -80,7 +80,7 @@ export function handleCounterStatus(
     return true;
   }
   if (counterType === 'CTR_STUN') {
-    if (!runtime.applyStatus(user, 'STUN', 2, { effectName: '震慑反击' })) {
+    if (!runtime.applyStatus(user, 'STUN', 2, { effectName: '震慑反击', applierId: target.id, applierName: target.name })) {
       runtime.log('info', `💫 【震慑反击】${target.name} 的震慑被 ${user.name} 的抗性化解，原攻击继续结算！`);
       return false;
     }
@@ -90,7 +90,7 @@ export function handleCounterStatus(
   if (counterType === 'CTR_DRAIN') {
     runtime.log('info', `🧛 【汲取反击】${target.name} 将 300 点真实吸取打向 ${user.name}，先结算对方防护与分摊。`);
     const drain = runtime.applyDamage(user, 300, 'counter', true, target, { deferTransform: true });
-    const healed = healFighter(target, drain);
+    const healed = healFighter(target, drain, runtime.log);
     if (drain <= 0) {
       runtime.log('info', `🧛 【汲取反击】${target.name} 试图吸取 ${user.name} 的生命，但没有吸到有效生命！`);
     } else if (healed > 0) {
@@ -105,15 +105,24 @@ export function handleCounterStatus(
     }
   }
   if (counterType === 'CTR_POISON') {
-    runtime.applyStatus(user, 'POISON', 5);
-    runtime.log('poison', `🦠 【剧毒反击】${target.name} 的毒素缠上 ${user.name}，${user.name} 中毒 5 回合，攻击继续结算！`);
+    const applied = runtime.applyStatus(user, 'POISON', 5, { applierId: target.id, applierName: target.name });
+    runtime.log(applied ? 'poison' : 'info', applied
+      ? `🦠 【剧毒反击】${target.name} 的毒素缠上 ${user.name}，${user.name} 中毒 5 回合，攻击继续结算！`
+      : `🦠 【剧毒反击】${target.name} 释放毒素，但 ${user.name} 化解了中毒效果，攻击继续结算！`);
   }
   if (counterType === 'CTR_BURN') {
-    runtime.applyStatus(user, 'BURN', 5);
-    runtime.log('poison', `🔥 【烈焰反击】${target.name} 用地狱烈焰点燃 ${user.name}，${user.name} 燃烧 5 回合，攻击继续结算！`);
+    const applied = runtime.applyStatus(user, 'BURN', 5, { applierId: target.id, applierName: target.name });
+    if (!applied) {
+      runtime.log('info', `🔥 【烈焰反击】${target.name} 释放地狱烈焰，但 ${user.name} 化解了灼烧效果，攻击继续结算！`);
+    } else if (!runtime.isActiveCombatant(user)) {
+      runtime.log('poison', `🔥 【烈焰反击】${target.name} 引爆了 ${user.name} 身上的旧火，${user.name} 已经倒下，原攻击中止！`);
+      return true;
+    } else {
+      runtime.log('poison', `🔥 【烈焰反击】${target.name} 用地狱烈焰点燃 ${user.name}，${user.name} 燃烧 5 回合，攻击继续结算！`);
+    }
   }
   if (counterType === 'CTR_FREEZE') {
-    if (!runtime.applyStatus(user, 'FREEZE', 2, { effectName: '极寒反击' })) {
+    if (!runtime.applyStatus(user, 'FREEZE', 2, { effectName: '极寒反击', applierId: target.id, applierName: target.name })) {
       runtime.log('info', `🧊 【极寒反击】${target.name} 的寒气被 ${user.name} 的抗性化解，原攻击继续结算！`);
       return false;
     }
@@ -140,7 +149,7 @@ export function handleCounterStatus(
     }
   }
   if (counterType === 'CTR_CONFUSE') {
-    if (!runtime.applyStatus(user, 'CONFUSED', 3, { effectName: '混乱反击' })) {
+    if (!runtime.applyStatus(user, 'CONFUSED', 3, { effectName: '混乱反击', applierId: target.id, applierName: target.name })) {
       runtime.log('info', `🌀 【混乱反击】${target.name} 的认知干扰被 ${user.name} 的抗性化解，原攻击继续结算！`);
       return false;
     }

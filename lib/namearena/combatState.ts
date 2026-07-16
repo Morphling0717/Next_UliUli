@@ -17,10 +17,22 @@ export function setCurrentHp(fighter: Fighter, hp: number): void {
   syncHpPct(fighter);
 }
 
-export function healFighter(fighter: Fighter, amount: number): number {
+export function healFighter(
+  fighter: Fighter,
+  amount: number,
+  log?: (type: string, text: string) => void,
+): number {
   if (amount <= 0 || fighter.currentHp >= fighter.maxHp) return 0;
+  const isBleeding = fighter.status.some((status) => status.type === 'BLEED');
+  const effectiveAmount = isBleeding
+    ? Math.floor(amount * 0.75)
+    : amount;
+  if (isBleeding && effectiveAmount < amount) {
+    log?.('debuff', `🩸 【流血】${fighter.name} 的伤口妨碍治疗，本次可恢复量由 ${amount} 降至 ${effectiveAmount}！`);
+  }
+  if (effectiveAmount <= 0) return 0;
   const before = fighter.currentHp;
-  setCurrentHp(fighter, fighter.currentHp + amount);
+  setCurrentHp(fighter, fighter.currentHp + effectiveAmount);
   return fighter.currentHp - before;
 }
 

@@ -93,7 +93,7 @@ export function applyAttackerStyleEffects(
   if (allowHostileStatus && user.status.some((status) => status.type === 'STYLE_FOOL') && Math.random() < 0.5) {
     const debuffs = ['STUN', 'FREEZE', 'POISON', 'BURN'];
     const randomDebuff = debuffs[Math.floor(Math.random() * debuffs.length)];
-    if (runtime.applyStatus(target, randomDebuff, 2)) {
+    if (runtime.applyStatus(target, randomDebuff, 2, { applierId: user.id, applierName: user.name })) {
       runtime.log('skill', `🤪 笨蛋女人乱拳挥舞！不经意间给 ${target.name} 附加了【${runtime.statusEffects[randomDebuff]?.name ?? randomDebuff}】异常状态！`);
     }
   }
@@ -111,7 +111,11 @@ export function applySkillStatusEffect(
   const recipient = skill.statusTarget === 'user' ? user : target;
   if (!allowTargetStatus && recipient.id === target.id) return;
   const sourceId = statusSourceFromSkill(skill);
-  runtime.applyStatus(recipient, skill.status, 2, { sourceId });
+  runtime.applyStatus(recipient, skill.status, 2, {
+    sourceId,
+    applierId: user.id,
+    applierName: user.name,
+  });
 }
 
 export function handleValorantWeaponDrop(
@@ -122,7 +126,7 @@ export function handleValorantWeaponDrop(
   if (target.job !== 'VALO_JUNIOR' || (target.economy ?? 0) < 6) return;
 
   const isHeavyHit = actualDmg > target.maxHp * 0.2;
-  const isControlled = target.status.some((status) => ['STUN', 'FREEZE', 'CONFUSED', 'CHARMED'].includes(status.type));
+  const isControlled = target.status.some((status) => ['STUN', 'FREEZE', 'CONFUSED', 'EMBARRASSED', 'CHARMED'].includes(status.type));
   if (!isHeavyHit && !isControlled) return;
 
   target.economy = Math.max(0, (target.economy ?? 0) - 5);
@@ -244,7 +248,7 @@ export function applyLifestealEffects(
   const healAmt = Math.floor(healBase * lsPct);
   if (healAmt <= 0) return;
 
-  const healed = healFighter(user, healAmt);
+  const healed = healFighter(user, healAmt, runtime.log);
   if (healed > 0) {
     runtime.log('heal', `💉 ${user.name} 触发吸血被动，恢复了 ${healed} 点生命！`);
   } else {

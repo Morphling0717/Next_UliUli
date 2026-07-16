@@ -1,9 +1,16 @@
 import type { StatusTickMode } from './types';
 
+export const WT_REPAIRING_PROFILE = {
+  duration: 2,
+  healPerTurnPct: 0.2,
+  incomingDamageMultiplier: 1.3,
+} as const;
+
 export const CONTROL_STATUS_TYPES: string[] = [
   'STUN',
   'FREEZE',
   'CONFUSED',
+  'EMBARRASSED',
   'CHARMED',
   'WATER_PRISON',
   'WT_SUPPRESS',
@@ -12,8 +19,19 @@ export const CONTROL_STATUS_TYPES: string[] = [
   'WT_REPAIRING',
 ];
 
+/** Controls that consume the owner's action outright. Soft controls are handled separately. */
+export const ACTION_BLOCKING_STATUS_TYPES: string[] = [
+  'STUN',
+  'FREEZE',
+  'WATER_PRISON',
+  'WT_SUPPRESS',
+  'WT_AIRBORNE',
+  'AIRBORNE',
+  'WT_REPAIRING',
+];
+
 export const BKB_BLOCKED_STATUS_TYPES: string[] = [
-  ...CONTROL_STATUS_TYPES,
+  ...CONTROL_STATUS_TYPES.filter((type) => type !== 'WT_REPAIRING'),
   'SILENCE',
 ];
 
@@ -25,6 +43,7 @@ export const COMMON_NEGATIVE_STATUS_TYPES: string[] = [
   'BLIND',
   'SILENCE',
   'CONFUSED',
+  'EMBARRASSED',
   'CHARMED',
   'VALO_FLASH',
   'VALO_AIM_PUNCH',
@@ -156,6 +175,12 @@ export const REVIVE_CLEAN_STATUS_TYPES: string[] = [
 
 export function isStatusType(type: string, statusTypes: readonly string[]): boolean {
   return statusTypes.includes(type);
+}
+
+export function shouldTrackStatusApplier(type: string): boolean {
+  return isStatusType(type, CONTROL_STATUS_TYPES) ||
+    isStatusType(type, DOT_STATUS_TYPES) ||
+    isStatusType(type, COMMON_NEGATIVE_STATUS_TYPES);
 }
 
 export function getStatusTickMode(type: string): StatusTickMode {

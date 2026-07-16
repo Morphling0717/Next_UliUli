@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { RefreshCw, Sparkles } from "lucide-react";
 
+const ASSET_VERSION = process.env.NEXT_PUBLIC_ASSET_VERSION || "dev";
+const SERVICE_WORKER_URL = `/sw.js?v=${encodeURIComponent(ASSET_VERSION)}`;
+
 export function PwaUpdateBanner() {
   const [updateReady, setUpdateReady] = useState(false);
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
@@ -51,7 +54,7 @@ export function PwaUpdateBanner() {
     };
 
     navigator.serviceWorker
-      .register("/sw.js", { scope: "/" })
+      .register(SERVICE_WORKER_URL, { scope: "/" })
       .then((reg) => {
         if (cancelled) return;
         watchRegistration(reg);

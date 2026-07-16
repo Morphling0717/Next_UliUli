@@ -1,14 +1,16 @@
 /* UliUli PWA Service Worker
  * Strategy:
- *  - Navigations & Next.js code (_next/*, JS/CSS/JSON): network-first with cache fallback.
+ *  - Navigations & mutable code/assets: network-first with cache fallback.
  *    保证主站更新后，PWA 用户上线即可拿到新版本。
- *  - True static assets (images, fonts, og images): cache-first（这些资源带 hash 或不变）
+ *  - Next.js hashed assets (_next/static/*): cache-first.
  *  - /api/*: 永不缓存，永远走网络。配置 / songs / mail 都是动态数据。
  *  - 离线导航回退到 /offline。
  *  - postMessage("SKIP_WAITING") 由前端的更新提示触发，立即激活新版本。
  */
 
-const VERSION = "v4";
+const BUILD_VERSION = new URL(self.location.href).searchParams.get("v") || "unversioned";
+const SAFE_BUILD_VERSION = BUILD_VERSION.replace(/[^a-zA-Z0-9._-]/g, "_");
+const VERSION = `v5-${SAFE_BUILD_VERSION}`;
 const SHELL_CACHE = `uliuli-shell-${VERSION}`;
 const RUNTIME_CACHE = `uliuli-runtime-${VERSION}`;
 const STATIC_CACHE = `uliuli-static-${VERSION}`;
@@ -50,9 +52,11 @@ self.addEventListener("message", (event) => {
   }
 });
 
-function isStaticAsset(url) {
-  // 仅把 _next/static 下的内容（含 hash）和真静态文件视为可长期缓存
-  if (url.pathname.startsWith("/_next/static/")) return true;
+function isHashedStaticAsset(url) {
+  return url.pathname.startsWith("/_next/static/");
+}
+
+function isMutablePublicAsset(url) {
   if (
     url.pathname.endsWith(".png") ||
     url.pathname.endsWith(".jpg") ||
@@ -70,8 +74,8 @@ function isStaticAsset(url) {
 }
 
 function isCodeAsset(url) {
-  // _next 里非 static 的 RSC payload / chunks / data，必须 network-first
-  if (url.pathname.startsWith("/_next/") && !url.pathname.startsWith("/_next/static/")) return true;
+  // _next 里非 static 的 RSC payload / data，必须 network-first
+  if (url.pathname.startsWith("/_next/")) return true;
   if (url.pathname.endsWith(".js") || url.pathname.endsWith(".css")) return true;
   return false;
 }
@@ -136,13 +140,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  if (isHashedStaticAsset(url)) {
+    event.respondWith(cacheFirst(request, STATIC_CACHE));
+    return;
+  }
+
   if (isCodeAsset(url)) {
     event.respondWith(networkFirst(request, RUNTIME_CACHE));
     return;
   }
 
-  if (isStaticAsset(url)) {
-    event.respondWith(cacheFirst(request, STATIC_CACHE));
+  if (isMutablePublicAsset(url)) {
+    event.respondWith(networkFirst(request, STATIC_CACHE));
     return;
   }
 });

@@ -335,8 +335,9 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     ['newline-in-log-text', /\r|\n/],
     ['nan-or-undefined', /\b(?:NaN|undefined|null)\b/],
     ['negative-number-log', /(?:造成|承受|恢复|损失)了? -\d/],
-    ['zero-heal-log', /恢复了? 0 点生命/],
-    ['zero-reduction-log', /削减 0 点伤害/],
+      ['zero-heal-log', /恢复了? 0 点生命/],
+      ['zero-reduction-log', /削减 0 点伤害/],
+      ['zero-deflection-log', /偏折 0 点/],
     ['zero-damage-control', /(?:承受了|造成了|实际造成) 0 点.*(?:并被|并深度|并使其|并施加|眩晕|魅惑|击飞|中毒|灼烧|沉默|混乱)/],
     ['duplicate-damage-type', /物理\(物理\)|魔法\(魔法\)/],
     ['legacy-generic-death', /伤重不治倒下了/],
@@ -354,8 +355,14 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
   const summonedBaseNames = new Set<string>();
 
   logs.forEach((entry, index) => {
-    const line = index + 1;
-    const text = entry.text;
+      const line = index + 1;
+      const text = entry.text;
+      if (
+        text.includes('触发了锁血保护') &&
+        logs.slice(Math.max(0, index - 3), index).some((previous) => previous.text === text)
+      ) {
+        issues.push({ label, line, type: 'duplicate-phase-lock-log', text });
+      }
     for (let i = recentDeaths.length - 1; i >= 0; i -= 1) {
       const recentDeath = recentDeaths[i];
       if (!recentDeath) continue;

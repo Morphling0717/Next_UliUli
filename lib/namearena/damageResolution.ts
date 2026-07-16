@@ -84,13 +84,17 @@ export function calculateDamage(
     }
   }
 
-  const isCrit =
+  const charmedByTarget = user.status.some((status) =>
+    status.type === 'CHARMED' && status.applierId === target.id,
+  );
+  const isCrit = !charmedByTarget && (
     user.status.some((status) => status.type === 'AIM') ||
     (user.isWT && target.status.some((status) => status.type === 'WT_SCOUTED')) ||
     target.status.some((status) => status.type === 'NEURAL_THEFT_DEBUFF') ||
     skill.alwaysCrit ||
     Math.random() < (user.critRate + user.agl * 0.001) ||
-    user.status.some((status) => status.type === 'STYLE_ANGRY');
+    user.status.some((status) => status.type === 'STYLE_ANGRY')
+  );
 
   if (isCrit) {
     if (target.status.some((status) => status.type === 'LIQUID_BODY') && skill.tag === runtime.skillTags.PHYS) {

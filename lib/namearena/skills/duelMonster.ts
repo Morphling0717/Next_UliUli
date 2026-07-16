@@ -30,7 +30,7 @@ function consumeHeadSpellBlock(
   const spellBlock = consumeSpellBlock(ctx.target);
   if (!spellBlock) return false;
 
-  const healed = healFighter(ctx.target, Math.floor(ctx.target.maxHp * 0.15));
+  const healed = healFighter(ctx.target, Math.floor(ctx.target.maxHp * 0.15), ctx.log);
   const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
   ctx.log('info', `🐉 第 ${headIndex} 颗龙首撞上 ${ctx.target.name} 的防护，被完全拦截：${formatSpellBlock(spellBlock, ctx.target.name, `${ctx.user.name}的【三重龙首】`, healText)}`);
   return true;
@@ -196,6 +196,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
   triple_dragon_head: {
     name: '三重龙首',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     spellBlockMode: 'perHit',
     rate: 0.4,
     text: '🐉 {USER} 三颗龙首锁定 {TARGET}，连续撕咬三次！',

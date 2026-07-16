@@ -6,7 +6,15 @@ import { fileURLToPath } from "node:url";
 // 错误地把父目录当作 workspace 根，从而导致 `tailwindcss` 等依赖解析失败。
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
+// Public files do not receive content hashes from Next.js. Give every build a
+// fresh asset version so changed images cannot be hidden by a browser or PWA cache.
+const assetVersion = process.env.NEXT_PUBLIC_ASSET_VERSION?.trim() || Date.now().toString(36);
+process.env.NEXT_PUBLIC_ASSET_VERSION = assetVersion;
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_ASSET_VERSION: assetVersion,
+  },
   experimental: {
     turbopackPluginRuntimeStrategy: "workerThreads",
   },

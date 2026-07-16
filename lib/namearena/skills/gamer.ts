@@ -200,6 +200,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_headshot_line: {
     name: '冠军爆头线',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     condition: (user) => canPay(user, 2),
     text: '🎯 {USER} 把准星压到爆头线，准备收掉 {TARGET}！',
     onExecute: (ctx) => {
@@ -249,7 +250,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       const boosted = consumeBoost(ctx.user);
       ctx.user.status = ctx.user.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
       const healAmt = Math.floor(ctx.user.maxHp * (boosted ? 0.3 : 0.22) + ctx.user.wis * (boosted ? 1.0 : 0.65));
-      const healed = healFighter(ctx.user, healAmt);
+      const healed = healFighter(ctx.user, healAmt, ctx.log);
       if (boosted) {
         refreshStatus(ctx.user, 'REGEN', 2);
         refreshStatus(ctx.user, 'BKB', 1, 'gamer_clutch_focus');
@@ -315,7 +316,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
         }
       }
       if (boosted && totalDmg > 0) {
-        const healed = healFighter(ctx.user, Math.floor(totalDmg * 0.16));
+        const healed = healFighter(ctx.user, Math.floor(totalDmg * 0.16), ctx.log);
         const healText = healed > 0
           ? `${ctx.user.name} 从强化连招中恢复了 ${healed} 点生命`
           : `${ctx.user.name} 的强化连招触发吸血，但生命已满，治疗溢出`;
@@ -336,6 +337,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_crack_confirm: {
     name: '破绽确认',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     condition: (user) => canPay(user, 3),
     text: '🥊 {USER} 抓到 {TARGET} 的破绽，准备把机会转成击杀！',
     onExecute: (ctx) => executeCrackConfirm(ctx),
@@ -343,6 +345,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_qte_execute: {
     name: '处决QTE',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     condition: (user) => canPay(user, 3),
     text: '🎮 {USER} 看到处决提示亮起，按下完美 QTE！',
     onExecute: (ctx) => executeCrackConfirm(ctx, '处决QTE'),
@@ -386,6 +389,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_read_inputs: {
     name: '读输入',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     condition: (user) => canPay(user, 2),
     text: '👁️ {USER} 像打格斗游戏一样读到了 {TARGET} 的输入！',
     onExecute: (ctx) => {
@@ -409,6 +413,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_clutch_ace: {
     name: '1vX残局',
     tag: SKILL_TAGS.SPECIAL,
+    directTarget: true,
     condition: (user) => canPay(user, 4),
     text: '🏅 {USER} 进入 1vX 残局，开始冷静拆解战场！',
     onExecute: (ctx) => {
@@ -421,7 +426,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       refreshStatus(ctx.user, 'BKB', boosted ? 2 : 1, 'gamer_clutch_focus');
       refreshStatus(ctx.user, 'AIM', boosted ? 2 : 1);
       if (boosted) refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'gamer_clutch_focus');
-      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (boosted ? 0.25 : 0.17) + ctx.user.wis * (boosted ? 0.85 : 0.55)));
+      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (boosted ? 0.25 : 0.17) + ctx.user.wis * (boosted ? 0.85 : 0.55)), ctx.log);
       const dmg = Math.floor(Math.max(ctx.user.atk, ctx.user.mag) * (boosted ? 3.35 : 2.52) + ctx.user.wis * (boosted ? 1.05 : 0.7));
       const cleanseText = cleanCount > 0 ? `清掉 ${cleanCount} 个异常` : '状态稳定';
       ctx.log('crit', `🏅 【${boosted ? '强化1vX残局' : '1vX残局'}】${ctx.user.name} 消耗 ${cost} APM ${cleanseText}、${recoveryText(healed)}，并开始拆解 ${ctx.target.name}！`);

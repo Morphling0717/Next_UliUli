@@ -101,7 +101,7 @@ export function executeSummonSkill(
         grantGachaLuck(user, 1, runtime.log, '献祭失败');
         grantStatus(user, 'SPELL_BLOCK', 2, 'gacha_tribute_compensation');
         if (!user.status.some((status) => status.type === 'NO_HEAL')) {
-          const healed = healFighter(user, Math.floor(user.maxHp * 0.1));
+          const healed = healFighter(user, Math.floor(user.maxHp * 0.1), runtime.log);
           if (healed > 0) runtime.log('heal', `🍀 祭品不足反而歪出补偿，${user.name} 恢复了 ${healed} 点生命并获得法术抵挡！`);
         }
       }

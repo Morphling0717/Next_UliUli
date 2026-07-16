@@ -90,7 +90,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const statusesBeforeNullifier = [...(ctx.target.status ?? [])];
       ctx.target.status = (ctx.target.status ?? []).filter(
-        (s) => !['INVUL', 'BKB', 'RAGE', 'PLUG_HEAD', 'PLUG_ARM', 'PLUG_BACK', 'PLUG_HEART', 'PLUG_EYE', 'PLUG_SKIN', 'PLUG_LEG', 'PLUG_TAIL', 'SPELL_BLOCK', 'LIQUID_BODY', 'VALO_ULT_EMPRESS', 'VALO_ULT_RUN_IT_BACK', 'VALO_HARBOR_WALL', 'DIVA_SONG', 'DIVA_HEADPHONE_GUARD', 'DIVA_FINAL_CHORUS', 'BABY_LOVE_BOTTLE', 'TING_DEFIANCE', 'TOKUSATSU_DEFIANCE', 'COUNTER', 'WAIT_COUNTER'].includes(s.type) && !s.type.startsWith('CTR_') && !s.type.startsWith('STYLE_'),
+        (s) => !['INVUL', 'BKB', 'RAGE', 'PLUG_HEAD', 'PLUG_ARM', 'PLUG_BACK', 'PLUG_HEART', 'PLUG_EYE', 'PLUG_SKIN', 'PLUG_LEG', 'PLUG_TAIL', 'SPELL_BLOCK', 'LIQUID_BODY', 'VALO_ULT_EMPRESS', 'VALO_ULT_RUN_IT_BACK', 'VALO_HARBOR_WALL', 'DIVA_HEADPHONE_GUARD', 'DIVA_FINAL_CHORUS', 'BABY_LOVE_BOTTLE', 'TING_DEFIANCE', 'TOKUSATSU_DEFIANCE', 'COUNTER', 'WAIT_COUNTER'].includes(s.type) && !s.type.startsWith('CTR_') && !s.type.startsWith('STYLE_'),
       );
       cleanupOrphanedTimedStatModifiers(ctx.target);
       const removedStatuses = getImportantRemovedStatuses(statusesBeforeNullifier, ctx.target.status);

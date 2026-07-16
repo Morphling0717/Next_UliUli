@@ -9,7 +9,7 @@ import {
   spawnOwlFurrySquad,
   spawnOwlMeal,
 } from '../../../lib/namearena/owlMechanics';
-import { missesSkill } from '../../../lib/namearena/actionResolution/guards';
+import { consumeOwlEvadeOpening, missesSkill } from '../../../lib/namearena/actionResolution/guards';
 import {
   assert,
   localProject,
@@ -214,6 +214,8 @@ export function runOwlCases(): string[] {
     const { engine, logs } = makeDeathEngine([owl, markedAttacker, victim]);
     const engineOwl = engine.fighters[0];
     enterPhaseTwo(engine, engineOwl);
+    engineOwl.agl = 10000;
+    engineOwl.status.push({ type: 'AIM', duration: 1 });
     applyOwlRiverMark(engine.createOwlRuntime(), engineOwl, engine.fighters[1]);
 
     engine.executeSkillAction('triple_dragon_head', engine.fighters[1], engine.fighters[2]);
@@ -299,17 +301,19 @@ export function runOwlCases(): string[] {
     const target = makeFighter('大风闪避测试目标@B');
     attacker.agl = 50;
     target.agl = 100;
-    const skill: SkillDefinition = { name: '命中测试', tag: 'physical' };
+    const skill: SkillDefinition = { name: '命中测试', tag: 'physical', mult: 1 };
     const originalRandom = Math.random;
     try {
       Math.random = () => 0.8;
-      assert(missesSkill(attacker, target, skill, false), 'The test hit should miss before Owl evade reduction');
+      assert(missesSkill(attacker, target, skill, false), 'The test hit should miss before Owl opening is applied');
       target.status.push({ type: 'OWL_EVADE_DOWN', duration: 2 });
-      assert(!missesSkill(attacker, target, skill, false), 'OWL_EVADE_DOWN should lower agility enough for the same roll to hit');
+      assert(missesSkill(attacker, target, skill, false), 'OWL_EVADE_DOWN should no longer alter agility');
+      assert(consumeOwlEvadeOpening(target, skill, false), 'OWL_EVADE_DOWN should guarantee the next direct single-target hit');
+      assert(!target.status.some((status) => status.type === 'OWL_EVADE_DOWN'), 'OWL_EVADE_DOWN should be consumed by that hit');
     } finally {
       Math.random = originalRandom;
     }
-    cases.push('大风起兮云飞扬 evade reduction changes hit resolution');
+    cases.push('大风起兮云飞扬 creates one consumable guaranteed hit');
   }
 
   {
