@@ -30,8 +30,8 @@ export const jokerHook: CharacterHook = {
 
   onDefeated: ({ fighter, runtime }) => {
     if (fighter.isJoker && !fighter.hasResurrected) {
-      fighter.reviveTurns = 4;
-      runtime.log('info', `🃏 ${fighter.name} 没有真正退场，进入 4 次结算的返场倒计时！`);
+      fighter.reviveTurns = 3;
+      runtime.log('info', `🃏 ${fighter.name} 没有真正退场，进入 3 次结算的返场倒计时！`);
     }
   },
 
@@ -77,12 +77,12 @@ export const jokerHook: CharacterHook = {
         if (GOD_OF_TROLLS) {
           fighter.jobData = cloneJobDefinition(GOD_OF_TROLLS);
           fighter.job = 'GOD_OF_TROLLS';
-          fighter.maxHp = Math.floor(fighter.maxHp * 1.6);
+          fighter.maxHp = Math.floor(fighter.maxHp * 2.06);
           fighter.currentHp = fighter.maxHp;
           fighter.spd = 150;
           fighter.atk = Math.max(100, fighter.atk * 2);
-          fighter.def = Math.max(80, fighter.def * 2);
-          fighter.res = Math.max(150, fighter.res * 2);
+          fighter.def = Math.max(120, fighter.def * 2.35);
+          fighter.res = Math.max(190, fighter.res * 2.35);
           fighter.mag = Math.max(225, fighter.mag * 3.02);
           fighter.agl = Math.max(250, fighter.agl * 3);
           fighter.wis = Math.max(200, fighter.wis * 3);
@@ -111,7 +111,7 @@ export const jokerHook: CharacterHook = {
           actionName: '谢幕返场',
         };
         const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(enemy.res * 0.5)), 'skill', false, fighter, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
         if (actualDmg > 0) {
           runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害！`);
         } else {

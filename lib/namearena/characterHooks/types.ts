@@ -1,4 +1,4 @@
-import type { DamageApplicationOptions, DefeatOptions, Fighter, JobDefinition, SpinalSwordRef, StatusApplicationOptions } from '../types';
+import type { BattleLogMetadata, DamageApplicationOptions, DefeatOptions, Fighter, JobDefinition, SpinalSwordRef, StatusApplicationOptions } from '../types';
 
 export interface CharacterHookRuntime {
   fighters: Fighter[];
@@ -6,7 +6,7 @@ export interface CharacterHookRuntime {
   turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   syncHpPct: (fighter: Fighter) => void;
   applyDamage: (
     target: Fighter,

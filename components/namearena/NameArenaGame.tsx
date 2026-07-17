@@ -303,6 +303,11 @@ const STATUS_DISPLAY_FALLBACKS: Record<string, StatusEffectInfo> = {
   YUZU_SLOW: { name: '减速', icon: '🪞', desc: '行动速度下降' },
   ORIGINIUM_DISEASE: { name: '矿石病', icon: '🦠', desc: '源石侵蚀层数；层数越高越危险，80 层死亡' },
   PURUISAISHI_SHIELD: { name: '源石映像护盾', icon: '🜲', desc: '普瑞赛斯二阶段护盾；场上有源石结晶时不会低于 1' },
+  MOMO_CAPTAIN: { name: '舰长', icon: '⚓', desc: '攻击与生命提高，造成伤害时会为萌月沫沫恢复生命' },
+  MOMO_CROWD_JOY: { name: '众宾欢也', icon: '🎉', desc: '按层数获得攻击吸血；行动结束减少 10 层' },
+  MOMO_MIC_DEF_DOWN: { name: '麦霸破防', icon: '🎙️', desc: '防御暂时下降' },
+  MOMO_VILLAGE_SWORD: { name: '村好剑', icon: '🗡️', desc: '无双龙赋予的低额攻击强化' },
+  MOMO_AWAKENED_SWORD: { name: '醒剑', icon: '⚔️', desc: '共鸣后的高额攻击强化，替换村好剑' },
 };
 
 const RESOURCE_TONE_STYLES: Record<ResourceTone, string> = {
@@ -385,6 +390,7 @@ const DAMAGE_STATUS_TYPES = new Set([
   'YUZU_SLOW',
   'ORIGINIUM_DISEASE',
   'OWL_EVADE_DOWN',
+  'MOMO_MIC_DEF_DOWN',
 ]);
 
 const RECOVERY_STATUS_TYPES = new Set([
@@ -392,6 +398,7 @@ const RECOVERY_STATUS_TYPES = new Set([
   'PLUG_HEART',
   'GACHA_SUMMON_LIFESTEAL',
   'STYLE_FAMILY',
+  'MOMO_CROWD_JOY',
 ]);
 
 const SPECIAL_STATUS_TYPES = new Set([
@@ -412,6 +419,9 @@ const SPECIAL_STATUS_TYPES = new Set([
   'GACHA_ULTIMATE_GUARD_COOLDOWN',
   'WT_ERA',
   'YUZU_TAUNT',
+  'MOMO_CAPTAIN',
+  'MOMO_VILLAGE_SWORD',
+  'MOMO_AWAKENED_SWORD',
 ]);
 
 const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
@@ -452,6 +462,11 @@ const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
   YUZU_ATK_DOWN: 64,
   YUZU_SLOW: 64,
   OWL_EVADE_DOWN: 64,
+  MOMO_MIC_DEF_DOWN: 64,
+  MOMO_CAPTAIN: 46,
+  MOMO_VILLAGE_SWORD: 47,
+  MOMO_AWAKENED_SWORD: 47,
+  MOMO_CROWD_JOY: 48,
   BURN: 60,
   POISON: 61,
   BLEED: 61,
@@ -801,6 +816,55 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
     }
   }
 
+  if (fighter.isMomo) {
+    const state = fighter.momoState;
+    const phase = Math.max(1, state?.phase ?? 1);
+    const partner = state?.partnerTargetId
+      ? fighters.find((candidate) => candidate.id === state.partnerTargetId)
+      : undefined;
+    const dragon = activeSummons.find((summon) => summon.momoDragonVariant);
+    chips.push({
+      icon: state?.waterDaughter ? '🌊' : '🫧',
+      label: state?.waterDaughter ? '水人大女儿' : '沫沫阶段',
+      value: `${phase}阶段`,
+      title: getResourceTitle(
+        state?.waterDaughter ? '水人的大女儿' : '萌月沫沫阶段',
+        `${phase}阶段`,
+        phase >= 2 ? '受到外部有效伤害时会通过 |OMO 均摊给其他舰长' : '泡沫之神正在经营舰长队伍',
+      ),
+      tone: state?.waterDaughter ? 'shield' : 'support',
+      priority: 32,
+    });
+    chips.push({
+      icon: '🦇',
+      label: '骑士踢',
+      value: `${state?.riderKickCount ?? 0}/7`,
+      title: getResourceTitle('三阶段进度', `${state?.riderKickCount ?? 0}/7`, '345 与 FINAL VENT 每使用一次都会计数，无论是否命中'),
+      tone: phase >= 3 ? 'combat' : 'tech',
+      priority: 33,
+    });
+    if (state?.teamMode === 'dynamic') {
+      chips.push({
+        icon: '🤝',
+        label: '随机队友',
+        value: partner?.name ?? '待抽选',
+        title: getResourceTitle('当前随机队友', partner?.name ?? '待抽选', '队友退场后会重新抽选非 NPC 单位'),
+        tone: 'support',
+        priority: 34,
+      });
+    }
+    if (dragon) {
+      chips.push({
+        icon: '🐉',
+        label: '契约兽',
+        value: dragon.momoDragonVariant === 'alternate' ? '异色无双龙' : '无双龙',
+        title: getResourceTitle('场上契约兽', dragon.name, '可发动武器降临、防御降临与 FINAL VENT'),
+        tone: 'combat',
+        priority: 35,
+      });
+    }
+  }
+
   if (fighter.isGacha) {
     if (typeof fighter.gachaLuck === 'number') {
       chips.push({
@@ -1108,7 +1172,7 @@ type NameArenaGameProps = {
 };
 
 export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
-    const [inputNames, setInputNames] = useState('玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep\n柚子\n表情\n鸮');
+    const [inputNames, setInputNames] = useState('玄凝\n小汀\n牢鳄\n兔卷卷\n屑\n刺猬人\n克蕾儿丝菲尔\n丝瓜uli\nM1A2_abrams_sep\n柚子\n表情\n鸮\n萌月沫沫');
     const [battleView, setBattleView] = useState<BattlePlaybackView<BattleLogEntry>>(
         () => createBattlePlaybackView<BattleLogEntry>(createBattleState(1, 0)),
     );
@@ -1828,7 +1892,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                 />
 
                                 <div className="mt-3 text-xs leading-5 text-slate-500">
-                                    特殊角色：<span className="text-cyan-200">水人、玄凝、屑、刺猬人、牢鳄、小汀、克蕾儿丝菲尔、丝瓜uli、兔卷卷、M1、柚子、表情、鸮</span>
+                                    特殊角色：<span className="text-cyan-200">水人、玄凝、屑、刺猬人、牢鳄、小汀、克蕾儿丝菲尔、丝瓜uli、兔卷卷、M1、柚子、表情、鸮、萌月沫沫（沫沫）</span>
                                 </div>
 
                                 <button onClick={async () => {

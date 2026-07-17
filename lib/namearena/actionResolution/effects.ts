@@ -8,7 +8,7 @@ import {
   grantStatus,
   statusSourceFromSkill,
 } from '../defenseStatus';
-import { consumeStatusCharge } from '../statusLifecycle';
+import { consumeStatusCharge, normalizeStatusEntry } from '../statusLifecycle';
 import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
 import { withTimedStatModifiersSuspended } from '../statModifiers';
 
@@ -111,11 +111,32 @@ export function applySkillStatusEffect(
   const recipient = skill.statusTarget === 'user' ? user : target;
   if (!allowTargetStatus && recipient.id === target.id) return;
   const sourceId = statusSourceFromSkill(skill);
-  runtime.applyStatus(recipient, skill.status, 2, {
+  const applied = runtime.applyStatus(recipient, skill.status, 2, {
     sourceId,
     applierId: user.id,
     applierName: user.name,
   });
+  if (!applied) return;
+  if (!runtime.isActiveCombatant(recipient)) return;
+
+  const status = recipient.status.find((entry) =>
+    entry.type === skill.status && (!sourceId || entry.sourceId === sourceId),
+  );
+  if (!status) return;
+  normalizeStatusEntry(status);
+  const statusName = runtime.statusEffects[skill.status]?.name ?? skill.status;
+  const remaining = status.remainingTurns ?? status.duration;
+  const durationText = status.expiresOn === 'global_action_end'
+    ? `，持续接下来 ${remaining} 个全局行动回合`
+    : status.expiresOn === 'self_turn_end'
+      ? `，影响接下来 ${remaining} 次自身行动`
+      : status.expiresOn === 'trigger'
+        ? `，可触发 ${status.charges ?? status.duration} 次`
+        : '';
+  runtime.log(
+    recipient.id === user.id ? 'buff' : 'debuff',
+    `📌 【状态结算】${recipient.name} 获得【${statusName}】${durationText}。`,
+  );
 }
 
 export function handleValorantWeaponDrop(
@@ -214,9 +235,7 @@ export function handlePrimaryTargetDefeat(
   if (target.currentHp > 0) return false;
 
   const skillName = skill?.name && !['普通攻击', '魔力攻击'].includes(skill.name) ? `【${skill.name}】` : '攻击';
-  const grantsCompetitiveRewards = isCompetitiveTarget(target);
   const defeated = runtime.markDefeated(target, { message: `💀 【击杀】${target.name} 被 ${user.name} 的${skillName}击败！`, killer: user });
-  if (defeated && grantsCompetitiveRewards) grantValorantKillRewards(runtime, user);
   return defeated;
 }
 

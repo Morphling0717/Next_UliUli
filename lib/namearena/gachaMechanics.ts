@@ -23,7 +23,7 @@ import { clearZeroedStatPenalty } from './statModifiers';
 export const GACHA_LUCK_MAX = 5;
 export const GACHA_SUMMON_LIFESTEAL_STATUS = 'GACHA_SUMMON_LIFESTEAL';
 export const GACHA_RA_PHOENIX_STATUS = 'RA_PHOENIX';
-const GACHA_SUMMON_LIFESTEAL_PCT = 0.35;
+const GACHA_SUMMON_LIFESTEAL_PCT = 0.30;
 export const EXODIA_PIECES = ['被封印者的右腕', '被封印者的左腕', '被封印者的右足', '被封印者的左足', '被封印者本体'] as const;
 export const GACHA_ADVANCED_SUMMON_NAMES = ['青眼白龙', '翼神龙', '黑暗大法师', '青眼究极龙'] as const;
 const EXODIA_NORMAL_PIECE_CHANCES = [0.055, 0.11, 0.21, 0.38, 0.62] as const;
@@ -323,12 +323,6 @@ export function applyGachaSummonLifesteal(
       `🧛 吸血牌回流！${attacker.name} 的伤害为 ${summoner.name} 恢复了 ${healed} 点生命！`,
       gachaEffectMetadata('gacha_lifesteal_proc', attacker, [summoner]),
     );
-  } else {
-    runtime.log(
-      'info',
-      `🧛 吸血牌回流触发，但 ${summoner.name} 生命已满，治疗溢出！`,
-      gachaEffectMetadata('gacha_lifesteal_proc', attacker, [summoner]),
-    );
   }
 }
 
@@ -420,7 +414,7 @@ function damageFromSummon(
 ): number {
   const damageOptions: DamageApplicationOptions = { actionName };
   const actualDmg = ctx.applyDamage(target, amount, 'skill', trueDamage, summon, damageOptions);
-  if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) return 0;
+  if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) return 0;
   if (options.deferOutcome) return actualDmg;
   finalizeSummonDamage(ctx, summon, target, actionName);
   return actualDmg;
@@ -602,7 +596,7 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
       const dmg = Math.max(1, Math.floor((summon.atk + summon.mag) * 1.05));
       const damageOptions: DamageApplicationOptions = { actionName: '全军进击' };
       const actualDmg = ctx.applyDamage(target, dmg, 'skill', false, summon, damageOptions);
-      if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) {
+      if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
         ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 的防护机制转移，原目标没有受伤；转移伤害已单独结算！`);
         continue;
       }

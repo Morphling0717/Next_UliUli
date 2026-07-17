@@ -121,6 +121,12 @@ export interface DamageApplicationOptions {
   redirectedOriginiumDamage?: number;
   redirectedByOwlEmperor?: boolean;
   redirectedOwlEmperorDamage?: number;
+  redirectedByMomo?: boolean;
+  redirectedMomoDamage?: number;
+  /** Captains that actually received a |OMO share during this hit. */
+  redirectedMomoTargetIds?: string[];
+  /** Captains defeated while settling this |OMO share. */
+  redirectedMomoDefeatedTargetIds?: string[];
   /** Internal guard used while damage is already being paid by 帝王之征. */
   bypassOwlEmperorRedirect?: boolean;
   /** Mechanical costs and copied damage must not recursively create 过江协同. */
@@ -129,6 +135,8 @@ export interface DamageApplicationOptions {
   bypassOwlOutgoingModifier?: boolean;
   /** Fixed self-costs do not receive 鸮's defensive form multiplier. */
   bypassOwlIncomingModifier?: boolean;
+  /** Mechanical self-costs must reduce HP directly instead of consuming shared shields. */
+  bypassShields?: boolean;
   targetDefeatedDuringDamage?: boolean;
   /** A cleansing death-save consumed this hit, so its post-hit hostile statuses must not be re-applied. */
   suppressOnHitStatuses?: boolean;
@@ -231,6 +239,27 @@ export type BattleEventKind =
 export type SkillPresentation = 'basic' | 'skill' | 'finisher';
 
 export type BattleCombatEffectId =
+  | 'toku_fan_strike'
+  | 'toku_fan_rider_kick'
+  | 'toku_fan_cross_beam'
+  | 'toku_fan_rocket'
+  | 'toku_fan_hero_punch'
+  | 'toku_henshin_rehearsal'
+  | 'toku_soul'
+  | 'toku_bujin_slash'
+  | 'toku_black_mist_wave'
+  | 'toku_adversity_flash'
+  | 'toku_miracle_magic'
+  | 'toku_miracle_alchemy'
+  | 'toku_alchemy_armor'
+  | 'toku_bujin_chair'
+  | 'toku_monster_punch'
+  | 'toku_energy_crush'
+  | 'toku_miracle_armor'
+  | 'toku_monster_combo'
+  | 'toku_monster_roar'
+  | 'toku_great_monster_victory'
+  | 'toku_rainbow_fever'
   | 'gacha_blue_sky'
   | 'gacha_qiqi'
   | 'gacha_fake_seal'
@@ -390,6 +419,34 @@ export interface OwlSummonState {
   wildStacks?: number;
 }
 
+export type MomoTeamMode = 'uninitialized' | 'explicit' | 'dynamic' | 'water';
+
+export interface MomoState {
+  phase: 1 | 2 | 3;
+  teamMode: MomoTeamMode;
+  riderKickCount: number;
+  waterDaughter: boolean;
+  /** Successful random team selections, including the opening selection. */
+  partnerSelectionCount?: number;
+  partnerTargetId?: string;
+  partnerAnchorId?: string;
+  /** Defers random re-teaming until the current damage/death settlement has completed. */
+  partnerReselectPending?: boolean;
+  dynamicTeamId?: string;
+  /** Fighters whose teamId was temporarily changed by random teaming. */
+  assignedMemberIds?: string[];
+  /** Original team IDs for assigned members; null means there was no team. */
+  originalTeamIds?: Record<string, string | null>;
+}
+
+export type MomoDragonVariant = 'normal' | 'alternate';
+
+export interface MomoCaptainBonusState {
+  amount: number;
+  /** False while the captain is temporarily outside the battlefield. */
+  active: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Fighter — a participant in a battle round
 // ---------------------------------------------------------------------------
@@ -432,6 +489,7 @@ export interface Fighter {
   isEmote?: boolean;       // 表情（四处认主型魔虚罗）
   isYuzu?: boolean;        // 柚子（镜世界的食指父辈）
   isOwl?: boolean;         // 鸮（雾隐罅中鸮）
+  isMomo?: boolean;        // 萌月沫沫（泡沫之神）
   isSummon?: boolean;      // Summoned unit
   isAdvancedSummon?: boolean;
   isSon?: boolean;         // Water god's son
@@ -456,11 +514,13 @@ export interface Fighter {
   originiumSpawnTurn?: number;
   originiumSpawnLargeRound?: number;
   originiumLastGrowthTurn?: number;
+  originiumLastGrowthLargeRound?: number;
   originiumGrowthRoundActorIds?: string[];
   originiumWasAttackedTurn?: number;
   originiumWasAttackedThisGrowthRound?: boolean;
   originiumInfectionStacks?: number;
   originiumStatMultipliers?: Pick<BaseStats, 'atk' | 'def' | 'res'> & { maxHp: number };
+  puruisaishiLastOverflowLargeRound?: number;
 
   // ── Battle-round state ─────────────────────────────────────────────────
   transformed?: boolean;
@@ -499,6 +559,7 @@ export interface Fighter {
   hasUsedGamerWorldStage?: boolean;
   hasUsedGamerChampionCombo?: boolean;
   hasUsedGamerTransformAction?: boolean;
+  hasUsedGamerContinue?: boolean;
 
   // ── Gacha addict / Luck Emperor pity system ───────────────────────────
   gachaLuck?: number;
@@ -574,6 +635,12 @@ export interface Fighter {
   // ── Owl / Heaven-corrosion and dedicated summon system ───────────────
   owlState?: OwlState;
   owlSummonState?: OwlSummonState;
+
+  // ── Momo / Captain, crowd-joy and contract-dragon system ─────────────
+  momoState?: MomoState;
+  momoDragonVariant?: MomoDragonVariant;
+  /** Source-scoped HP bookkeeping keeps captain grants reversible and idempotent. */
+  momoCaptainBonuses?: Record<string, MomoCaptainBonusState>;
 
   // ── Slacking synergy (丝瓜 + 兔卷卷 bond) ────────────────────────────
   willSlackThisGame?: boolean;
@@ -654,6 +721,12 @@ export interface SkillContext {
   damageRedirectedByOwlEmperor?: boolean;
   /** Damage actually suffered by 帝王之征 for the redirected primary hit. */
   redirectedOwlEmperorDamage?: number;
+  /** The primary hit was distributed to 萌月沫沫's other captains through |OMO. */
+  damageRedirectedByMomo?: boolean;
+  /** Total HP damage suffered by captains for the redirected primary hit. */
+  redirectedMomoDamage?: number;
+  redirectedMomoTargetIds?: string[];
+  redirectedMomoDefeatedTargetIds?: string[];
   /** Settlement result for the most recent hit in this skill context. */
   suppressOnHitStatuses?: boolean;
   suppressOnHitStatusTargetId?: string;
@@ -768,10 +841,18 @@ export interface SkillDefinition {
   text?: string;
   /** Pool is GachaEntry[] for isGacha skills, string[] for isRandomText skills */
   pool?: GachaEntry[] | string[];
+  /** Visual variants aligned by index with a random-text string pool. */
+  randomTextVisualEffects?: BattleCombatEffectId[];
   isGacha?: boolean;
   isRandomText?: boolean;
   alwaysCrit?: boolean;
   alwaysHit?: boolean;
+  /** Character-specific formula that still uses the shared targeting/defense pipeline. */
+  damageFormula?: (user: Fighter, target: Fighter, fighters: readonly Fighter[]) => number;
+  /** Some deterministic character attacks intentionally cannot roll critical hits. */
+  cannotCrit?: boolean;
+  /** A targeted utility skill that resolves guards and then applies status without damage. */
+  noDamage?: boolean;
   cleanStatus?: boolean;
   selfDmgPct?: number;
   selfDmgCanKill?: boolean;
@@ -794,6 +875,8 @@ export interface SkillDefinition {
   directTarget?: boolean;
   condition?: (user: Fighter) => boolean;
   onExecute?: (ctx: SkillContext) => boolean;
+  /** Runs once when an attempted action settles, including block, miss, or counter. */
+  onActionSettled?: (ctx: SkillContext) => void;
   afterExecute?: (
     ctx: SkillContext,
     dmg: number,

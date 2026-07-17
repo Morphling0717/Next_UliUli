@@ -70,12 +70,22 @@ export function createSkillContext(
           options.redirectedByOwlEmperor = true;
           options.redirectedOwlEmperorDamage = damageOptions.redirectedOwlEmperorDamage ?? actualDmg;
         }
+        if (damageOptions.redirectedByMomo) {
+          options.redirectedByMomo = true;
+          options.redirectedMomoDamage = damageOptions.redirectedMomoDamage ?? actualDmg;
+          options.redirectedMomoTargetIds = damageOptions.redirectedMomoTargetIds
+            ? [...damageOptions.redirectedMomoTargetIds]
+            : undefined;
+          options.redirectedMomoDefeatedTargetIds = damageOptions.redirectedMomoDefeatedTargetIds
+            ? [...damageOptions.redirectedMomoDefeatedTargetIds]
+            : undefined;
+        }
         if (damageOptions.targetDefeatedDuringDamage) options.targetDefeatedDuringDamage = true;
         if (damageOptions.suppressOnHitStatuses) options.suppressOnHitStatuses = true;
         if (damageOptions.resolution) options.resolution = damageOptions.resolution;
       }
       context.suppressOnHitStatuses = !!damageOptions.suppressOnHitStatuses;
-      if (damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) {
+      if (damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
         return 0;
       }
       if (actualDmg > 0 || (damageTarget.pendingDamageEvents?.length ?? 0) > pendingEventCountBefore) {

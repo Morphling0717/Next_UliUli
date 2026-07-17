@@ -78,6 +78,14 @@ export function cloneFighter(fighter: Fighter): Fighter {
     emoteOwnerBonus: fighter.emoteOwnerBonus ? { ...fighter.emoteOwnerBonus } : fighter.emoteOwnerBonus,
     owlState: fighter.owlState ? { ...fighter.owlState } : fighter.owlState,
     owlSummonState: fighter.owlSummonState ? { ...fighter.owlSummonState } : fighter.owlSummonState,
+    momoState: fighter.momoState ? {
+      ...fighter.momoState,
+      assignedMemberIds: fighter.momoState.assignedMemberIds ? [...fighter.momoState.assignedMemberIds] : undefined,
+      originalTeamIds: fighter.momoState.originalTeamIds ? { ...fighter.momoState.originalTeamIds } : undefined,
+    } : fighter.momoState,
+    momoCaptainBonuses: fighter.momoCaptainBonuses
+      ? Object.fromEntries(Object.entries(fighter.momoCaptainBonuses).map(([sourceId, state]) => [sourceId, { ...state }]))
+      : fighter.momoCaptainBonuses,
   };
 }
 

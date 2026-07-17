@@ -27,13 +27,13 @@ export function clearTokusatsuThroneResonance(fighter: Fighter): void {
 
 export function getTokusatsuThroneChance(fighter: Fighter): number {
   const resonance = getTokusatsuThroneResonance(fighter);
-  const base = fighter.hpPct <= 0.35 ? 0.58 : (fighter.hpPct <= 0.75 ? 0.282 : 0.13);
-  const perStack = fighter.hpPct <= 0.35 ? 0.065 : (fighter.hpPct <= 0.75 ? 0.09 : 0.075);
-  return Math.min(0.875, base + resonance * perStack);
+  const base = fighter.hpPct <= 0.35 ? 0.18 : (fighter.hpPct <= 0.75 ? 0.07 : 0.02);
+  const perStack = fighter.hpPct <= 0.35 ? 0.025 : (fighter.hpPct <= 0.75 ? 0.03 : 0.02);
+  return Math.min(0.33, base + resonance * perStack);
 }
 
 export function getTokusatsuControlThroneChance(fighter: Fighter): number {
-  return Math.min(0.58, 0.34 + getTokusatsuThroneResonance(fighter) * 0.045);
+  return Math.min(0.22, 0.1 + getTokusatsuThroneResonance(fighter) * 0.02);
 }
 
 export function enterTokusatsuThroneStance(fighter: Fighter, bkbDuration = 2, spellBlockDuration = 2): void {

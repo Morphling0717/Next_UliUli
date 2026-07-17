@@ -14,6 +14,7 @@ import {
   assert,
   localProject,
   makeFighter,
+  withRandomSequence,
 } from '../shared/harness';
 import { makeDeathEngine } from './deathAccountingCases';
 
@@ -115,14 +116,14 @@ export function runOwlCases(): string[] {
     for (const victim of engine.fighters.slice(2, 9)) {
       engine.markDefeated(victim, { message: `测试 ${victim.name} 死亡`, killer: engine.fighters[1] });
     }
-    assert(engineOwl.atk > atkBefore, 'Owl should inherit ten percent of fallen units stats');
+    assert(engineOwl.atk > atkBefore, 'Owl should inherit six percent of fallen units stats');
     assert(Number(engineOwl.owlState?.heavenStacks) === 7, 'Seven eligible deaths should fill Heaven');
     assert(engineOwl.owlState?.phase === 3, 'Seven Heaven stacks should enter phase 3');
     assert(engineOwl.job === 'OWL_DRAGON_SOVEREIGN', 'Owl phase 3 should install the dragon-sovereign job');
     const emperor = engine.fighters.find((fighter) => fighter.owlSummonState?.kind === 'emperor');
     assert(emperor, 'Owl phase 3 should summon 帝王之征');
     assert(
-      emperor.maxHp === 3600 && emperor.atk === 260 && emperor.mag === 260 && emperor.def === 145 && emperor.res === 145,
+      emperor.maxHp === 3650 && emperor.atk === 260 && emperor.mag === 260 && emperor.def === 145 && emperor.res === 145,
       '帝王之征 should use the exact current Blue-Eyes Ultimate reference stats',
     );
     cases.push('Owl Heaven excludes Puruisaishi NPCs and enters phase 3 at seven');
@@ -370,6 +371,83 @@ export function runOwlCases(): string[] {
       assert(selected !== 'owl_bone_scrape', '帝王之征退场后不得选择刮骨');
     }
     cases.push('Owl phase-3 selector excludes support skills with no valid benefit');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
+    const yuzu = makeFighter('柚子@B');
+    const teammate = makeFighter('镜界分摊队友@B');
+    const { engine } = makeDeathEngine([owl, yuzu, teammate]);
+    const [engineOwl, engineYuzu, engineTeammate] = engine.fighters;
+    engineYuzu.yuzuPhase = 2;
+    engineYuzu.transformed = true;
+    engineYuzu.yuzuShield = 0;
+    engineYuzu.status = engineYuzu.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    engineTeammate.maxHp = 10000;
+    localProject.setCurrentHp(engineTeammate, 10000);
+    engineTeammate.yuzuShield = 0;
+    engineTeammate.status = engineTeammate.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    const hpBefore = engineTeammate.currentHp;
+
+    engine.applyDamage(engineYuzu, 100, 'skill', true, engineOwl, { actionName: '鸮倍率分摊测试' });
+
+    assert(hpBefore - engineTeammate.currentHp === 135, `Owl's 1.35 outgoing multiplier must apply once before Yuzu sharing, got ${hpBefore - engineTeammate.currentHp}`);
+    cases.push('Owl outgoing multiplier applies once through Yuzu sharing');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
+    const joker = makeFighter('屑@B');
+    const transferVictim = makeFighter('伤害转移承受者@A');
+    const { engine } = makeDeathEngine([owl, joker, transferVictim]);
+    const [engineOwl, engineJoker, engineVictim] = engine.fighters;
+    const jokerJob = localProject.jobs.GOD_OF_TROLLS;
+    assert(jokerJob, 'Owl transfer multiplier test requires GOD_OF_TROLLS');
+    engineJoker.job = 'GOD_OF_TROLLS';
+    engineJoker.jobData = { ...jokerJob, skills: [...jokerJob.skills] };
+    engineJoker.transformed = true;
+    engineVictim.maxHp = 10000;
+    localProject.setCurrentHp(engineVictim, 10000);
+    const options: DamageApplicationOptions = { actionName: '鸮倍率转移测试' };
+
+    withRandomSequence([0, 0.99], () => {
+      engine.applyDamage(engineJoker, 100, 'skill', true, engineOwl, options);
+    });
+
+    assert(options.redirectedJokerDamage === 135, `Owl's 1.35 outgoing multiplier must not repeat after Joker transfer, got ${options.redirectedJokerDamage}`);
+    assert(engineVictim.currentHp === 9865, 'The selected transfer victim should lose exactly the once-modified damage');
+    cases.push('Owl outgoing multiplier applies once through Joker transfer');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
+    const markedEnemy = makeFighter('过江施法抵挡靶@B');
+    const { engine } = makeDeathEngine([owl, markedEnemy]);
+    const [engineOwl, engineEnemy] = engine.fighters;
+    enterPhaseTwo(engine, engineOwl);
+    engineEnemy.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'test_spell_block' });
+
+    engine.executeSkillAction('owl_crossing_mark', engineOwl, engineEnemy);
+
+    assert(!engineEnemy.status.some((status) => status.type === 'SPELL_BLOCK'), 'Crossing Mark should consume the target spell block');
+    assert(!engineEnemy.status.some((status) => status.type === 'OWL_RIVER_MARK'), 'A spell-blocked Crossing Mark must not apply its mark');
+    cases.push('Crossing Mark respects spell block before applying');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
+    const markedEnemy = makeFighter('过江自击触发者@B');
+    const { engine, logs } = makeDeathEngine([owl, markedEnemy]);
+    const [engineOwl, engineEnemy] = engine.fighters;
+    enterPhaseTwo(engine, engineOwl);
+    applyOwlRiverMark(engine.createOwlRuntime(), engineOwl, engineEnemy);
+    engineEnemy.status.push({ type: 'AIM', duration: 1 });
+
+    engine.executeSkillAction('serious_punch', engineEnemy, engineOwl);
+
+    assert(logs.some((entry) => entry.text.includes('不会把协同攻击打向自己')), 'Owl should explicitly suppress a Crossing assist whose victim is Owl itself');
+    assert(!logs.some((entry) => entry.text.includes('同步过江') && entry.text.includes(engineOwl.name)), 'Owl must not execute a Crossing assist against itself');
+    cases.push('Crossing assist never attacks Owl itself');
   }
 
   return cases;

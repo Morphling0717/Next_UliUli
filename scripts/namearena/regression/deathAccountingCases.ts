@@ -111,7 +111,7 @@ export function runDeathAccountingCases(): string[] {
     engine.markDefeated(engine.fighters[2], { message: '💀 【测试】屑受到致命伤。', killer: engine.fighters[0] });
     engine.handleDeathsAndRevives(spinalSwordRef);
     assert(engine.fighters[2].isDead, 'Joker should be dead while revival countdown is active');
-    assert((engine.fighters[2].reviveTurns ?? 0) === 3, `Joker countdown should tick to 3 after first settlement, got ${engine.fighters[2].reviveTurns}`);
+    assert((engine.fighters[2].reviveTurns ?? 0) === 2, `Joker countdown should tick to 2 after first settlement, got ${engine.fighters[2].reviveTurns}`);
     assert(engine.fighters[0].stats.kills === 1, `Joker initial death should award exactly one kill, got ${engine.fighters[0].stats.kills}`);
 
     for (let i = 0; i < 4; i += 1) engine.handleDeathsAndRevives(spinalSwordRef);

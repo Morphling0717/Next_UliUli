@@ -16,6 +16,7 @@ import { gachaHook } from './characterHooks/gacha';
 import { gamerHook } from './characterHooks/gamer';
 import { jokerHook } from './characterHooks/joker';
 import { morphlingHook } from './characterHooks/morphling';
+import { momoHook } from './characterHooks/momo';
 import { owlHook } from './characterHooks/owl';
 import { siguaHook } from './characterHooks/sigua';
 import { slackingBondHook } from './characterHooks/slacking';
@@ -46,6 +47,7 @@ const CHARACTER_HOOKS: CharacterHook[] = [
   morphlingHook,
   owlHook,
   slackingBondHook,
+  momoHook,
   valoJuniorHook,
   gamerHook,
   jokerHook,

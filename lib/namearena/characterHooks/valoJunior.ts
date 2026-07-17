@@ -3,8 +3,8 @@ import type { CharacterHook, CharacterHookRuntime } from './types';
 import { grantStatus } from '../defenseStatus';
 import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
 
-const VALO_ULT_THRESHOLD = 5;
-const VALO_CLUTCH_ULT_THRESHOLD = 5;
+const VALO_ULT_THRESHOLD = 4;
+const VALO_CLUTCH_ULT_THRESHOLD = 4;
 const VALO_OPERATOR_ECONOMY = 6;
 const VALO_FOCUS_MAX = 10;
 
@@ -229,7 +229,7 @@ export function selectValorantSkill(actor: Fighter, runtime: ValorantRuntime): s
     return ult;
   }
 
-  if (actor.hpPct <= 0.18 && !actor.hasUsedValoRunItBack && !hasStatus(actor, 'VALO_ULT_RUN_IT_BACK') && (actor.ultPoints ?? 0) >= 3) {
+  if (actor.hpPct <= 0.28 && !actor.hasUsedValoRunItBack && !hasStatus(actor, 'VALO_ULT_RUN_IT_BACK') && (actor.ultPoints ?? 0) >= 2) {
     actor.ultPoints = 0;
     actor.hasUsedValoRunItBack = true;
     runtime.log('buff', `🔥 【保枪保命】${actor.name} 被逼入死角，提前启动【再火一回】！`);

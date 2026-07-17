@@ -17,11 +17,14 @@ import {
 import { getBattlePhase } from "@/lib/namearena/battlePresentation";
 import {
   GACHA_COMBAT_EFFECT_IDS,
+  TOKUSATSU_COMBAT_EFFECT_IDS,
   resolveCombatEffect,
   type CombatEffectCue,
   type CombatImpactTheme,
   type GachaCombatEffectCue,
   type TingCombatEffectCue,
+  type TokusatsuCombatEffectCue,
+  type TokusatsuCombatEffectId,
 } from "@/lib/namearena/combatEffects";
 import {
   createStagePositionMap,
@@ -40,6 +43,11 @@ import {
   orderExodiaMaterials,
 } from "@/lib/namearena/summonCardArt";
 import { StageAnimationScheduler } from "@/lib/namearena/stageAnimationScheduler";
+import {
+  getTokusatsuFormAvatar,
+  getTokusatsuFullBodyForJob,
+  TOKUSATSU_ART,
+} from "@/lib/namearena/tokusatsuArt";
 import {
   collectStageAssetManifest,
   preloadStageAssetManifest,
@@ -63,6 +71,12 @@ import {
   drawGachaCombatFx,
   type GachaCombatFx,
 } from "./gachaCombatFx";
+import {
+  createTokusatsuCombatFx,
+  drawTokusatsuCombatFx,
+  preloadTokusatsuCombatFxAssets,
+  type TokusatsuCombatFx,
+} from "./tokusatsuCombatFx";
 
 export type ArenaBattleLogEntry = Pick<BattleEvent, "type" | "text"> &
   Partial<Omit<BattleEvent, "type" | "text">>;
@@ -119,7 +133,7 @@ type FinisherCinematic = {
   title: string;
   image?: string;
   accent?: string;
-  theme?: "ting_blood" | "gacha_dragon" | "gacha_solar" | "gacha_void" | "gacha_summon";
+  theme?: "ting_blood" | "gacha_dragon" | "gacha_solar" | "gacha_void" | "gacha_summon" | "tokusatsu_monster" | "tokusatsu_rainbow";
   targetName?: string;
 };
 type TransformationCinematic = {
@@ -130,6 +144,12 @@ type TransformationCinematic = {
   title: string;
   from: BattleFormIdentity;
   to: BattleFormIdentity;
+  theme?: "tokusatsu";
+  fromImage?: string;
+  toImage?: string;
+  bodyImage?: string;
+  beltImage?: string;
+  propImage?: string;
 };
 type SummonCardCinematic = {
   kind: "summon_card";
@@ -211,6 +231,7 @@ function getFighterAccent(fighter?: Fighter) {
   if (fighter.isTokusatsu) return "#42b9ff";
   if (fighter.isYuzu) return "#f266ff";
   if (fighter.isOwl) return "#ff9a55";
+  if (fighter.isMomo) return "#ff75c8";
   if (fighter.isWT) return "#77db82";
   if (fighter.isGamer) return "#b6ed55";
   if (fighter.isEmote) return "#d8b4fe";
@@ -250,6 +271,24 @@ function getTransformationTitle(log: ArenaBattleLogEntry, nextForm: BattleFormId
   const phase = log.text.match(/进入([二三四五六七八九十]+)阶段/);
   if (phase?.[1]) return `进入${phase[1]}阶段`;
   return `形态进阶：${nextForm.jobName}`;
+}
+
+function withTokusatsuTransformationArt(
+  cinematic: TransformationCinematic,
+): TransformationCinematic {
+  const fromImage = getTokusatsuFormAvatar(cinematic.from);
+  const toImage = getTokusatsuFormAvatar(cinematic.to);
+  if (!fromImage && !toImage) return cinematic;
+  const isMonsterForm = cinematic.to.jobKey === "MIRACLE_MONSTER_BUJIN";
+  return {
+    ...cinematic,
+    theme: "tokusatsu",
+    fromImage,
+    toImage,
+    bodyImage: getTokusatsuFullBodyForJob(cinematic.to.jobKey),
+    beltImage: isMonsterForm ? TOKUSATSU_ART.rainbowBelt : TOKUSATSU_ART.bujinBelt,
+    propImage: isMonsterForm ? TOKUSATSU_ART.monsterGlove : TOKUSATSU_ART.bujinSword,
+  };
 }
 
 function getLogTone(log: ArenaBattleLogEntry) {
@@ -336,8 +375,19 @@ function readDevelopmentTingPreview(): string | null {
 function readDevelopmentGachaPreview(): BattleCombatEffectId | null {
   if (process.env.NODE_ENV === "production" || typeof window === "undefined") return null;
   const preview = new URLSearchParams(window.location.search).get("namearenaGachaFxPreview");
-  return preview && GACHA_COMBAT_EFFECT_IDS.includes(preview as BattleCombatEffectId)
+  return preview && GACHA_COMBAT_EFFECT_IDS.includes(preview as (typeof GACHA_COMBAT_EFFECT_IDS)[number])
     ? preview as BattleCombatEffectId
+    : null;
+}
+
+type DevelopmentTokusatsuPreview = TokusatsuCombatEffectId | "transform-phase2" | "transform-phase3" | "transform-phase3-finisher";
+
+function readDevelopmentTokusatsuPreview(): DevelopmentTokusatsuPreview | null {
+  if (process.env.NODE_ENV === "production" || typeof window === "undefined") return null;
+  const preview = new URLSearchParams(window.location.search).get("namearenaTokusatsuFxPreview");
+  if (preview === "transform-phase2" || preview === "transform-phase3" || preview === "transform-phase3-finisher") return preview;
+  return preview && TOKUSATSU_COMBAT_EFFECT_IDS.includes(preview as TokusatsuCombatEffectId)
+    ? preview as TokusatsuCombatEffectId
     : null;
 }
 
@@ -606,7 +656,7 @@ const StageFighterCard = React.memo(function StageFighterCard({
       aria-pressed={isSelected}
     >
       <span className={styles.portrait}>
-        {image ? <Image src={image} alt="" fill sizes="54px" unoptimized={image.startsWith("/namearena/cards/")} /> : <span className={styles.emblem}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>}
+        {image ? <Image src={image} alt="" fill sizes="54px" unoptimized={image.startsWith("/namearena/")} /> : <span className={styles.emblem}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>}
         {fighter.teamId ? <span className={styles.teamBadge} style={{ "--team-color": fighter.color } as CSSProperties}>{fighter.teamId}</span> : null}
         <span className={styles.phase}>{getPhaseLabel(fighter)}</span>
       </span>
@@ -850,7 +900,7 @@ const StagePulseButton = React.memo(function StagePulseButton({
       style={{ "--pulse-accent": getFighterAccent(fighter) } as CSSProperties}
     >
       {image ? (
-        <Image src={image} alt="" fill sizes="34px" unoptimized={image.startsWith("/namearena/cards/")} />
+        <Image src={image} alt="" fill sizes="34px" unoptimized={image.startsWith("/namearena/")} />
       ) : (
         <span className={styles.pulseGlyph}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>
       )}
@@ -1050,9 +1100,11 @@ export function NameArenaBattleStage({
   const beamsRef = useRef<Beam[]>([]);
   const tingCombatFxRef = useRef<TingCombatFx[]>([]);
   const gachaCombatFxRef = useRef<GachaCombatFx[]>([]);
+  const tokusatsuCombatFxRef = useRef<TokusatsuCombatFx[]>([]);
   const wakeFxLoopRef = useRef<() => void>(() => {});
   const stopFxLoopRef = useRef<() => void>(() => {});
   const stageFxSuspendedRef = useRef(false);
+  const cinematicEndsAtRef = useRef(0);
   const [animationScheduler] = useState(() => new StageAnimationScheduler());
   const combatFxSequenceRef = useRef(0);
   const popupSequenceRef = useRef(0);
@@ -1066,9 +1118,12 @@ export function NameArenaBattleStage({
   const developmentTingPreviewPlayedRef = useRef(false);
   const developmentGachaPreviewRef = useRef<BattleCombatEffectId | null>(null);
   const developmentGachaPreviewPlayedRef = useRef(false);
+  const developmentTokusatsuPreviewRef = useRef<DevelopmentTokusatsuPreview | null>(null);
+  const developmentTokusatsuPreviewPlayedRef = useRef(false);
   const developmentFinisherPreviewRef = useRef<FinisherCinematic | null>(null);
 
   const stageFighters = useMemo(() => fighters.filter(shouldRenderFighterOnStage), [fighters]);
+  const hasTokusatsuFighter = stageFighters.some((fighter) => fighter.isTokusatsu);
   const stageRosterKey = stageFighters.map((fighter) => fighter.id).join("\u001f");
   const densityPopulation = stageFighters.length;
   const stageDensity = densityPopulation > 18 ? "crowded" : densityPopulation > 12 ? "dense" : densityPopulation > 6 ? "compact" : "normal";
@@ -1212,15 +1267,19 @@ export function NameArenaBattleStage({
     particlesRef.current = [];
     tingCombatFxRef.current = [];
     gachaCombatFxRef.current = [];
+    tokusatsuCombatFxRef.current = [];
     combatFxSequenceRef.current = 0;
     developmentSummonPreviewRef.current = readDevelopmentSummonPreview();
     developmentTingPreviewRef.current = readDevelopmentTingPreview();
     developmentTingPreviewPlayedRef.current = false;
     developmentGachaPreviewRef.current = readDevelopmentGachaPreview();
     developmentGachaPreviewPlayedRef.current = false;
+    developmentTokusatsuPreviewRef.current = readDevelopmentTokusatsuPreview();
+    developmentTokusatsuPreviewPlayedRef.current = false;
     developmentFinisherPreviewRef.current = readDevelopmentFinisherPreview();
+    cinematicEndsAtRef.current = 0;
     const generation = animationScheduler.begin("battle-init");
-    animationScheduler.frame("battle-init", () => {
+    animationScheduler.after("battle-init", 0, () => {
       setCinematic(developmentSummonPreviewRef.current ?? developmentFinisherPreviewRef.current);
       setShowImpact(false);
       setImpactTheme("generic");
@@ -1229,18 +1288,58 @@ export function NameArenaBattleStage({
     return () => animationScheduler.cancel("battle-init");
   }, [animationScheduler, battleRunId, clearFighterMotions, clearImpactTimers]);
 
+  useEffect(() => {
+    if (hasTokusatsuFighter) preloadTokusatsuCombatFxAssets();
+  }, [hasTokusatsuFighter]);
+
   const playCinematic = useCallback((next: Cinematic, duration: number) => {
-    const generation = animationScheduler.begin("cinematic");
-    stageFxSuspendedRef.current = true;
-    setShowImpact(false);
-    setCinematic(next);
-    animationScheduler.after("cinematic", prefersReducedMotion ? 80 : duration, () => {
-      setCinematic((current) => current === next ? null : current);
-    }, generation);
+    const effectiveDuration = prefersReducedMotion ? 80 : duration;
+    const launch = () => {
+      const generation = animationScheduler.begin("cinematic");
+      cinematicEndsAtRef.current = Date.now() + effectiveDuration;
+      stageFxSuspendedRef.current = true;
+      setShowImpact(false);
+      setCinematic(next);
+      animationScheduler.after("cinematic", effectiveDuration, () => {
+        cinematicEndsAtRef.current = 0;
+        setCinematic((current) => current === next ? null : current);
+      }, generation);
+    };
+    const queueDelay = cinematicEndsAtRef.current - Date.now();
+    if (queueDelay > 40) {
+      const queueGeneration = animationScheduler.begin("cinematic:queue");
+      animationScheduler.after("cinematic:queue", queueDelay + 60, launch, queueGeneration);
+      return;
+    }
+    animationScheduler.cancel("cinematic:queue");
+    launch();
   }, [animationScheduler, prefersReducedMotion]);
+
+  const queueAfterCinematics = useCallback((key: string, followup: () => void) => {
+    const scope = `cinematic-followup:${key}`;
+    const generation = animationScheduler.begin(scope);
+    const attempt = () => {
+      const remaining = cinematicEndsAtRef.current - Date.now();
+      if (stageFxSuspendedRef.current || document.hidden || remaining > 40) {
+        animationScheduler.after(scope, Math.max(120, remaining + 120), attempt, generation);
+        return;
+      }
+      animationScheduler.frame(scope, () => {
+        if (stageFxSuspendedRef.current || document.hidden) {
+          attempt();
+          return;
+        }
+        followup();
+        animationScheduler.after(scope, 2200, () => animationScheduler.release(scope), generation);
+      }, generation);
+    };
+    animationScheduler.after(scope, 120, attempt, generation);
+  }, [animationScheduler]);
 
   const stopCinematic = useCallback(() => {
     animationScheduler.cancel("cinematic");
+    animationScheduler.cancel("cinematic:queue");
+    cinematicEndsAtRef.current = 0;
     setCinematic(null);
   }, [animationScheduler]);
 
@@ -1276,6 +1375,7 @@ export function NameArenaBattleStage({
     beamsRef.current = [];
     tingCombatFxRef.current = [];
     gachaCombatFxRef.current = [];
+    tokusatsuCombatFxRef.current = [];
     clearImpactTimers();
     clearFighterMotions();
     animationScheduler.frame("suspension", () => setShowImpact(false), generation);
@@ -1297,18 +1397,44 @@ export function NameArenaBattleStage({
   const playCombatActorMotion = useCallback((
     cue: CombatEffectCue,
     actorId: string,
-    targetId?: string,
+    targetIds: string[],
   ) => {
-    if (cue.actorMotion === "stationary" || !targetId || prefersReducedMotion || stageFxSuspendedRef.current || document.hidden) return;
+    if (cue.actorMotion === "stationary" || targetIds.length === 0 || prefersReducedMotion || stageFxSuspendedRef.current || document.hidden) return;
     const actorNode = nodeRefs.current.get(actorId);
-    const targetNode = nodeRefs.current.get(targetId);
-    if (!actorNode || !targetNode || typeof actorNode.animate !== "function") return;
-    const plan = createCombatActorMotionPlan(
-      cue.actorMotion,
-      actorNode.getBoundingClientRect(),
-      targetNode.getBoundingClientRect(),
-    );
-    if (!plan) return;
+    const targetNodes = targetIds
+      .map((targetId) => nodeRefs.current.get(targetId))
+      .filter((node): node is HTMLButtonElement => Boolean(node));
+    if (!actorNode || targetNodes.length === 0 || typeof actorNode.animate !== "function") return;
+    const actorRect = actorNode.getBoundingClientRect();
+    const plans = targetNodes
+      .map((targetNode) => createCombatActorMotionPlan(cue.actorMotion, actorRect, targetNode.getBoundingClientRect()))
+      .filter((plan): plan is NonNullable<ReturnType<typeof createCombatActorMotionPlan>> => Boolean(plan));
+    if (plans.length === 0) return;
+
+    const frames = cue.actorMotion === "multi_melee_lunge" && plans.length > 1
+      ? [
+          { offset: 0, x: 0, y: 0 },
+          ...plans.flatMap((plan, index) => {
+            const segment = 0.72 / plans.length;
+            const arrive = 0.1 + index * segment + segment * 0.55;
+            return [
+              {
+                offset: Math.min(0.86, arrive),
+                x: plan.destination.x,
+                y: plan.destination.y,
+                easing: "cubic-bezier(0.08, 0.82, 0.16, 1)",
+              },
+              {
+                offset: Math.min(0.9, arrive + segment * 0.22),
+                x: plan.destination.x + 7,
+                y: plan.destination.y - 4,
+              },
+            ];
+          }),
+          { offset: 1, x: 0, y: 0, easing: "cubic-bezier(0.28, 0.02, 0.36, 1)" },
+        ]
+      : plans[0].frames;
+    const durationMs = plans[0].durationMs;
 
     const previous = fighterMotionAnimationsRef.current.get(actorId);
     if (previous) {
@@ -1320,12 +1446,12 @@ export function NameArenaBattleStage({
 
     actorNode.dataset.combatMotion = cue.actorMotion;
     const animation = actorNode.animate(
-      plan.frames.map((frame) => ({
+      frames.map((frame) => ({
         offset: frame.offset,
         translate: `${frame.x}px ${frame.y}px`,
         ...(frame.easing ? { easing: frame.easing } : {}),
       })),
-      { duration: plan.durationMs, easing: "linear", fill: "none" },
+      { duration: durationMs, easing: "linear", fill: "none" },
     );
     const runtime = { node: actorNode, animation };
     fighterMotionAnimationsRef.current.set(actorId, runtime);
@@ -1494,6 +1620,35 @@ export function NameArenaBattleStage({
     wakeFxLoopRef.current();
   }, [getNodeCenter, prefersReducedMotion]);
 
+  const spawnTokusatsuEffect = useCallback((
+    cue: TokusatsuCombatEffectCue,
+    sourceId: string,
+    effectTargetIds: string[],
+  ) => {
+    if (stageFxSuspendedRef.current || document.hidden) return;
+    const from = getNodeCenter(sourceId);
+    const arena = arenaRef.current;
+    if (!from || !arena) return;
+    const margin = Math.min(86, arena.clientWidth * 0.14, arena.clientHeight * 0.18);
+    const destinations = effectTargetIds
+      .map((targetId) => getNodeCenter(targetId))
+      .filter((point): point is { x: number; y: number } => Boolean(point))
+      .map((point) => ({
+        x: Math.max(margin, Math.min(arena.clientWidth - margin, point.x)),
+        y: Math.max(margin, Math.min(arena.clientHeight - margin, point.y)),
+      }));
+    const effects = createTokusatsuCombatFx(
+      cue,
+      from,
+      destinations,
+      ++combatFxSequenceRef.current,
+      prefersReducedMotion,
+    );
+    tokusatsuCombatFxRef.current.push(...effects);
+    keepNewest(tokusatsuCombatFxRef.current, MAX_CHARACTER_FX);
+    wakeFxLoopRef.current();
+  }, [getNodeCenter, prefersReducedMotion]);
+
   useEffect(() => {
     const previewSkill = developmentTingPreviewRef.current;
     if (!previewSkill || developmentTingPreviewPlayedRef.current) return;
@@ -1538,7 +1693,7 @@ export function NameArenaBattleStage({
     const generation = animationScheduler.begin("preview:ting");
     animationScheduler.after("preview:ting", prefersReducedMotion ? 0 : 220, () => {
       animationScheduler.frame("preview:ting", () => {
-        playCombatActorMotion(cue, previewActor.id, previewTarget.id);
+        playCombatActorMotion(cue, previewActor.id, [previewTarget.id]);
         if (cue.theme === "ting") spawnTingEffect(cue, previewActor.id, [previewTarget.id]);
         const timing = getCombatActorMotionTiming(cue.actorMotion, prefersReducedMotion);
         playCombatImpact(
@@ -1623,6 +1778,142 @@ export function NameArenaBattleStage({
   }, [animationScheduler, arenaSize.height, arenaSize.width, getNodeCenter, playCombatImpact, prefersReducedMotion, stageFighters]);
 
   useEffect(() => {
+    const preview = developmentTokusatsuPreviewRef.current;
+    if (!preview || developmentTokusatsuPreviewPlayedRef.current) return;
+    const arena = arenaRef.current;
+    if (
+      !arena ||
+      Math.abs(arena.clientWidth - arenaSize.width) > 2 ||
+      Math.abs(arena.clientHeight - arenaSize.height) > 2
+    ) return;
+    const previewActor = stageFighters.find((fighter) => fighter.isTokusatsu && !fighter.isDead);
+    const previewTargets = stageFighters.filter((fighter) => fighter.id !== previewActor?.id && !fighter.isDead).slice(0, 3);
+    if (!previewActor || previewTargets.length === 0 || !getNodeCenter(previewActor.id)) return;
+    const playPreviewAttack = (cue: TokusatsuCombatEffectCue, previewTargetIds: string[]) => {
+      clearFighterMotions();
+      tokusatsuCombatFxRef.current = [];
+      playCombatActorMotion(cue, previewActor.id, previewTargetIds);
+      spawnTokusatsuEffect(cue, previewActor.id, previewTargetIds);
+      if (cue.stageImpact) {
+        playCombatImpact(cue.impact, 820, getCombatActorMotionTiming(cue.actorMotion, prefersReducedMotion).impactDelayMs);
+      }
+    };
+
+    if (preview === "transform-phase2" || preview === "transform-phase3" || preview === "transform-phase3-finisher") {
+      developmentTokusatsuPreviewPlayedRef.current = true;
+      const generation = animationScheduler.begin("preview:tokusatsu");
+      const phaseThree = preview !== "transform-phase2";
+      const from: BattleFormIdentity = phaseThree
+        ? { jobKey: "MIRACLE_BUJIN", jobName: "奇迹武刃", icon: "🦗", phase: 2 }
+        : { jobKey: "TOKU_FAN", jobName: "特摄粉", icon: "🦔", phase: 1 };
+      const to: BattleFormIdentity = phaseThree
+        ? { jobKey: "MIRACLE_MONSTER_BUJIN", jobName: "奇迹怪兽武刃", icon: "🦖", phase: 3 }
+        : { jobKey: "MIRACLE_BUJIN", jobName: "奇迹武刃", icon: "🦗", phase: 2 };
+      const cinematicPreview = withTokusatsuTransformationArt({
+        kind: "transformation",
+        fighterId: previewActor.id,
+        name: previewActor.name,
+        kicker: "HENSHIN // EFFECT PREVIEW",
+        title: phaseThree ? "DUAL ON！GREAT！MONSTER！" : "KABOOM！奇迹武刃！",
+        from,
+        to,
+      });
+      animationScheduler.after("preview:tokusatsu", prefersReducedMotion ? 0 : 180, () => {
+        playCinematic(cinematicPreview, 3600);
+      }, generation);
+      if (preview === "transform-phase3-finisher") {
+        const previewTarget = previewTargets[0];
+        const previewTargetIds = [previewTarget.id];
+        const finisherEvent: ArenaBattleLogEntry = {
+          type: "crit",
+          text: `${previewActor.name} 发动 GREAT MONSTER VICTORY。`,
+          skillId: "great_monster_victory",
+          skillName: "GREAT MONSTER VICTORY",
+          presentation: "finisher",
+          actorId: previewActor.id,
+          targetIds: previewTargetIds,
+          visualCue: {
+            kind: "combat_fx",
+            effectId: "toku_great_monster_victory",
+            sourceId: previewActor.id,
+            targetIds: previewTargetIds,
+          },
+        };
+        const finisherCue = resolveCombatEffect(finisherEvent, previewActor);
+        if (finisherCue?.theme === "tokusatsu") {
+          animationScheduler.after("preview:tokusatsu", prefersReducedMotion ? 20 : 420, () => {
+            playCinematic({
+              kind: "finisher",
+              fighterId: previewActor.id,
+              name: previewActor.name,
+              kicker: "FINISHER // TRANSFORMATION FOLLOW-UP",
+              title: "GREAT MONSTER VICTORY",
+              image: TOKUSATSU_ART.miracleMonsterBujin,
+              accent: "#ffd44c",
+              theme: "tokusatsu_monster",
+              targetName: previewTarget.name,
+            }, 2600);
+            queueAfterCinematics("preview:transform-phase3-finisher", () => playPreviewAttack(finisherCue, previewTargetIds));
+          }, generation);
+        }
+      }
+      return;
+    }
+
+    const multiTargetEffects = new Set<TokusatsuCombatEffectId>([
+      "toku_black_mist_wave",
+      "toku_monster_combo",
+      "toku_monster_roar",
+      "toku_rainbow_fever",
+    ]);
+    const selectedTargets = multiTargetEffects.has(preview) ? previewTargets : previewTargets.slice(0, 1);
+    if (selectedTargets.some((target) => !getNodeCenter(target.id))) return;
+    developmentTokusatsuPreviewPlayedRef.current = true;
+    const generation = animationScheduler.begin("preview:tokusatsu");
+    const presentation = preview === "toku_great_monster_victory" || preview === "toku_rainbow_fever" ? "finisher" : "skill";
+    const previewEvent: ArenaBattleLogEntry = {
+      type: presentation === "finisher" ? "crit" : "skill",
+      text: `${previewActor.name} 触发刺猬人开发特效 ${preview}。`,
+      skillId: "tokusatsu_effect_preview",
+      skillName: preview,
+      presentation,
+      actorId: previewActor.id,
+      targetIds: selectedTargets.map((target) => target.id),
+      visualCue: {
+        kind: "combat_fx",
+        effectId: preview,
+        sourceId: previewActor.id,
+        targetIds: selectedTargets.map((target) => target.id),
+      },
+    };
+    const cue = resolveCombatEffect(previewEvent, previewActor);
+    if (!cue || cue.theme !== "tokusatsu") return;
+
+    const previewTargetIds = selectedTargets.map((target) => target.id);
+    if (presentation === "finisher") {
+      animationScheduler.after("preview:tokusatsu", prefersReducedMotion ? 20 : 220, () => {
+        playCinematic({
+          kind: "finisher",
+          fighterId: previewActor.id,
+          name: previewActor.name,
+          kicker: "FINISHER // EFFECT PREVIEW",
+          title: preview === "toku_rainbow_fever" ? "彩虹狂热" : "GREAT MONSTER VICTORY",
+          image: TOKUSATSU_ART.miracleMonsterBujin,
+          accent: preview === "toku_rainbow_fever" ? "#57ddff" : "#ffd44c",
+          theme: preview === "toku_rainbow_fever" ? "tokusatsu_rainbow" : "tokusatsu_monster",
+          targetName: selectedTargets[0]?.name,
+        }, 2600);
+        queueAfterCinematics(`preview:${preview}`, () => playPreviewAttack(cue, previewTargetIds));
+      }, generation);
+    } else {
+      animationScheduler.after("preview:tokusatsu", prefersReducedMotion ? 0 : 220, () => {
+        animationScheduler.frame("preview:tokusatsu", () => playPreviewAttack(cue, previewTargetIds), generation);
+      }, generation);
+    }
+    return;
+  }, [animationScheduler, arenaSize.height, arenaSize.width, battleRunId, clearFighterMotions, getNodeCenter, playCinematic, playCombatActorMotion, playCombatImpact, prefersReducedMotion, queueAfterCinematics, spawnTokusatsuEffect, stageFighters]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     const arena = arenaRef.current;
     if (!canvas || !arena) return;
@@ -1635,7 +1926,8 @@ export function NameArenaBattleStage({
       particlesRef.current.length > 0 ||
       beamsRef.current.length > 0 ||
       tingCombatFxRef.current.length > 0 ||
-      gachaCombatFxRef.current.length > 0;
+      gachaCombatFxRef.current.length > 0 ||
+      tokusatsuCombatFxRef.current.length > 0;
 
     const clearCanvas = () => {
       context.clearRect(0, 0, arena.clientWidth, arena.clientHeight);
@@ -1686,6 +1978,13 @@ export function NameArenaBattleStage({
 
       gachaCombatFxRef.current = gachaCombatFxRef.current.filter((effect) =>
         drawGachaCombatFx(context, effect, delta, {
+          width: arena.clientWidth,
+          height: arena.clientHeight,
+        }),
+      );
+
+      tokusatsuCombatFxRef.current = tokusatsuCombatFxRef.current.filter((effect) =>
+        drawTokusatsuCombatFx(context, effect, delta, {
           width: arena.clientWidth,
           height: arena.clientHeight,
         }),
@@ -1818,7 +2117,7 @@ export function NameArenaBattleStage({
   }, [animationScheduler, fighterById, fighters, prefersReducedMotion, runAfterSelfDestructReturn, spawnBurst]);
 
   useEffect(() => {
-    if (!activeLog || mobileView === "logs" || developmentSummonPreviewRef.current || developmentTingPreviewRef.current || developmentGachaPreviewRef.current || developmentFinisherPreviewRef.current) return;
+    if (!activeLog || mobileView === "logs" || developmentSummonPreviewRef.current || developmentTingPreviewRef.current || developmentGachaPreviewRef.current || developmentTokusatsuPreviewRef.current || developmentFinisherPreviewRef.current) return;
     const eventKey = activeLog.id ?? `event-${activeLog.sequence ?? battleTurn}`;
     if (lastProcessedVisualEventKeyRef.current === eventKey) return;
     lastProcessedVisualEventKeyRef.current = eventKey;
@@ -1841,6 +2140,7 @@ export function NameArenaBattleStage({
       particlesRef.current = [];
       tingCombatFxRef.current = [];
       gachaCombatFxRef.current = [];
+      tokusatsuCombatFxRef.current = [];
       clearImpactTimers();
       animationScheduler.frame("action", () => setShowImpact(false), actionGeneration);
     }
@@ -1868,16 +2168,18 @@ export function NameArenaBattleStage({
     if (shouldPlayActionEffect && effectSource && !animatedAttackActionKeysRef.current.has(effectPlaybackKey)) {
       animatedAttackActionKeysRef.current.add(effectPlaybackKey);
       keepNewestSet(animatedAttackActionKeysRef.current, 256);
-      animationScheduler.frame("action", () => {
+      const playActionVisual = () => {
         if (combatEffect) {
-          playCombatActorMotion(combatEffect, effectSource.id, effectTargetIds[0]);
+          playCombatActorMotion(combatEffect, effectSource.id, effectTargetIds);
           if (combatEffect.theme === "ting") {
             spawnTingEffect(combatEffect, effectSource.id, effectTargetIds);
-          } else {
+          } else if (combatEffect.theme === "gacha") {
             spawnGachaEffect(combatEffect, effectSource.id, effectTargetIds, {
               label: explicitCombatCue?.label,
               count: explicitCombatCue?.count,
             });
+          } else {
+            spawnTokusatsuEffect(combatEffect, effectSource.id, effectTargetIds);
           }
         } else {
           effectTargetIds.forEach((targetId) => {
@@ -1891,6 +2193,8 @@ export function NameArenaBattleStage({
             ? 780
             : combatEffect?.theme === "gacha"
               ? 680
+              : combatEffect?.theme === "tokusatsu"
+                ? 820
               : 460;
         const impactDelay = combatEffect
           ? getCombatActorMotionTiming(combatEffect.actorMotion, prefersReducedMotion).impactDelayMs
@@ -1898,7 +2202,16 @@ export function NameArenaBattleStage({
         if (!combatEffect || combatEffect.stageImpact) {
           playCombatImpact(combatEffect?.impact ?? "generic", impactDuration, impactDelay);
         }
-      }, actionGeneration);
+      };
+      if (combatEffect?.theme === "tokusatsu" && activeLog.presentation === "finisher") {
+        queueAfterCinematics(effectPlaybackKey, () => {
+          clearFighterMotions();
+          tokusatsuCombatFxRef.current = [];
+          playActionVisual();
+        });
+      } else {
+        animationScheduler.frame("action", playActionVisual, actionGeneration);
+      }
     } else if (activeLog.type === "heal" || activeLog.type === "buff") {
       const beneficiary = namedTargets[0] ?? effectSource?.id ?? currentActor?.id;
       if (beneficiary) {
@@ -1915,7 +2228,7 @@ export function NameArenaBattleStage({
     const visualCue = activeLog.visualCue;
     if (visualCue?.kind === "transformation") {
       const transformed = fighterById.get(visualCue.fighterId);
-      const nextCinematic: TransformationCinematic = {
+      const nextCinematic = withTokusatsuTransformationArt({
         kind: "transformation",
         fighterId: visualCue.fighterId,
         name: visualCue.fighterName,
@@ -1923,8 +2236,8 @@ export function NameArenaBattleStage({
         title: getTransformationTitle(activeLog, visualCue.to),
         from: visualCue.from,
         to: visualCue.to,
-      };
-      animationScheduler.frame("action", () => playCinematic(nextCinematic, 3200), actionGeneration);
+      });
+      animationScheduler.frame("action", () => playCinematic(nextCinematic, nextCinematic.theme === "tokusatsu" ? 3600 : 3200), actionGeneration);
       if (transformed) animationScheduler.frame("action", () => spawnBurst(transformed.id, getFighterAccent(transformed), 86, 7), actionGeneration);
     } else if (visualCue?.kind === "summon_card") {
       animationScheduler.frame("action", () => playCinematic({ ...visualCue }, visualCue.summonKind === "reveal" ? 2800 : 4400), actionGeneration);
@@ -1942,6 +2255,8 @@ export function NameArenaBattleStage({
           image: getStageFinisherImage(finisher),
           theme: combatEffect?.theme === "ting"
             ? "ting_blood"
+            : combatEffect?.theme === "tokusatsu"
+              ? combatEffect.motion === "rainbow_fever" ? "tokusatsu_rainbow" : "tokusatsu_monster"
             : combatEffect?.impact === "gacha_dragon"
               ? "gacha_dragon"
               : combatEffect?.impact === "gacha_solar"
@@ -1951,9 +2266,9 @@ export function NameArenaBattleStage({
                   : combatEffect?.theme === "gacha"
                     ? "gacha_summon"
                     : undefined,
-          targetName: targetIds[0] ? fighterById.get(targetIds[0])?.name : undefined,
+          targetName: effectTargetIds[0] ? fighterById.get(effectTargetIds[0])?.name : undefined,
         };
-        animationScheduler.frame("action", () => playCinematic(nextCinematic, nextCinematic.theme ? 2100 : 1900), actionGeneration);
+        animationScheduler.frame("action", () => playCinematic(nextCinematic, nextCinematic.theme?.startsWith("tokusatsu_") ? 2600 : nextCinematic.theme ? 2100 : 1900), actionGeneration);
       }
     }
 
@@ -1964,7 +2279,7 @@ export function NameArenaBattleStage({
         setIsGlitching(false);
       }, glitchGeneration);
     }
-  }, [activeLog, actor, animationScheduler, battleTurn, clearFighterMotions, clearImpactTimers, fighterById, fighters, mobileView, playCinematic, playCombatActorMotion, playCombatImpact, prefersReducedMotion, runAfterSelfDestructReturn, spawnBeam, spawnBurst, spawnGachaEffect, spawnTingEffect, targetIds]);
+  }, [activeLog, actor, animationScheduler, battleTurn, clearFighterMotions, clearImpactTimers, fighterById, fighters, mobileView, playCinematic, playCombatActorMotion, playCombatImpact, prefersReducedMotion, queueAfterCinematics, runAfterSelfDestructReturn, spawnBeam, spawnBurst, spawnGachaEffect, spawnTingEffect, spawnTokusatsuEffect, targetIds]);
 
   useEffect(() => {
     if (!isAutoScroll) return;
@@ -2067,6 +2382,25 @@ export function NameArenaBattleStage({
                 <i /><i /><i /><i /><i /><i />
               </div>
             ) : null}
+            {cinematic.theme?.startsWith("tokusatsu_") ? (
+              <div className={styles.tokusatsuFinisherFx} data-finisher-kind={cinematic.theme} aria-hidden="true">
+                {cinematic.theme === "tokusatsu_rainbow" ? (
+                  <>
+                    <span className={styles.tokusatsuFinisherBelt}>
+                      <Image src={TOKUSATSU_ART.rainbowBelt} alt="" fill sizes="26vw" unoptimized />
+                    </span>
+                    <span className={styles.tokusatsuFinisherTrain}>
+                      <Image src={TOKUSATSU_ART.steamLiner} alt="" fill sizes="46vw" unoptimized />
+                    </span>
+                  </>
+                ) : (
+                  <span className={styles.tokusatsuFinisherGlove}>
+                    <Image src={TOKUSATSU_ART.monsterGlove} alt="" fill sizes="32vw" unoptimized />
+                  </span>
+                )}
+                <i /><i /><i /><i /><i /><i />
+              </div>
+            ) : null}
             <div className={styles.cinematicScan} />
             <div className={`${styles.cinematicArt} ${cinematic.image ? "" : styles.cinematicEmblem}`} style={cinematic.image ? { backgroundImage: `url(${cinematic.image})` } : undefined}>
               {!cinematic.image ? fighterById.get(cinematic.fighterId ?? "")?.jobData?.icon ?? "名" : null}
@@ -2084,10 +2418,31 @@ export function NameArenaBattleStage({
         {cinematic?.kind === "transformation" ? (
           <div
             className={styles.transformation}
+            data-transformation-theme={cinematic.theme ?? "default"}
             style={{ "--transform-accent": getFighterAccent(fighterById.get(cinematic.fighterId ?? "")) } as CSSProperties}
             aria-live="assertive"
           >
             <div className={styles.transformationGrid} aria-hidden="true" />
+            {cinematic.theme === "tokusatsu" ? (
+              <div className={styles.tokusatsuTransformationFx} aria-hidden="true">
+                {cinematic.bodyImage ? (
+                  <span className={styles.tokusatsuTransformBody}>
+                    <Image src={cinematic.bodyImage} alt="" fill sizes="52vw" unoptimized />
+                  </span>
+                ) : null}
+                {cinematic.beltImage ? (
+                  <span className={styles.tokusatsuTransformBelt}>
+                    <Image src={cinematic.beltImage} alt="" fill sizes="28vw" unoptimized />
+                  </span>
+                ) : null}
+                {cinematic.propImage ? (
+                  <span className={styles.tokusatsuTransformProp}>
+                    <Image src={cinematic.propImage} alt="" fill sizes="24vw" unoptimized />
+                  </span>
+                ) : null}
+                <i /><i /><i /><i /><i /><i />
+              </div>
+            ) : null}
             <div className={styles.transformationHeader}>
               <span>{cinematic.kicker}</span>
               <b>职业形态重构</b>
@@ -2096,7 +2451,9 @@ export function NameArenaBattleStage({
             <div className={styles.formTrack}>
               <div className={`${styles.formCard} ${styles.formBefore}`}>
                 <span>FROM // {getPhaseName(cinematic.from.phase)}</span>
-                <i>{cinematic.from.icon}</i>
+                <i className={cinematic.fromImage ? styles.formPortrait : ""}>
+                  {cinematic.fromImage ? <Image src={cinematic.fromImage} alt="" fill sizes="104px" unoptimized /> : cinematic.from.icon}
+                </i>
                 <strong>{cinematic.from.jobName}</strong>
                 <small>{cinematic.from.jobKey}</small>
               </div>
@@ -2107,7 +2464,9 @@ export function NameArenaBattleStage({
               </div>
               <div className={`${styles.formCard} ${styles.formAfter}`}>
                 <span>TO // {getPhaseName(cinematic.to.phase)}</span>
-                <i>{cinematic.to.icon}</i>
+                <i className={cinematic.toImage ? styles.formPortrait : ""}>
+                  {cinematic.toImage ? <Image src={cinematic.toImage} alt="" fill sizes="104px" unoptimized /> : cinematic.to.icon}
+                </i>
                 <strong>{cinematic.to.jobName}</strong>
                 <small>{cinematic.to.jobKey}</small>
               </div>

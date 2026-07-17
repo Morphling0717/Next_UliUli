@@ -17,6 +17,7 @@ import {
 import {
   grantStatus,
 } from './defenseStatus';
+import { tryMomoBanishBlueEyes } from './momoMechanics';
 
 export interface SummonResolutionRuntime {
   fighters: Fighter[];
@@ -77,11 +78,11 @@ export function executeSummonSkill(
     }
     const fusionMaterials = [blueEyes, ...ordinaryMaterials];
     summonMaterials = fusionMaterials.map((fighter) => fighter.name);
+    runtime.log('death', `💀 融合！${summonMaterials.join('、')} 化为了召唤 青眼究极龙 的融合素材！`);
     fusionMaterials.forEach((victim) => {
       runtime.markDefeated(victim, { awardKill: false });
       victim.isDead = true;
     });
-    runtime.log('death', `💀 融合！${summonMaterials.join('、')} 化为了召唤 青眼究极龙 的融合素材！`);
   }
 
   if ((skill.tributes ?? 0) > 0) {
@@ -109,11 +110,11 @@ export function executeSummonSkill(
     }
     const sacrificed = potentialTributes.sort(() => 0.5 - Math.random()).slice(0, skill.tributes);
     summonMaterials = sacrificed.map((fighter) => fighter.name);
+    runtime.log('death', `💀 献祭！${sacrificed.map((fighter) => fighter.name).join('、')} 化为了召唤 ${skill.summonName} 的祭品！`);
     sacrificed.forEach((victim) => {
       runtime.markDefeated(victim, { awardKill: false });
       victim.isDead = true;
     });
-    runtime.log('death', `💀 献祭！${sacrificed.map((fighter) => fighter.name).join('、')} 化为了召唤 ${skill.summonName} 的祭品！`);
   }
   if (skill.summonName === '小汀(傀儡)') {
     if (!user.hasSpinalSword || !user.status.some((status) => status.type === 'SPINAL_SWORD')) {
@@ -202,4 +203,5 @@ export function executeSummonSkill(
   if (skill.summonName === '翼神龙') {
     runtime.log('buff', `☀️ 【太阳神降临】${summonName} 入场即获得 1 层太阳神力、法术抵挡、神性金身与再生，并点燃一次【神不死鸟】复燃！`);
   }
+  tryMomoBanishBlueEyes(runtime, summon, user);
 }

@@ -34,13 +34,18 @@ export function calculateDamage(
 ): DamageResult {
   let dmg = 0;
   let logType = usedSkillId ? 'skill' : 'attack';
+  const usesCustomFormula = !!skill.damageFormula || !!skill.noDamage;
   const sexyTrueDamage = user.status.some((status) => status.type === 'STYLE_SEXY' || status.type === 'STYLE_EMPEROR');
   const ignoreDefOverride = !!skill.ignoreDef || sexyTrueDamage;
   let weakOutputMultiplier = user.status.some((status) => status.type === 'WEAK') ? 0.5 : 1;
   if (user.status.some((status) => status.type === 'YUZU_ATK_DOWN')) weakOutputMultiplier *= 0.78;
   if (user.status.some((status) => status.type === 'WT_BREECH_DAMAGED')) weakOutputMultiplier *= 0.62;
 
-  if (skill.tag === runtime.skillTags.PHYS || skill.tag === runtime.skillTags.SPECIAL) {
+  if (skill.noDamage) {
+    dmg = 0;
+  } else if (skill.damageFormula) {
+    dmg = Math.max(0, Math.floor(skill.damageFormula(user, target, runtime.fighters)));
+  } else if (skill.tag === runtime.skillTags.PHYS || skill.tag === runtime.skillTags.SPECIAL) {
     const atk = user.atk *
       weakOutputMultiplier *
       (user.status.some((status) => status.type === 'RAGE') ? 1.5 : 1) *
@@ -56,9 +61,7 @@ export function calculateDamage(
     if (target.status.some((status) => status.type === 'WT_ERA')) def = Math.floor(def * 2.0);
     dmg = Math.max(1, Math.floor((atk * (1 + Math.random() * 0.2) - def * 0.5) * (skill.mult ?? 1)));
     if (target.status.some((status) => status.type === 'LIQUID_BODY')) dmg = Math.floor(dmg * 0.5);
-  }
-
-  if (skill.tag === runtime.skillTags.MAG || skill.tag === runtime.skillTags.DEBUFF) {
+  } else if (skill.tag === runtime.skillTags.MAG || skill.tag === runtime.skillTags.DEBUFF) {
     let res = (ignoreDefOverride || sexyTrueDamage) ? 0 : (user.jobData?.name === '欧皇' ? Math.floor(target.res * 0.5) : target.res);
     if (target.status.some((status) => status.type === 'BABY_WEAKNESS_MARK')) res = Math.floor(res * 0.62);
     if (target.status.some((status) => status.type === 'VALO_VIPER_DECAY')) res = Math.floor(res * 0.5);
@@ -72,7 +75,7 @@ export function calculateDamage(
     }
   }
 
-  if (user.job === 'GOD_SLIME') {
+  if (!usesCustomFormula && user.job === 'GOD_SLIME') {
     const sonBattery = runtime.fighters.find((fighter) =>
       fighter.isSon &&
       runtime.isActiveCombatant(fighter) &&
@@ -87,7 +90,8 @@ export function calculateDamage(
   const charmedByTarget = user.status.some((status) =>
     status.type === 'CHARMED' && status.applierId === target.id,
   );
-  const isCrit = !charmedByTarget && (
+  const canCrit = !skill.cannotCrit && !skill.noDamage;
+  const isCrit = canCrit && !charmedByTarget && (
     user.status.some((status) => status.type === 'AIM') ||
     (user.isWT && target.status.some((status) => status.type === 'WT_SCOUTED')) ||
     target.status.some((status) => status.type === 'NEURAL_THEFT_DEBUFF') ||
@@ -122,7 +126,7 @@ export function calculateDamage(
     const minDamageBase = user.atk * weakOutputMultiplier * (skill.mult ?? 1) * (skill.hits ?? 1);
     dmg = Math.max(dmg, Math.floor(minDamageBase * skill.minDamagePct));
   }
-  const fatigueBonus = runtime.getFatigueDamageBonus();
+  const fatigueBonus = usesCustomFormula ? 0 : runtime.getFatigueDamageBonus();
   if (fatigueBonus > 0 && dmg > 0) dmg += fatigueBonus;
 
   return { dmg, logType, ignoreDefOverride, sexyTrueDamage };

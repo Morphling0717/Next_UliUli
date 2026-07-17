@@ -203,12 +203,12 @@ export const gamerHook: CharacterHook = {
 
     const apmBeforeTransform = fighter.apm ?? 0;
     transform('ALL_PLATFORM_CHAMPION', `🎮 ${fighter.name} 血线跌破半场线，但操作没有断！${transformBonusText(apmBeforeTransform)}转职为【${ALL_PLATFORM_CHAMPION.name}】！`, () => {
-      fighter.maxHp = Math.max(3650, Math.min(4125, Math.floor(fighter.maxHp * 3.38)));
+      fighter.maxHp = Math.max(4300, Math.min(4900, Math.floor(fighter.maxHp * 3.98)));
       fighter.currentHp = fighter.maxHp;
       fighter.atk = scaleStat(fighter.atk, 4.64, 262);
       fighter.mag = scaleStat(fighter.mag, 4.64, 262);
-      fighter.def = scaleStat(fighter.def, 4.26, 203);
-      fighter.res = scaleStat(fighter.res, 4.26, 203);
+      fighter.def = scaleStat(fighter.def, 5.0, 240);
+      fighter.res = scaleStat(fighter.res, 5.0, 240);
       fighter.spd = scaleStat(fighter.spd, 4.38, 203);
       fighter.agl = scaleStat(fighter.agl, 4.38, 203);
       fighter.wis = scaleStat(fighter.wis, 3.9, 230);
@@ -219,6 +219,7 @@ export const gamerHook: CharacterHook = {
       fighter.gamerClutchWindow = Math.max(fighter.gamerClutchWindow ?? 0, 2);
       fighter.gamerInstantActionQueued = true;
       fighter.hasUsedGamerTransformAction = true;
+      fighter.hasUsedGamerContinue = false;
 
       fighter.status = fighter.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
       refreshStatus(fighter, 'BKB', 1, 'gamer_clutch_focus');

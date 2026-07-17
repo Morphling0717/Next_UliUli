@@ -21,12 +21,12 @@ export const gachaHook: CharacterHook = {
     const ordinarySummonCount = ownSummons.filter((fighter) => !fighter.isAdvancedSummon).length;
     const luck = actor.gachaLuck ?? 0;
     if (luck >= 3) return 'destiny_draw';
-    if (ownSummons.length === 0 && Math.random() < 0.77) return 'destiny_draw';
-    if (ordinarySummonCount >= 2 && Math.random() < 0.49) return 'destiny_draw';
-    if (actor.hpPct <= 0.45 && Math.random() < 0.65) return 'destiny_draw';
+    if (ownSummons.length === 0 && Math.random() < 0.68) return 'destiny_draw';
+    if (ordinarySummonCount >= 2 && Math.random() < 0.4) return 'destiny_draw';
+    if (actor.hpPct <= 0.45 && Math.random() < 0.6) return 'destiny_draw';
 
     const hasSummonLifesteal = actor.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS);
-    if (ownSummons.length > 0 && !hasSummonLifesteal && Math.random() < 0.53) return 'destiny_draw';
+    if (ownSummons.length > 0 && !hasSummonLifesteal && Math.random() < 0.46) return 'destiny_draw';
 
     return null;
   },
@@ -36,7 +36,7 @@ export const gachaHook: CharacterHook = {
     if (!fighter.isGacha || !LUCK_EMPEROR) return false;
 
     transform('LUCK_EMPEROR', `👑 ${fighter.name} 怒了！觉醒欧皇血统！变身——【${LUCK_EMPEROR.name}】！`, () => {
-      fighter.maxHp = Math.max(2500, Math.min(3000, Math.floor(fighter.maxHp * 1.8)));
+      fighter.maxHp = Math.max(2600, Math.min(3100, Math.floor(fighter.maxHp * 1.88)));
       fighter.currentHp = fighter.maxHp;
       fighter.atk *= 2.0;
       fighter.mag *= 3.0;

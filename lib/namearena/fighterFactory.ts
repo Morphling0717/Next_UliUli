@@ -21,6 +21,7 @@ function resolveSpecialJobKey(cleanName: string): string | null {
   if (cleanName === '表情') return 'EMOTE_MAHORAGA';
   if (cleanName === '柚子') return 'YUZU_MIRROR_PARENT';
   if (cleanName === '鸮' || cleanName === '雾隐罅中鸮') return 'OWL_HEAVEN_AVATAR';
+  if (cleanName === '萌月沫沫' || cleanName === '沫沫') return 'MOMO_BUBBLE_GOD';
   return null;
 }
 
@@ -42,10 +43,13 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
   const teamName = parts.length > 1 ? parts[1]?.trim() || undefined : undefined;
   if (!cleanName) return null;
 
-  const seed = namerenaCore.stringToSeed(trimmedInput);
+  const specialJobKey = resolveSpecialJobKey(cleanName);
+  const canonicalName = specialJobKey === 'MOMO_BUBBLE_GOD' ? '萌月沫沫' : cleanName;
+  const canonicalInput = teamName ? `${canonicalName}@${teamName}` : canonicalName;
+  const seed = namerenaCore.stringToSeed(specialJobKey === 'MOMO_BUBBLE_GOD' ? canonicalInput : trimmedInput);
   const rng = new namerenaCore.SeededRNG(seed);
   const jobRng = teamName ? new namerenaCore.SeededRNG(namerenaCore.stringToSeed(teamName)) : rng;
-  const resolvedJobKey = resolveSpecialJobKey(cleanName) ?? resolveRandomJobKey(rng, jobRng);
+  const resolvedJobKey = specialJobKey ?? resolveRandomJobKey(rng, jobRng);
   const jobMap = namerenaJobs as Partial<Record<string, JobDefinition>>;
   const job = jobMap[resolvedJobKey] ?? jobMap.WARRIOR;
   if (!job) return null;
@@ -54,6 +58,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
   const isEmote = resolvedJobKey === 'EMOTE_MAHORAGA';
   const isYuzu = resolvedJobKey === 'YUZU_MIRROR_PARENT';
   const isOwl = resolvedJobKey === 'OWL_HEAVEN_AVATAR';
+  const isMomo = resolvedJobKey === 'MOMO_BUBBLE_GOD';
   const baseHp = rng.nextInt(200, 300);
   const hp = isEmote ? 1 : Math.floor(baseHp * job.hp * (isMorphling ? 0.8 : 1.0));
   const stats = STAT_KEYS.reduce((acc, key) => {
@@ -64,8 +69,8 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
 
   return {
     id: namerenaCore.generateUUID ? namerenaCore.generateUUID() : `id-${Math.random()}`,
-    name: cleanName,
-    displayName: trimmedInput,
+    name: canonicalName,
+    displayName: specialJobKey === 'MOMO_BUBBLE_GOD' ? canonicalInput : trimmedInput,
     teamId: teamName,
     job: resolvedJobKey,
     jobData: cloneJobDefinition(job),
@@ -92,6 +97,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     isEmote,
     isYuzu,
     isOwl,
+    isMomo,
     transformed: false,
     resurrected: false,
     apm: 0,
@@ -107,6 +113,7 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
     hasUsedGamerWorldStage: false,
     hasUsedGamerChampionCombo: false,
     hasUsedGamerTransformAction: false,
+    hasUsedGamerContinue: false,
     gachaLuck: 0,
     gachaPityPower: 0,
     gachaTingGuardTrapReady: false,
@@ -172,6 +179,15 @@ export function generateNameArenaFighter(rawInputName: string): Fighter | null {
       warFormStartedTurn: 0,
       heavenStacks: 0,
       sweepUsed: false,
+    } : undefined,
+    momoState: isMomo ? {
+      phase: 1,
+      teamMode: 'uninitialized',
+      riderKickCount: 0,
+      waterDaughter: false,
+      partnerSelectionCount: 0,
+      originalTeamIds: {},
+      assignedMemberIds: [],
     } : undefined,
     hasTriggeredSlacking: false,
     isActing: false,

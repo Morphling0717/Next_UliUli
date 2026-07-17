@@ -105,7 +105,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         if ((ctx.target.status ?? []).some((s) => s.type === 'ETHEREAL')) finalDmg = Math.floor(finalDmg * 2.0);
         const damageOptions: DamageApplicationOptions = { actionName };
         const actualDmg = ctx.applyDamage(ctx.target, finalDmg, 'skill', false, ctx.user, damageOptions);
-        return { actualDmg, redirected: !!(damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) };
+        return { actualDmg, redirected: !!(damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) };
       };
 
       if (roll.type === '114514') {
@@ -200,8 +200,12 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         } else {
           ctx.log('skill', `🧮 无休加班压垮 ${ctx.target.name}，实际造成 ${dmg} 点魔法伤害！`);
           ctx.flushDeferredDamageEvents?.();
-          const burnApplied = isActiveCombatant(ctx.target) && ctx.applyStatus(ctx.target, 'BURN', 3);
-          const slowApplied = isActiveCombatant(ctx.target) && ctx.applyStatus(ctx.target, 'YUZU_SLOW', 3);
+          const burnApplied = isActiveCombatant(ctx.target) &&
+            ctx.applyStatus(ctx.target, 'BURN', 3) &&
+            isActiveCombatant(ctx.target);
+          const slowApplied = isActiveCombatant(ctx.target) &&
+            ctx.applyStatus(ctx.target, 'YUZU_SLOW', 3) &&
+            isActiveCombatant(ctx.target);
           const appliedEffects = [burnApplied ? '3 回合灼烧' : '', slowApplied ? '3 回合减速' : ''].filter(Boolean);
           if (appliedEffects.length > 0) {
             ctx.log('debuff', `🕘 【无休加班】${ctx.target.name} 被附加${appliedEffects.join('与')}！`);
@@ -428,7 +432,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((s) => s.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '扩音处刑' };
         const actualDmg = ctx.applyDamage(e, dmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
         if (damageOptions.targetDefeatedDuringDamage || e.isDead || e.isDeadAnnounced) {
           ctx.flushDeferredDamageEvents?.();
           continue;

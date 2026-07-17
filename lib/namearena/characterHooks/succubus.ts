@@ -17,7 +17,7 @@ export const succubusHook: CharacterHook = {
       skill !== 'chimera_install' &&
       skill !== 'chimera_strike',
     );
-    const installChance = plugCount <= 2 ? 0.791 : (plugCount <= 5 ? 0.58 : 0.43);
+    const installChance = plugCount <= 2 ? 0.71 : (plugCount <= 5 ? 0.56 : 0.41);
     if (Math.random() >= installChance) {
       if (pluginSkills.length > 0 && Math.random() < 0.802) {
         return pluginSkills[Math.floor(Math.random() * pluginSkills.length)];
@@ -32,7 +32,7 @@ export const succubusHook: CharacterHook = {
     if (!fighter.isSuccubus || !CHIMERA) return false;
 
     transform('CHIMERA', `🧬 ${fighter.name} 解除了限制，肉体开始重组... 变身为【${CHIMERA.name}】！各项数值巨幅提升！`, () => {
-      fighter.maxHp = Math.max(2525, Math.min(3025, Math.floor(fighter.maxHp * 1.51)));
+      fighter.maxHp = Math.max(3350, Math.min(3850, Math.floor(fighter.maxHp * 1.79)));
       fighter.currentHp = fighter.maxHp;
       fighter.atk = Math.floor(fighter.atk * 2.51);
       fighter.def = Math.floor(fighter.def * 2.02);
@@ -40,7 +40,7 @@ export const succubusHook: CharacterHook = {
       fighter.res = Math.floor(fighter.res * 2.02);
       fighter.wis = Math.floor(fighter.wis * 2.0);
       fighter.agl = Math.floor(fighter.agl * 1.5);
-      fighter.spd = 121;
+      fighter.spd = Math.max(145, Math.floor(fighter.spd * 1.18));
       fighter.hasUltimateEvolved = false;
       fighter.chimeraMilestoneLevel = 0;
       fighter.chimeraInstantActionQueued = false;

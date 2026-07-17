@@ -1,5 +1,6 @@
 import type { BattleEvent, Fighter } from './types';
 import { getSummonCardArt } from './summonCardArt';
+import { getTokusatsuFullBodyForJob, getTokusatsuStageAvatar } from './tokusatsuArt';
 
 export type StagePosition = { x: number; y: number };
 
@@ -47,6 +48,8 @@ export function shouldRenderFighterOnStage(fighter: Fighter): boolean {
 
 export function getStageFighterImage(fighter?: Fighter): string | undefined {
   if (fighter?.isSigua) return '/Model.webp';
+  const tokusatsuAvatar = getTokusatsuStageAvatar(fighter);
+  if (tokusatsuAvatar) return tokusatsuAvatar;
   if (fighter?.isSummon) {
     return getSummonCardArt(fighter.summonBaseName ?? fighter.name).avatarPath;
   }
@@ -54,6 +57,9 @@ export function getStageFighterImage(fighter?: Fighter): string | undefined {
 }
 
 export function getStageFinisherImage(fighter?: Fighter): string | undefined {
+  if (fighter?.isTokusatsu) {
+    return getTokusatsuFullBodyForJob(fighter.job) ?? getTokusatsuStageAvatar(fighter);
+  }
   if (fighter?.isSummon && fighter.isAdvancedSummon) {
     const art = getSummonCardArt(fighter.summonBaseName ?? fighter.name);
     return art.cutinPath ?? art.avatarPath;

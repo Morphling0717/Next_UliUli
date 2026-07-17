@@ -43,12 +43,12 @@ export const tingHook: CharacterHook = {
     const crocExists = runtime.fighters.some((candidate) => candidate.isGacha && runtime.isActiveCombatant(candidate));
     if (crocExists && EXPLOSIVE_ANTI_CROC) {
       transform('EXPLOSIVE_ANTI_CROC', `💥 ${fighter.name} 看到了牢鳄，彻底疯狂！转职为【${EXPLOSIVE_ANTI_CROC.name}】！"牢鳄！我和你爆了！！！"`, () => {
-        fighter.maxHp = Math.max(3700, Math.min(4525, Math.floor(fighter.maxHp * 3.67)));
+        fighter.maxHp = Math.max(5000, Math.min(5500, Math.floor(fighter.maxHp * 4.7)));
         fighter.currentHp = fighter.maxHp;
         fighter.atk = scaleStat(fighter.atk, 6.0, 340);
         fighter.mag = scaleStat(fighter.mag, 8.0, 260);
-        fighter.def = scaleStat(fighter.def, 6.12, 207);
-        fighter.res = scaleStat(fighter.res, 6.12, 207);
+        fighter.def = scaleStat(fighter.def, 8.0, 275);
+        fighter.res = scaleStat(fighter.res, 8.0, 275);
         fighter.agl = scaleStat(fighter.agl, 5.0, 150);
         fighter.spd = Math.max(203, Math.floor(fighter.spd * 6.08));
         fighter.wis = Math.max(160, Math.floor(fighter.wis * 8.0));

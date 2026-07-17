@@ -95,6 +95,32 @@ export function runStatusReworkCases(): string[] {
   }
 
   {
+    const makeOrderedTarget = (name: string, regenFirst: boolean) => {
+      const target = prepareFighter(makeFighter(name), 1000);
+      localProject.setCurrentHp(target, 30);
+      const regen = { type: 'REGEN', duration: 1 };
+      const bleed = { type: 'BLEED', duration: 1 };
+      target.status = regenFirst ? [regen, bleed] : [bleed, regen];
+      return target;
+    };
+    const sourceA = prepareFighter(makeFighter('状态顺序来源A@B'));
+    const sourceB = prepareFighter(makeFighter('状态顺序来源B@B'));
+    const first = makeOrderedTarget('先恢复插入目标@A', true);
+    const second = makeOrderedTarget('先流血插入目标@A', false);
+    first.status.find((status) => status.type === 'BLEED')!.applierId = sourceA.id;
+    second.status.find((status) => status.type === 'BLEED')!.applierId = sourceB.id;
+    const firstBattle = makeDeathEngine([first, sourceA]);
+    const secondBattle = makeDeathEngine([second, sourceB]);
+
+    firstBattle.engine.processStatusTurn(firstBattle.engine.fighters[0]);
+    secondBattle.engine.processStatusTurn(secondBattle.engine.fighters[0]);
+
+    assert(firstBattle.engine.fighters[0].isDeadAnnounced && secondBattle.engine.fighters[0].isDeadAnnounced, 'DoT must resolve before recovery regardless of status insertion order');
+    assert(firstBattle.engine.fighters[0].currentHp === secondBattle.engine.fighters[0].currentHp, 'Equivalent status sets must have identical HP outcomes');
+    cases.push('status settlement order is deterministic and DoT precedes recovery');
+  }
+
+  {
     const target = prepareFighter(makeFighter('持续伤害复活者@A'), 100);
     target.spd = 100000;
     target.status = [{ type: 'VALO_ULT_RUN_IT_BACK', duration: 2 }];
@@ -221,7 +247,7 @@ export function runStatusReworkCases(): string[] {
     assert(airborne?.duration === 1 && !engineTarget.status.some((status) => status.type === 'WT_AIRBORNE'), 'legacy War Thunder knock-up should normalize to one canonical turn');
     withRandomSequence([0, 0.99], () => engine.step({ current: false }));
     assert(!engineTarget.status.some((status) => status.type === 'AIRBORNE'), 'airborne should expire after consuming the target next action');
-    assert(Number(engineTarget.currentHp) === 982, `airborne landing should respect the target general 40% reduction, got ${engineTarget.currentHp}`);
+    assert(Number(engineTarget.currentHp) === 982, `airborne landing should respect the target general 37% reduction, got ${engineTarget.currentHp}`);
     assert(logs.some((entry) => entry.text.includes('炮震坠落')), 'War Thunder airborne should retain a source-specific landing log');
     const unableIndex = logs.findIndex((entry) => entry.text.includes('无法行动'));
     const landingIndex = logs.findIndex((entry) => entry.text.includes('炮震坠落'));
@@ -362,6 +388,28 @@ export function runStatusReworkCases(): string[] {
     const lockLogs = logs.filter((entry) => entry.text.includes('触发了锁血保护'));
     assert(lockLogs.length === 1, `nested burn refresh should emit one lockblood log, got ${lockLogs.length}`);
     cases.push('burn refresh deduplicates nested phase-lock logs');
+  }
+
+  {
+    const source = prepareFighter(makeFighter('爆燃致死来源@A'), 100);
+    const target = prepareFighter(makeFighter('爆燃致死目标@B'), 100);
+    target.status = [{ type: 'BURN', duration: 1, applierId: source.id, applierName: source.name }];
+    localProject.setCurrentHp(target, 2);
+    const { engine, logs } = makeDeathEngine([source, target]);
+    const [engineSource, engineTarget] = engine.fighters;
+
+    engine.applySkillStatusEffect(
+      { name: '爆燃刷新测试', tag: 'magical', status: 'BURN' },
+      engineTarget,
+      engineSource,
+    );
+
+    assert(engineTarget.isDeadAnnounced, 'burn refresh burst should defeat the low-health target');
+    assert(
+      !logs.some((entry) => entry.text.includes('爆燃致死目标') && entry.text.includes('获得【灼烧】')),
+      'a target defeated during status application must not receive a post-death status-success log',
+    );
+    cases.push('status application that defeats its recipient omits post-death success logs');
   }
 
   {

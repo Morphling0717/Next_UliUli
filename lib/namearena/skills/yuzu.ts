@@ -2,6 +2,8 @@ import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition }
 import { namerenaData as Data } from '../data';
 import { healFighter } from '../combatState';
 import { consumeOwlFoodForYuzu } from '../owlMechanics';
+import { namerenaJobs } from '../jobs';
+import { tryMomoStealYuzuMeal, type MomoRuntime } from '../momoMechanics';
 import { getFatigueDamageBonusForTurn } from '../damageResolution';
 import {
   activeYuzuTeammates,
@@ -21,8 +23,8 @@ import { findActivePuppetProtector, isSelectableTargetFor } from '../targeting';
 const { SKILL_TAGS } = Data;
 
 const YUZU_PHASE_TWO_DAMAGE_SCALE = 0.9;
-const YUZU_PHASE_THREE_DAMAGE_SCALE = 0.74;
-const YUZU_FURIOSO_DAMAGE_SCALE = 0.7;
+const YUZU_PHASE_THREE_DAMAGE_SCALE = 0.76;
+const YUZU_FURIOSO_DAMAGE_SCALE = 0.72;
 const YUZU_MARKED_MAX_HP_FLOOR_RATIO = 0.022;
 const YUZU_MARKED_ATK_FLOOR_RATIO = 0.18;
 const YUZU_FURIOSO_ATK_FLOOR_RATIO = 1.05;
@@ -185,6 +187,23 @@ function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon):
   const healRatio = weapon.selfHealMaxHpRatio ?? 0;
   if (healRatio <= 0) return;
 
+  const momoRuntime: MomoRuntime = {
+    fighters: ctx.fighters,
+    jobs: namerenaJobs,
+    turnCount: ctx.turnCount,
+    getTeamId: ctx.getTeamId,
+    isActiveCombatant: (fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
+    log: (type, text) => ctx.log(type, text),
+    syncHpPct: (fighter) => {
+      fighter.hpPct = fighter.maxHp > 0 ? fighter.currentHp / fighter.maxHp : 0;
+    },
+    applyDamage: ctx.applyDamage,
+    applyStatus: ctx.applyStatus,
+    markDefeated: ctx.markDefeated,
+    flushDeferredDamageEvents: () => ctx.flushDeferredDamageEvents?.(),
+  };
+  if (tryMomoStealYuzuMeal(momoRuntime, ctx.user)) return;
+
   const healAmount = Math.floor(ctx.user.maxHp * healRatio);
   const healed = healFighter(ctx.user, healAmount, ctx.log);
   if (healed > 0) {
@@ -228,22 +247,35 @@ function executeYuzuHit(
   const redirectedByJoker = !!options.redirectedByJoker;
   const redirectedByOriginiumCore = !!options.redirectedByOriginiumCore;
   const redirectedByOwlEmperor = !!options.redirectedByOwlEmperor;
-  const redirected = redirectedByJoker || redirectedByOriginiumCore || redirectedByOwlEmperor;
+  const redirectedByMomo = !!options.redirectedByMomo;
+  const redirected = redirectedByJoker || redirectedByOriginiumCore || redirectedByOwlEmperor || redirectedByMomo;
   const resolvedActual = redirectedByJoker
     ? options.redirectedJokerDamage ?? actual
     : redirectedByOriginiumCore
       ? options.redirectedOriginiumDamage ?? actual
       : redirectedByOwlEmperor
         ? options.redirectedOwlEmperorDamage ?? actual
-        : actual;
+        : redirectedByMomo
+          ? options.redirectedMomoDamage ?? actual
+          : actual;
 
   const hitLabel = `${index + 1}/${plan.hits}`;
   if (redirectedByJoker) {
-    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移目标实际承受 ${resolvedActual} 点伤害。`);
+    ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移目标实际承受 ${resolvedActual} 点伤害。`
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移后仍被化解，没有单位损失生命。`);
   } else if (redirectedByOriginiumCore) {
-    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤。`);
+    ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤。`
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，冲击被转入源石网络，但源石结晶均未损失生命。`);
   } else if (redirectedByOwlEmperor) {
-    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`);
+    ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，冲击被帝王之征全数接走，但龙未损失生命。`);
+  } else if (redirectedByMomo) {
+    ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【|OMO】把伤害均摊给舰长，舰长合计损失 ${resolvedActual} 点生命。`
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【|OMO】完成均摊，但舰长均未损失生命。`);
   } else if (resolvedActual <= 0) {
     const outcome = options.resolution?.outcome;
     const outcomeText = outcome === 'spell_blocked'

@@ -52,7 +52,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
           if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
           const damageOptions: DamageApplicationOptions = { actionName: '晚安火炮余波' };
           const actualDmg = ctx.applyDamage(e, aoeDmg, 'skill', false, ctx.user, damageOptions);
-          if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
+          if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
           if (actualDmg > 0) {
             ctx.log('info', `💥 爆炸余波重创了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
           } else {
@@ -84,7 +84,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_ult_orbital_strike: {
     name: '天降以此', tag: SKILL_TAGS.MAG, mult: 6.0, text: '🛰️ {USER} 呼叫轨道打击："准备迎接地狱火吧！" 激光炮锁定了 {TARGET}，造成 {VAL} 毁灭伤害！',
     afterExecute: (ctx, dmg, hpBeforeDamage) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor) return;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.damageRedirectedByMomo) return;
       if (dmg > (hpBeforeDamage ?? 0)) {
         const overflow = dmg - (hpBeforeDamage ?? 0);
         const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead && !f.isDeadAnnounced && f.currentHp > 0);
@@ -97,7 +97,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
             if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
             const damageOptions: DamageApplicationOptions = { actionName: '天降以此余波' };
             const actualDmg = ctx.applyDamage(e, splashDmg, 'skill', false, ctx.user, damageOptions);
-            if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
+            if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
             if (actualDmg > 0) {
               ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
             } else {

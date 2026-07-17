@@ -63,6 +63,60 @@ function clarifyDamagePlaceholderText(text: string): string {
     .replace(/{VAL}伤害/g, '{VAL} 点伤害');
 }
 
+function clarifyPendingStatusText(text: string, statusType?: string): string {
+  if (!statusType) return text;
+  const replacements: Partial<Record<string, Array<[RegExp, string]>>> = {
+    STUN: [
+      [/并眩晕了/g, '并尝试眩晕'],
+      [/并眩晕/g, '并尝试眩晕'],
+      [/并震慑目标/g, '并尝试震慑目标'],
+      [/并震慑/g, '并尝试震慑'],
+      [/并封锁行动/g, '并尝试封锁行动'],
+      [/并使其石化/g, '并尝试使其石化'],
+    ],
+    AIRBORNE: [
+      [/并将其当场【击飞】/g, '并尝试将其【击飞】'],
+      [/并击飞/g, '并尝试击飞'],
+    ],
+    BURN: [
+      [/并灼烧/g, '并尝试灼烧'],
+      [/并燃烧/g, '并尝试点燃'],
+    ],
+    POISON: [
+      [/并施加剧毒/g, '并尝试施加剧毒'],
+      [/并附加剧毒/g, '并尝试附加剧毒'],
+      [/并中毒/g, '并尝试使其中毒'],
+    ],
+    CONFUSED: [
+      [/\{TARGET\} 陷入了深深的自我怀疑！\(附加混乱\)/g, '{TARGET} 受到认知干扰，技能尝试施加【混乱】！'],
+      [/并附加混乱/g, '并尝试附加混乱'],
+    ],
+    CHARMED: [
+      [/被彻底迷住了/g, '受到魅惑冲击'],
+      [/陷入了【魅惑】/g, '被尝试施加【魅惑】'],
+    ],
+    BLIND: [[/丢失视野/g, '受到烟幕干扰，技能尝试施加【致盲】']],
+    EMBARRASSED: [[/陷入了【尴尬】/g, '被尝试施加【尴尬】']],
+    FREEZE: [[/并被冻结了/g, '并尝试冻结目标']],
+    SILENCE: [[/并使其沉默/g, '并尝试使其沉默']],
+    WEAK: [
+      [/并附加虚弱/g, '并尝试附加虚弱'],
+      [/受到诅咒，攻击力大幅下降/g, '受到诅咒冲击，技能尝试降低其攻击力'],
+    ],
+  };
+  return (replacements[statusType] ?? []).reduce(
+    (result, [pattern, replacement]) => result.replace(pattern, replacement),
+    text,
+  );
+}
+
+type GachaDrawChainState = {
+  resolvedDraws: number;
+  truncated?: boolean;
+};
+
+const MAX_GACHA_CHAIN_DRAWS = 128;
+
 function formatGachaCardPreview(
   skillText: string,
   formatText: (text: string) => string,
@@ -110,8 +164,9 @@ export function executeSkillAction(
   user: Fighter,
   forcedTarget: Fighter | null = null,
   triggerDepth = 0,
+  gachaDrawChain?: GachaDrawChainState,
 ): void {
-  if (triggerDepth > 5 || !user || user.isDead || user.isDeadAnnounced || user.currentHp <= 0) return;
+  if ((triggerDepth > 5 && !gachaDrawChain) || !user || user.isDead || user.isDeadAnnounced || user.currentHp <= 0) return;
 
   const userTeamId = runtime.getTeamId(user);
   let currentTargets = getSelectableTargets(createTargetingRuntime(runtime), user);
@@ -154,13 +209,24 @@ export function executeSkillAction(
     return runtime.log('info', `🪑 ${user.name} 试图模仿刺猬人召唤【武神王座】，但由于缺乏特摄之魂，椅子刚落地就散架了！`);
   }
 
-  if (skill.triggerAgain && triggerDepth === 0) {
+  if (skill.triggerAgain) {
     runtime.log(
       'buff',
       formatText(skill.text ?? '').replace(/{USER}/g, user.name),
       combatEffectMetadata(skill, user, [user.id]),
     );
-    for (let i = 0; i < skill.triggerAgain; i++) executeSkillAction(runtime, skillId, user, null, triggerDepth + 1);
+    const chain = gachaDrawChain ?? { resolvedDraws: 0 };
+    for (let i = 0; i < skill.triggerAgain; i++) {
+      if (chain.resolvedDraws >= MAX_GACHA_CHAIN_DRAWS) {
+        if (!chain.truncated) {
+          chain.truncated = true;
+          runtime.log('info', `🃏 【强欲之壶】连续抽卡达到 ${MAX_GACHA_CHAIN_DRAWS} 次安全上限，本次极端连锁在此收束。`);
+        }
+        break;
+      }
+      chain.resolvedDraws += 1;
+      executeSkillAction(runtime, skillId, user, null, triggerDepth + 1, chain);
+    }
     return;
   }
 
@@ -201,12 +267,25 @@ export function executeSkillAction(
     (type, text) => queuedPreResolutionLogs.push({ type, text }),
     skill,
   );
+  let actionSettled = false;
+  const settleAction = () => {
+    if (actionSettled) return;
+    actionSettled = true;
+    skill.onActionSettled?.(skillCtx);
+  };
   skillCtx.targetWasIntercepted = isIntercepted;
   skillCtx.interceptedProtectedTargetId = initiallyProtectedTarget?.id;
+  const randomTextPool = skill.isRandomText && skill.pool ? skill.pool as string[] : null;
+  const randomTextIndex = randomTextPool && randomTextPool.length > 0
+    ? Math.floor(Math.random() * randomTextPool.length)
+    : null;
+  const resolvedVisualEffect = randomTextIndex !== null
+    ? skill.randomTextVisualEffects?.[randomTextIndex] ?? skill.visualEffect
+    : skill.visualEffect;
   const skillVisualTargets = skill.tag === runtime.skillTags.HEAL || skill.tag === runtime.skillTags.BUFF
     ? [user.id]
     : [target.id];
-  const skillVisualMetadata = combatEffectMetadata(skill, user, skillVisualTargets);
+  const skillVisualMetadata = combatEffectMetadata({ visualEffect: resolvedVisualEffect }, user, skillVisualTargets);
   const refundInterruptedGacha = (reason: string) => {
     if (!skill.isGacha) return;
     const changed =
@@ -238,17 +317,25 @@ export function executeSkillAction(
     return true;
   };
 
-  if (skill.spellBlockMode !== 'perHit' && skill.spellBlockMode !== 'afterSetup' && consumePreSkillBlock()) return;
-
-  if (skill.onExecute && skill.onExecute(skillCtx)) {
-    flushDeferredDamageEvents();
+  if (skill.spellBlockMode !== 'perHit' && skill.spellBlockMode !== 'afterSetup' && consumePreSkillBlock()) {
+    settleAction();
     return;
   }
 
-  if (skill.spellBlockMode === 'afterSetup' && consumePreSkillBlock()) return;
+  if (skill.onExecute && skill.onExecute(skillCtx)) {
+    flushDeferredDamageEvents();
+    settleAction();
+    return;
+  }
+
+  if (skill.spellBlockMode === 'afterSetup' && consumePreSkillBlock()) {
+    settleAction();
+    return;
+  }
 
   if (runtime.executeSupportSkill(skill, user, forcedTarget, userTeamId)) {
     runtime.spreadDivaSupport(skill, user, userTeamId);
+    settleAction();
     return;
   }
 
@@ -256,32 +343,39 @@ export function executeSkillAction(
   if (!owlOpeningReady && missesSkill(user, target, skill, isIntercepted)) {
     runtime.log('info', `💨 ${user.name} 的 ${skill.name ?? '攻击'} 被 ${target.name} 闪避了！`);
     refundInterruptedGacha('被闪避');
+    settleAction();
     return;
   }
 
   if (handleWaitCounter(runtime, target, user, triggerDepth, incomingActionName)) {
     refundInterruptedGacha('被反击打断');
+    settleAction();
     return;
   }
   if (handleCounterStatus(runtime, target, user)) {
     refundInterruptedGacha('被反击打断');
+    settleAction();
     return;
   }
   if (!runtime.isActiveCombatant(user)) {
     refundInterruptedGacha('因反击退场而中止');
+    settleAction();
     return;
   }
 
   if (breakAbsoluteDefense(runtime, skillId, user, target)) {
     refundInterruptedGacha('用于击破绝对防御');
+    settleAction();
     return;
   }
   if (!owlOpeningReady && dodgesWithPassiveSkill(runtime, user, target, incomingActionName)) {
     refundInterruptedGacha('被特殊闪避');
+    settleAction();
     return;
   }
   if (!canTouchDamagePlane(runtime, user, target, skill)) {
     refundInterruptedGacha('无法触碰目标');
+    settleAction();
     return;
   }
 
@@ -337,19 +431,23 @@ export function executeSkillAction(
     runtime.log(logType, `${logType === 'crit' ? '💥 暴击！' : ''}🎭 ${user.name} 的【${incomingActionName}】锁定 ${target.name}，即将结算 ${preMitigationDmg} 点预估伤害！`);
   } else {
     let msg = formatText(skill.text ?? '');
-    if (skill.isRandomText && skill.pool) {
-      const pool = skill.pool as string[];
-      msg = msg.replace(/{JOKE}/g, pool[Math.floor(Math.random() * pool.length)]);
+    if (randomTextPool && randomTextIndex !== null) {
+      msg = msg.replace(/{JOKE}/g, randomTextPool[randomTextIndex] ?? '必杀！');
     }
     if (preMitigationDmg > 0 && skill.tag !== runtime.skillTags.BUFF && skill.tag !== runtime.skillTags.HEAL) {
-      msg = clarifyDamagePlaceholderText(msg);
+      msg = clarifyPendingStatusText(
+        clarifyDamagePlaceholderText(msg)
+          .replace(/造成了?\s+\{VAL\}/g, '预计造成 {VAL}'),
+        skill.status,
+      );
     }
     if (!msg.includes('{VAL}') && preMitigationDmg > 0 && skill.tag !== runtime.skillTags.BUFF && skill.tag !== runtime.skillTags.HEAL) {
       msg += ` (造成 {VAL} 点伤害)`;
     }
     runtime.log(
       logType,
-      (logType === 'crit' ? '💥 暴击！' : '') + msg.replace(/{USER}/g, user.name).replace(/{TARGET}/g, target.name).replace(/{VAL}/g, String(preMitigationDmg)),
+      (logType === 'crit' ? '💥 暴击！' : '') + msg.replace(/{USER}/g, user.name).replace(/{TARGET}/g, target.name).replace(/{VAL}/g, String(preMitigationDmg)) +
+        (preMitigationDmg > 0 ? '（结算前预估；若伤害发生变化会追加实际结算，附加状态另行确认）' : ''),
       skillVisualMetadata,
     );
   }
@@ -369,12 +467,16 @@ export function executeSkillAction(
     damageOptions,
   );
     runtime.flushDeferredDamageEvents(target, 'mitigation');
-  const targetActualDmg = damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor ? 0 : actualDmg;
-  const dealtDmg = damageOptions.redirectedOriginiumDamage ?? damageOptions.redirectedOwlEmperorDamage ?? actualDmg;
+  const targetActualDmg = damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo ? 0 : actualDmg;
+  const dealtDmg = damageOptions.redirectedOriginiumDamage ?? damageOptions.redirectedOwlEmperorDamage ?? damageOptions.redirectedMomoDamage ?? actualDmg;
   skillCtx.damageRedirectedByOriginiumCore = !!damageOptions.redirectedByOriginiumCore;
   skillCtx.redirectedOriginiumDamage = damageOptions.redirectedOriginiumDamage;
   skillCtx.damageRedirectedByOwlEmperor = !!damageOptions.redirectedByOwlEmperor;
   skillCtx.redirectedOwlEmperorDamage = damageOptions.redirectedOwlEmperorDamage;
+  skillCtx.damageRedirectedByMomo = !!damageOptions.redirectedByMomo;
+  skillCtx.redirectedMomoDamage = damageOptions.redirectedMomoDamage;
+  skillCtx.redirectedMomoTargetIds = damageOptions.redirectedMomoTargetIds;
+  skillCtx.redirectedMomoDefeatedTargetIds = damageOptions.redirectedMomoDefeatedTargetIds;
   skillCtx.suppressOnHitStatuses = !!damageOptions.suppressOnHitStatuses;
   skillCtx.suppressOnHitStatusTargetId = target.id;
   if (isIntercepted) {
@@ -388,6 +490,7 @@ export function executeSkillAction(
     !damageOptions.redirectedByJoker &&
     !damageOptions.redirectedByOriginiumCore &&
     !damageOptions.redirectedByOwlEmperor &&
+    !damageOptions.redirectedByMomo &&
     !damageOptions.targetDefeatedDuringDamage
   ) {
     if (actualDmg > 0) {
@@ -403,6 +506,7 @@ export function executeSkillAction(
     !damageOptions.redirectedByJoker &&
     !damageOptions.redirectedByOriginiumCore &&
     !damageOptions.redirectedByOwlEmperor &&
+    !damageOptions.redirectedByMomo &&
     !damageOptions.targetDefeatedDuringDamage
   ) {
     if (actualDmg > 0) {
@@ -418,11 +522,12 @@ export function executeSkillAction(
     });
   }
   const selfStatusResolvedThroughShield = skill.statusTarget === 'user' && (damageOptions.resolution?.shieldDamage ?? 0) > 0;
-  if ((actualDmg > 0 || selfStatusResolvedThroughShield) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor) {
-    if (skill.statusTarget === 'user' || (actualDmg > 0 && target.currentHp > 0)) {
+  const targetedUtilityStatusReady = !!skill.noDamage && !!skill.status;
+  if ((actualDmg > 0 || selfStatusResolvedThroughShield || targetedUtilityStatusReady) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor && !damageOptions.redirectedByMomo) {
+    if (skill.statusTarget === 'user' || (targetedUtilityStatusReady && runtime.isActiveCombatant(target)) || (actualDmg > 0 && target.currentHp > 0)) {
       applySkillStatusEffect(runtime, skill, user, target, !damageOptions.suppressOnHitStatuses);
     }
-    if (actualDmg > 0 && target.currentHp > 0) {
+    if (!skill.noDamage && actualDmg > 0 && target.currentHp > 0) {
       applyAttackerStyleEffects(runtime, user, target, !damageOptions.suppressOnHitStatuses);
     }
   }
@@ -431,12 +536,14 @@ export function executeSkillAction(
     skill.statusTarget !== 'user' &&
     preMitigationDmg > 0 &&
     actualDmg <= 0 &&
-    !damageOptions.redirectedByJoker &&
-    !damageOptions.redirectedByOriginiumCore &&
-    !damageOptions.redirectedByOwlEmperor
+    !skill.noDamage
   ) {
     const statusName = runtime.statusEffects[skill.status]?.name ?? skill.status;
-    runtime.log('info', `📌 状态结算：${target.name} 没有承受生命伤害，本次【${statusName}】未生效。`);
+    const redirected = damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore ||
+      damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo;
+    runtime.log('info', redirected
+      ? `📌 状态结算：攻击伤害已从 ${target.name} 身上转移，本次【${statusName}】不会跟随伤害转移，未生效。`
+      : `📌 状态结算：${target.name} 没有承受生命伤害，本次【${statusName}】未生效。`);
   }
   if (actualDmg > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(target);
 
@@ -444,8 +551,9 @@ export function executeSkillAction(
   handlePhysicalCounterReflect(runtime, skill, user, target, targetActualDmg);
   consumeAimAfterAttack(runtime, user, skill);
 
-  grantValorantHitRewards(runtime, user, target, targetActualDmg);
-  skillCtx.targetDefeatedDuringAction = handlePrimaryTargetDefeat(runtime, user, target, skill);
+  grantValorantHitRewards(runtime, user, target, damageOptions.redirectedByMomo ? dealtDmg : targetActualDmg);
+  skillCtx.targetDefeatedDuringAction = handlePrimaryTargetDefeat(runtime, user, target, skill) ||
+    (damageOptions.redirectedMomoDefeatedTargetIds?.length ?? 0) > 0;
 
   applyLifestealEffects(runtime, user, target, skill, dealtDmg, hpBeforeDamage);
   triggerSuccubusBabyFollowup(runtime, user, target, skillId, userTeamId, triggerDepth);
@@ -456,4 +564,5 @@ export function executeSkillAction(
     skill.afterExecute(skillCtx, dealtDmg, hpBeforeDamage);
     flushDeferredDamageEvents();
   }
+  settleAction();
 }

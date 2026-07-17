@@ -1,6 +1,6 @@
 import type { DamageApplicationOptions, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, isActiveCombatant } from '../combatState';
+import { healFighter, isActiveCombatant, setCurrentHp } from '../combatState';
 import {
   consumeSpellBlock,
   formatSpellBlock,
@@ -81,7 +81,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: 'Exodia Obliterate' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🧙‍♂️ 黑暗大法师的怒火命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -128,7 +128,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '白龙扫射余波' };
         const actualDmg = ctx.applyDamage(enemy, splashDmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🌪️ 白龙扫射的余波命中 ${enemy.name}，实际造成 ${actualDmg} 点溅射伤害！`);
         } else {
@@ -173,7 +173,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '究极爆裂疾风弹' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) continue;
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🐉 究极龙息命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -209,12 +209,14 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         const dmg = Math.floor(ctx.user.atk * 1.55 + ctx.user.mag * 0.7);
         const damageOptions: DamageApplicationOptions = { actionName: '三重龙首' };
         const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor) {
+        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
           const redirectText = damageOptions.redirectedByJoker
             ? `被 ${ctx.target.name} 用随机恶作剧转移`
             : damageOptions.redirectedByOriginiumCore
               ? `被 ${ctx.target.name} 转入源石网络`
-              : `被 ${ctx.target.name} 的【帝王之征】接走`;
+              : damageOptions.redirectedByOwlEmperor
+                ? `被 ${ctx.target.name} 的【帝王之征】接走`
+                : `被 ${ctx.target.name} 通过【|OMO】均摊给舰长`;
           ctx.log('info', `🐉 第 ${i} 颗龙首的攻击${redirectText}，原目标没有受伤；转移伤害已单独结算！`);
           continue;
         }
@@ -231,8 +233,12 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       ctx.user.blueEyesUltimateStrain = (ctx.user.blueEyesUltimateStrain ?? 0) + 1;
       if (total > 0 && (ctx.user.blueEyesUltimateStrain ?? 0) >= 3) {
         const recoil = Math.floor(ctx.user.maxHp * 0.06);
-        ctx.user.currentHp = Math.max(1, ctx.user.currentHp - recoil);
-        ctx.log('info', `🧬 【融合不稳定】${ctx.user.name} 承受融合反噬，损失 ${recoil} 点生命！`);
+        const beforeRecoil = ctx.user.currentHp;
+        setCurrentHp(ctx.user, Math.max(1, ctx.user.currentHp - recoil));
+        const actualRecoil = beforeRecoil - ctx.user.currentHp;
+        ctx.log('info', actualRecoil > 0
+          ? `🧬 【融合不稳定】${ctx.user.name} 承受融合反噬，实际损失 ${actualRecoil} 点生命！`
+          : `🧬 【融合不稳定】${ctx.user.name} 已被压在 1 点生命，融合反噬没有继续扣除生命！`);
       }
       return true;
     },
@@ -249,11 +255,10 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     text: '☀️ {USER} 张开黄金羽翼，太阳神烈焰灼烧 {TARGET}，造成 {VAL} 点魔法伤害并灼烧！',
     afterExecute: (ctx, dmg) => {
       if (!isActiveCombatant(ctx.user) || dmg <= 0) return;
-      const healed = Math.floor(Math.min(dmg, ctx.target.maxHp) * 0.12);
-      if (healed <= 0) return;
-      ctx.user.currentHp = Math.min(ctx.user.maxHp, ctx.user.currentHp + healed);
-      ctx.user.hpPct = ctx.user.currentHp / ctx.user.maxHp;
-      ctx.log('heal', `☀️ ${ctx.user.name} 吸收太阳神火，恢复了 ${healed} 点生命！`);
+      const healAmount = Math.floor(Math.min(dmg, ctx.target.maxHp) * 0.12);
+      if (healAmount <= 0) return;
+      const healed = healFighter(ctx.user, healAmount, ctx.log);
+      if (healed > 0) ctx.log('heal', `☀️ ${ctx.user.name} 吸收太阳神火，实际恢复 ${healed} 点生命！`);
     },
   },
   ra_divine_pressure: {

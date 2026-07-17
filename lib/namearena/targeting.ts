@@ -102,7 +102,7 @@ function targetWeight(target: Fighter, originium: OriginiumTargetingState): numb
   }
   if (target.isPuruisaishi) {
     if (!originium.phaseTwo) return 0.5;
-    if (originium.activeCrystalCount > 0) return 0.35;
+    if (originium.activeCrystalCount > 0) return 1.25;
     return originium.coreActive ? 2.4 : 4;
   }
   const waitingOnTokusatsuThrone = target.isTokusatsu &&
@@ -126,6 +126,36 @@ function pickWeightedTarget(runtime: TargetingRuntime, targets: Fighter[]): Figh
     if (roll <= 0) return target;
   }
   return targets[targets.length - 1]!;
+}
+
+function lowestHealthTarget(targets: Fighter[], hpPctThreshold: number, flatHpFloor: number): Fighter | undefined {
+  return targets
+    .filter((target) =>
+      isCompetitiveTarget(target) &&
+      (target.hpPct <= hpPctThreshold || target.currentHp <= Math.max(flatHpFloor, target.maxHp * 0.35)),
+    )
+    .sort((a, b) => a.currentHp - b.currentHp)[0];
+}
+
+function preferredTacticalTarget(user: Fighter, targets: Fighter[]): Fighter | undefined {
+  if (user.job === 'ALL_PLATFORM_CHAMPION') {
+    const marked = user.gamerMarkedTargetId
+      ? targets.find((target) => target.id === user.gamerMarkedTargetId)
+      : undefined;
+    return marked ?? lowestHealthTarget(targets, 0.42, 900);
+  }
+
+  if (user.job === 'VALO_JUNIOR') {
+    const wounded = lowestHealthTarget(targets, 0.42, 900);
+    if (wounded) return wounded;
+    if ((user.crosshairFocus ?? 0) >= 3) {
+      return targets.find((target) =>
+        isCompetitiveTarget(target) && target.agl >= Math.max(160, user.agl * 0.75),
+      );
+    }
+  }
+
+  return undefined;
 }
 
 export function resolveTarget(
@@ -152,10 +182,12 @@ export function resolveTarget(
   const markedWarThunderTarget = user.isWT && user.wtMarkedTargetId
     ? availableTargets.find((candidate) => candidate.id === user.wtMarkedTargetId)
     : undefined;
+  const tacticalTarget = preferredTacticalTarget(user, availableTargets);
   let target: Fighter;
   if (forcedTargetValid) target = forcedTarget!;
   else if (tauntingTargets.length > 0) target = pickWeightedTarget(runtime, tauntingTargets);
   else if (markedWarThunderTarget) target = markedWarThunderTarget;
+  else if (tacticalTarget) target = tacticalTarget;
   else target = pickWeightedTarget(runtime, availableTargets);
   let isIntercepted = false;
   let protectedTarget: Fighter | undefined;

@@ -40,7 +40,8 @@ function isRedirected(options: DamageApplicationOptions): boolean {
   return !!(
     options.redirectedByJoker ||
     options.redirectedByOriginiumCore ||
-    options.redirectedByOwlEmperor
+    options.redirectedByOwlEmperor ||
+    options.redirectedByMomo
   );
 }
 
@@ -48,6 +49,7 @@ function resolvedDamage(actual: number, options: DamageApplicationOptions): numb
   if (options.redirectedByJoker) return options.redirectedJokerDamage ?? actual;
   if (options.redirectedByOriginiumCore) return options.redirectedOriginiumDamage ?? actual;
   if (options.redirectedByOwlEmperor) return options.redirectedOwlEmperorDamage ?? actual;
+  if (options.redirectedByMomo) return options.redirectedMomoDamage ?? actual;
   return actual;
 }
 
@@ -110,6 +112,7 @@ function executeYilingFire(ctx: SkillContext): boolean {
   ctx.log('skill', `🔥 【夷陵之火】${ctx.user.name}：“好火啊，这火比夷陵之火还要好啊！”烈焰扑向 ${targets.length} 名敌人！`);
   const raw = ctx.user.mag * 1.25 + ctx.user.wis * 0.55;
   targets.forEach((target) => {
+    if (!isActiveCombatant(target)) return;
     const result = applyOwlDamage(ctx, target, raw, '夷陵之火');
     if (!result.redirected) {
       ctx.log(
@@ -280,6 +283,7 @@ function executeDragonShock(ctx: SkillContext): boolean {
   }
   ctx.log('skill', `🐲 【龙威震荡】${ctx.user.name} 振翼释放帝王威压，震向 ${targets.map((target) => target.name).join('、')}！`);
   targets.forEach((target) => {
+    if (!isActiveCombatant(target)) return;
     const raw = ctx.user.mag * 0.9 + ctx.user.atk * 0.45;
     const result = applyOwlDamage(ctx, target, raw, '龙威震荡');
     if (!result.redirected) {
@@ -331,7 +335,7 @@ export const owlSkills: Record<string, SkillDefinition> = {
   },
   owl_seven_in_seven_out: { name: '七进七出', tag: SKILL_TAGS.BUFF, rate: 1, onExecute: executeSevenInSevenOut },
   owl_sweep_furry: { name: '我去，扫福瑞', tag: SKILL_TAGS.BUFF, rate: 1, onExecute: executeSweepFurry },
-  owl_crossing_mark: { name: '过江！过江！', tag: SKILL_TAGS.DEBUFF, rate: 1, spellBlockMode: 'afterSetup', onExecute: executeCrossingMark },
+  owl_crossing_mark: { name: '过江！过江！', tag: SKILL_TAGS.DEBUFF, rate: 1, spellBlockMode: 'precast', onExecute: executeCrossingMark },
   owl_crossing_assist: { name: '过江协同', tag: SKILL_TAGS.SPECIAL, rate: 0, presentation: 'skill' },
   owl_bumper_harvest: { name: '五谷丰登', tag: SKILL_TAGS.HEAL, rate: 1, onExecute: executeBumperHarvest },
   owl_desk: { name: '伏案', tag: SKILL_TAGS.BUFF, rate: 1, onExecute: executeDesk },

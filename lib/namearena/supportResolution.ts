@@ -180,16 +180,33 @@ function applyChimeraSideDamage(
     canTriggerWaitCounter: false,
   };
   const actual = runtime.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, user, damageOptions);
-  const resolvedActual = damageOptions.redirectedOriginiumDamage ?? damageOptions.redirectedOwlEmperorDamage ?? actual;
-  if (damageOptions.redirectedByOriginiumCore) {
-    runtime.log('skill', `🜚 【${actionName}】${user.name} 对 ${target.name} 的攻击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤！`);
+  const resolvedActual = damageOptions.redirectedJokerDamage ??
+    damageOptions.redirectedOriginiumDamage ??
+    damageOptions.redirectedOwlEmperorDamage ??
+    damageOptions.redirectedMomoDamage ??
+    actual;
+  if (damageOptions.redirectedByJoker) {
+    runtime.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🎭 【${actionName}】${user.name} 的攻击被 ${target.name} 的随机恶作剧带偏，转移目标实际承受 ${resolvedActual} 点伤害！`
+      : `🎭 【${actionName}】${user.name} 的攻击被 ${target.name} 的随机恶作剧带偏，转移后仍被化解，没有单位损失生命！`);
+  } else if (damageOptions.redirectedByOriginiumCore) {
+    runtime.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🜚 【${actionName}】${user.name} 对 ${target.name} 的攻击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤！`
+      : `🜚 【${actionName}】攻击被转入源石网络，但源石结晶均未损失生命！`);
+  } else if (damageOptions.redirectedByOwlEmperor) {
+    runtime.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🐲 【${actionName}】${target.name} 的帝王之征接管了伤害，龙实际承受 ${resolvedActual} 点伤害！`
+      : `🐲 【${actionName}】${target.name} 的帝王之征接管了伤害，但龙未损失生命！`);
+  } else if (damageOptions.redirectedByMomo) {
+    runtime.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `💗 【${actionName}】${target.name} 通过【|OMO】把伤害均摊给舰长，舰长合计损失 ${resolvedActual} 点生命！`
+      : `💗 【${actionName}】${target.name} 通过【|OMO】完成均摊，但舰长均未损失生命！`);
+  } else if (actual > 0) {
+    runtime.log('skill', logText(actual));
   } else {
-    runtime.log(actual > 0 ? 'skill' : 'info', logText(actual));
+    runtime.log('info', `🛡️ 【${actionName}】${user.name} 的攻击被 ${target.name} 化解，没有造成生命伤害！`);
   }
-  if (damageOptions.redirectedByOwlEmperor) {
-    runtime.log('info', `🐲 ${target.name} 的帝王之征接管了伤害，龙实际承受 ${resolvedActual} 点。`);
-  }
-  const landedOnTarget = !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor && actual > 0;
+  const landedOnTarget = !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor && !damageOptions.redirectedByMomo && actual > 0;
   if (landedOnTarget && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     runtime.markDefeated(target, {
       message: `💀 【${actionName}】${target.name} 被 ${user.name} 安装插件时爆发的异变余波击倒！`,
@@ -266,6 +283,7 @@ function applyChimeraInstallSideEffect(
   if (skill.status === 'PLUG_BACK') {
     const enemies = activeEnemiesOf(runtime, user).sort(() => Math.random() - 0.5).slice(0, 2);
     enemies.forEach((target) => {
+      if (!runtime.isActiveCombatant(target)) return;
       applyChimeraSideDamage(
         runtime,
         user,

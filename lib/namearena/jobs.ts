@@ -202,6 +202,32 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
     skills: ['owl_bumper_harvest', 'owl_desk', 'owl_ruthless_sword', 'owl_enjoy', 'owl_great_wind', 'owl_bone_scrape'],
   },
 
+  // ── 萌月沫沫系 ────────────────────────────────────────────────────────
+  MOMO_BUBBLE_GOD: {
+    name: '泡沫之神', icon: '🫧',
+    hp: 1.8, atk: 1.45, def: 1.25, spd: 1.35, agl: 1.3, mag: 1.75, res: 1.4, wis: 1.9,
+    skills: ['momo_what_zone', 'momo_mic_open', 'momo_top_rank'],
+  },
+  MOMO_LOVER_KING: {
+    name: '爱人王', icon: '💗',
+    hp: 3.1, atk: 2.75, def: 2.45, spd: 2.35, agl: 2.15, mag: 3.0, res: 2.75, wis: 3.2,
+    skills: ['momo_wps_pillar', 'momo_what_is_this', 'momo_345', 'momo_sweep_furry'],
+  },
+  MOMO_SAI_Q_RIDER: {
+    name: '塞Q来打！', icon: '🦇',
+    hp: 3.9, atk: 3.75, def: 3.15, spd: 2.85, agl: 2.55, mag: 3.85, res: 3.4, wis: 4.0,
+    skills: ['momo_ten_pull', 'momo_peaches', 'momo_claw_machine'],
+  },
+  MOMO_WATER_DAUGHTER: {
+    name: '水人的大女儿', icon: '🌊',
+    hp: 4.2, atk: 4.0, def: 3.4, spd: 3.0, agl: 2.7, mag: 4.2, res: 3.7, wis: 4.2,
+    skills: [
+      'momo_what_zone', 'momo_mic_open', 'momo_top_rank',
+      'momo_wps_pillar', 'momo_what_is_this', 'momo_345', 'momo_sweep_furry',
+      'momo_ten_pull', 'momo_peaches', 'momo_claw_machine',
+    ],
+  },
+
   // ── 基础职业与隐藏彩蛋 ──────────────────────────────────────────────────
   ONE_PUNCH: {
     name: '秃头披风侠', icon: '👊',
@@ -238,6 +264,7 @@ const JOBS: Partial<Record<string, JobDefinition>> = {
   OWL_SPECTER:    { name: '幽灵鲨', icon: '🦈', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.6, res: 1.0, wis: 0.8, skills: ['owl_specter_saw'] },
   OWL_SPALTER:    { name: '归溟幽灵鲨', icon: '🌊', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 0.9, res: 1.0, wis: 1.0, skills: ['owl_spalter_saw'] },
   OWL_EMPEROR_DRAGON: { name: '帝王之征', icon: '🐲', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['owl_emperor_claw', 'owl_atomic_breath', 'owl_dragon_shock'] },
+  MOMO_CONTRACT_DRAGON: { name: '无双龙', icon: '🐉', hp: 1.0, atk: 1.0, def: 1.0, spd: 1.0, agl: 1.0, mag: 1.0, res: 1.0, wis: 1.0, skills: ['momo_sword_vent', 'momo_guard_vent', 'momo_final_vent', 'momo_dragon_strike'] },
 };
 
 export const namerenaJobs = JOBS;

@@ -60,6 +60,7 @@ export const COMMON_NEGATIVE_STATUS_TYPES: string[] = [
   'OWL_DRAGON_SLOW',
   'VALO_VIPER_DECAY',
   'GAMER_READ_INPUTS',
+  'MOMO_MIC_DEF_DOWN',
 ];
 
 export const DOT_STATUS_TYPES: string[] = [
@@ -122,6 +123,10 @@ export const PERMANENT_STATUS_TYPES: string[] = [
   'OWL_ACID_FEARLESS',
   'OWL_IMPERIAL_SEAL',
   'OWL_WILD',
+  'MOMO_CAPTAIN',
+  'MOMO_CROWD_JOY',
+  'MOMO_VILLAGE_SWORD',
+  'MOMO_AWAKENED_SWORD',
 ];
 
 export const PERMANENT_STATUS_PREFIXES: string[] = [

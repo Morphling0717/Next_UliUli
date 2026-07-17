@@ -8,6 +8,7 @@ import { gachaSkills } from './skills/gacha';
 import { gamerSkills } from './skills/gamer';
 import { jokerSkills } from './skills/joker';
 import { morphlingSkills } from './skills/morphling';
+import { momoSkills } from './skills/momo';
 import { owlSkills } from './skills/owl';
 import { rabbitSkills } from './skills/rabbit';
 import { siguaSkills } from './skills/sigua';
@@ -32,6 +33,7 @@ const SKILLS: Record<string, SkillDefinition> = {
   ...gachaSkills,
   ...tokusatsuSkills,
   ...morphlingSkills,
+  ...momoSkills,
   ...owlSkills,
   ...tingSkills,
   ...gamerSkills,

@@ -5,6 +5,7 @@ import {
   withRandomSequence,
 } from '../shared/harness';
 import { makeDeathEngine } from './deathAccountingCases';
+import { stampNewGlobalTimedStatuses } from '../../../lib/namearena/statusProcessing';
 
 export function runStatusClockCases(): string[] {
   const cases: string[] = [];
@@ -34,6 +35,20 @@ export function runStatusClockCases(): string[] {
     engine.advanceGlobalTimedStatuses();
     assert(!engine.fighters[0].status.some((entry) => entry.type === 'BKB'), 'global status should tick on the next battle turn');
     cases.push('new global statuses skip their application turn');
+  }
+
+  {
+    const fighter = makeFighter('回合末新增全局状态@A');
+    const { engine } = makeDeathEngine([fighter, makeFighter('回合末新增旁观者@B')]);
+    engine.turnCount = 7;
+    engine.fighters[0].status.push({ type: 'BKB', duration: 1 });
+    stampNewGlobalTimedStatuses(engine.fighters, engine.turnCount);
+    assert(engine.fighters[0].status[0]?.appliedTurn === 7, 'A global status created after the regular clock pass should be stamped in its creation turn');
+
+    engine.turnCount = 8;
+    engine.advanceGlobalTimedStatuses();
+    assert(!engine.fighters[0].status.some((status) => status.type === 'BKB'), 'A one-turn status created in an end hook should expire on the next action instead of surviving an extra action');
+    cases.push('end-hook global status does not gain an extra action');
   }
 
   {

@@ -91,6 +91,7 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   SPELL_BLOCK: { name: '法术抵挡', icon: '🔵', desc: '抵挡下一次技能伤害或控制' },
   NO_HEAL: { name: '禁疗', icon: '🥀', desc: '无法恢复生命值' },
   GACHA_SUMMON_LIFESTEAL: { name: '吸血牌', icon: '🧛', desc: '召唤物造成的部分伤害会转化为牢鳄的治疗' },
+  GACHA_TING_LUCK_COOLDOWN: { name: '宿敌受击记忆', icon: '🩸', desc: '本次自身行动周期已经从小汀追击中获得过欧气' },
   GACHA_TRAP_GUARD_COOLDOWN: { name: '护主陷阱冷却', icon: '🪤', desc: '护主陷阱刚刚发动，短时间内不能再次翻开' },
   GACHA_BLUE_EYES_GUARD_COOLDOWN: { name: '白龙护主冷却', icon: '🐲', desc: '青眼白龙刚刚护主，正在重整姿态' },
   GACHA_ULTIMATE_GUARD_COOLDOWN: { name: '究极龙护主冷却', icon: '🐉', desc: '青眼究极龙刚刚分担伤害，龙首需要短暂恢复' },
@@ -149,6 +150,11 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   OWL_EVADE_DOWN: { name: '乘风失衡', icon: '🍃', desc: '下一次直接单体攻击必定命中；触发后消耗，最多持续 2 次自身行动' },
   OWL_DRAGON_SLOW: { name: '龙威迟滞', icon: '🐲', desc: '被帝王之征震慑，行动速度短暂下降' },
   OWL_ENJOYING: { name: '乐不思蜀', icon: '🎶', desc: '宴饮享乐中，暂时不会发动攻击' },
+  MOMO_CAPTAIN: { name: '舰长', icon: '⚓', desc: '萌月沫沫的友方成员：攻击与生命提高，造成伤害可为沫沫治疗' },
+  MOMO_CROWD_JOY: { name: '众宾欢也', icon: '🎉', desc: '按层数获得攻击吸血；最高 138 层，每次自身行动结束减少 10 层' },
+  MOMO_MIC_DEF_DOWN: { name: '麦霸破防', icon: '🎙️', desc: '忘关麦造成精神冲击，防御暂时下降' },
+  MOMO_VILLAGE_SWORD: { name: '村好剑', icon: '🗡️', desc: '无双龙武器降临赋予的低额攻击强化；共鸣后会被醒剑替换' },
+  MOMO_AWAKENED_SWORD: { name: '醒剑', icon: '⚔️', desc: '与无双龙共鸣后的高额攻击强化，不与村好剑叠加' },
 };
 
 export const COLORS: string[] = [

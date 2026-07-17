@@ -43,6 +43,12 @@ export function enterTokusatsuMonsterForm(
   if (!target.isTokusatsu || target.job === 'MIRACLE_MONSTER_BUJIN') return false;
 
   const MIRACLE_MONSTER = runtime.jobs.MIRACLE_MONSTER_BUJIN;
+  const previousForm = {
+    jobKey: target.job,
+    jobName: target.jobData.name,
+    icon: target.jobData.icon,
+    phase: target.job === 'MIRACLE_BUJIN' ? 2 : 1,
+  };
   target.counterUsed = true;
   target.status = target.status.filter((status) =>
     status.type !== 'WAIT_COUNTER' && !isStatusType(status.type, REVIVE_CLEAN_STATUS_TYPES),
@@ -52,13 +58,13 @@ export function enterTokusatsuMonsterForm(
   withTimedStatModifiersSuspended(target, () => {
     withOriginiumStatShapeSuspended(target, () => {
       const previousMaxHp = target.maxHp;
-      const monsterMaxHp = Math.max(3025, Math.min(4400, Math.floor(previousMaxHp * 1.27)));
+      const monsterMaxHp = Math.max(3000, Math.min(4100, Math.floor(previousMaxHp * 1.2)));
       target.maxHp = monsterMaxHp;
-      target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.7)));
-      target.atk = Math.max(190, Math.floor(target.atk * 1.56));
+      target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.67)));
+      target.atk = Math.max(180, Math.floor(target.atk * 1.45));
       target.def = Math.max(108, Math.floor(target.def * 1.44));
       target.res = Math.max(128, Math.floor(target.res * 1.55));
-      target.mag = Math.max(108, Math.floor(target.mag * 1.65));
+      target.mag = Math.max(100, Math.floor(target.mag * 1.5));
       target.spd = Math.max(128, Math.floor(target.spd * 1.15));
       target.agl = Math.max(104, Math.floor(target.agl * 1.18));
       target.wis = Math.max(220, Math.floor(target.wis * 1.15));
@@ -71,12 +77,26 @@ export function enterTokusatsuMonsterForm(
     });
   });
   clearTokusatsuThroneResonance(target);
-  refreshStatus(target, 'BKB', 2, 'tokusatsu_bujin_throne');
-  refreshStatus(target, 'SPELL_BLOCK', 2, 'tokusatsu_bujin_throne');
-  refreshStatus(target, 'REGEN', 3);
+  refreshStatus(target, 'BKB', 1, 'tokusatsu_bujin_throne');
+  refreshStatus(target, 'SPELL_BLOCK', 1, 'tokusatsu_bujin_throne');
+  refreshStatus(target, 'REGEN', 2);
   runtime.syncHpPct(target);
 
-  runtime.log('buff', `🦖 ${target.name} 受到攻击，触发【武神王座】反击！"DUAL ON！GREAT！MONSTER！Ready Fight." ${target.name} 永久进化为【奇迹怪兽武刃】，生命提升至 ${target.currentHp}/${target.maxHp}，抗性与怪兽力量全部重构！`);
+  runtime.log('buff', `🦖 ${target.name} 受到攻击，触发【武神王座】反击！"DUAL ON！GREAT！MONSTER！Ready Fight." ${target.name} 永久进化为【奇迹怪兽武刃】，生命提升至 ${target.currentHp}/${target.maxHp}，抗性与怪兽力量全部重构！`, {
+    targetIds: [target.id],
+    visualCue: {
+      kind: 'transformation',
+      fighterId: target.id,
+      fighterName: target.name,
+      from: previousForm,
+      to: {
+        jobKey: 'MIRACLE_MONSTER_BUJIN',
+        jobName: MIRACLE_MONSTER?.name ?? '奇迹怪兽武刃',
+        icon: MIRACLE_MONSTER?.icon ?? '🦖',
+        phase: 3,
+      },
+    },
+  });
   if (user) {
     runtime.log('info', `🚫 ${user.name} 的攻势被 ${target.name} 的怪兽形态打断，王座余波会被大幅削弱！`);
     runtime.executeSkillAction('great_monster_victory', target, user, triggerDepth + 1);
@@ -132,7 +152,7 @@ export const tokusatsuHook: CharacterHook = {
       if ((hasNegativeStatus(actor) || actor.hpPct <= 0.45) && ownsSkill(actor, 'miracle_armor')) {
         return 'miracle_armor';
       }
-      if (enemies.length >= 3 && ownsSkill(actor, 'monster_roar') && Math.random() < 0.46) {
+      if (enemies.length >= 3 && ownsSkill(actor, 'monster_roar') && Math.random() < 0.32) {
         return 'monster_roar';
       }
       const highBuffEnemy = enemies.some((enemy) =>
@@ -141,7 +161,7 @@ export const tokusatsuHook: CharacterHook = {
       if (highBuffEnemy && ownsSkill(actor, 'energy_crush') && Math.random() < 0.58) {
         return 'energy_crush';
       }
-      if (ownsSkill(actor, 'bujin_monster_combo') && Math.random() < 0.5) {
+      if (ownsSkill(actor, 'bujin_monster_combo') && Math.random() < 0.4) {
         return 'bujin_monster_combo';
       }
       return pickSkill(actor.jobData.skills);

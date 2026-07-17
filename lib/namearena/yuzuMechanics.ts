@@ -53,11 +53,12 @@ export const YUZU_WEAPONS: Record<YuzuWeaponId, YuzuWeapon> = {
 };
 
 export const YUZU_PHASE_ONE_REDUCTION = 0.15;
-export const YUZU_PHASE_THREE_REDUCTION = 0.15;
+export const YUZU_PHASE_THREE_REDUCTION = 0.17;
 export const YUZU_TEAM_SHARE_RATIO = 1;
 export const YUZU_OPENING_SHIELD_RATIO = 0.2;
 export const YUZU_PHASE_TWO_SOLO_SHIELD_RATIO = 0.65;
 export const YUZU_PHASE_TWO_TEAM_SHIELD_RATIO = 0.35;
+export const YUZU_UNMARKED_INCOMING_DAMAGE_MULTIPLIER = 0.23;
 export const YUZU_MARK_DAMAGE_BONUS = 0.2;
 export const YUZU_UNMARKED_DAMAGE_PENALTY = 0.2;
 export const YUZU_FURIOSO_COUNT = 9;

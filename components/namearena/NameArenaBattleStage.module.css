@@ -354,6 +354,101 @@
 .impactFlash[data-impact-theme="gacha_void"] > i:nth-child(2) { animation-delay: 55ms; }
 .impactFlash[data-impact-theme="gacha_void"] > i:nth-child(3) { animation-delay: 110ms; }
 
+.impactFlash[data-impact-theme="tokusatsu_green"] {
+  animation: tokusatsu-green-impact 820ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_green"] > i,
+.impactFlash[data-impact-theme="tokusatsu_monster"] > i,
+.impactFlash[data-impact-theme="tokusatsu_rainbow"] > i {
+  --toku-ray: 0deg;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: 116vmax;
+  height: 3px;
+  background: #64ff72;
+  box-shadow: 0 0 18px #64ff72, 0 0 52px rgba(100, 255, 114, 0.58);
+  transform-origin: left center;
+  animation: tokusatsu-impact-ray 820ms cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_green"] > i:nth-child(2),
+.impactFlash[data-impact-theme="tokusatsu_monster"] > i:nth-child(2),
+.impactFlash[data-impact-theme="tokusatsu_rainbow"] > i:nth-child(2) { --toku-ray: 60deg; animation-delay: 45ms; }
+.impactFlash[data-impact-theme="tokusatsu_green"] > i:nth-child(3),
+.impactFlash[data-impact-theme="tokusatsu_monster"] > i:nth-child(3),
+.impactFlash[data-impact-theme="tokusatsu_rainbow"] > i:nth-child(3) { --toku-ray: 120deg; animation-delay: 90ms; }
+
+.impactFlash[data-impact-theme="tokusatsu_slash"] {
+  animation: tokusatsu-slash-impact 820ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_slash"] > i {
+  --slash-rotation: -24deg;
+  top: 50%;
+  left: -12%;
+  display: block;
+  width: 124%;
+  height: 5px;
+  background: #edf7f4;
+  box-shadow: 0 0 14px #64ff72, 0 0 42px rgba(100, 255, 114, 0.65);
+  transform: rotate(var(--slash-rotation)) scaleX(0);
+  animation: tokusatsu-screen-slash 820ms cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_slash"] > i:nth-child(2) { --slash-rotation: 28deg; animation-delay: 65ms; }
+.impactFlash[data-impact-theme="tokusatsu_slash"] > i:nth-child(3) { --slash-rotation: -5deg; animation-delay: 130ms; }
+
+.impactFlash[data-impact-theme="tokusatsu_alchemy"] {
+  animation: tokusatsu-alchemy-impact 820ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_alchemy"] > i,
+.impactFlash[data-impact-theme="tokusatsu_throne"] > i {
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: min(46vmin, 390px);
+  aspect-ratio: 1;
+  border: 2px solid #4cecff;
+  border-radius: 50%;
+  box-shadow: 0 0 24px rgba(76, 236, 255, 0.65), inset 0 0 30px rgba(100, 255, 114, 0.22);
+  animation: tokusatsu-alchemy-ring 820ms cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_alchemy"] > i:nth-child(2),
+.impactFlash[data-impact-theme="tokusatsu_throne"] > i:nth-child(2) { animation-delay: 65ms; }
+.impactFlash[data-impact-theme="tokusatsu_alchemy"] > i:nth-child(3),
+.impactFlash[data-impact-theme="tokusatsu_throne"] > i:nth-child(3) { animation-delay: 130ms; }
+
+.impactFlash[data-impact-theme="tokusatsu_throne"] {
+  animation: tokusatsu-throne-impact 820ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_throne"] > i {
+  border-color: #64ff72;
+  border-radius: 4px;
+  transform: rotate(45deg);
+}
+
+.impactFlash[data-impact-theme="tokusatsu_monster"] {
+  animation: tokusatsu-monster-impact 820ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_monster"] > i {
+  background: #ffd44c;
+  box-shadow: 0 0 18px #ffd44c, 0 0 54px rgba(51, 168, 255, 0.62);
+}
+
+.impactFlash[data-impact-theme="tokusatsu_rainbow"] {
+  animation: tokusatsu-rainbow-impact 920ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="tokusatsu_rainbow"] > i:nth-child(1) { background: #ff465e; box-shadow: 0 0 22px #ff465e; }
+.impactFlash[data-impact-theme="tokusatsu_rainbow"] > i:nth-child(2) { background: #ffd44c; box-shadow: 0 0 22px #ffd44c; }
+.impactFlash[data-impact-theme="tokusatsu_rainbow"] > i:nth-child(3) { background: #4cecff; box-shadow: 0 0 22px #4cecff; }
+
 .actionBanner {
   position: absolute;
   z-index: 50;
@@ -1512,6 +1607,138 @@
   animation: gacha-finisher-copy 2.1s cubic-bezier(0.16, 0.76, 0.28, 1) both;
 }
 
+.cinematic[data-cinematic-theme="tokusatsu_monster"] {
+  background: #030909;
+  animation-duration: 2.6s;
+}
+
+.cinematic[data-cinematic-theme="tokusatsu_rainbow"] {
+  background: #04070d;
+  animation-duration: 2.6s;
+}
+
+.tokusatsuFinisherFx {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  overflow: hidden;
+  contain: strict;
+}
+
+.tokusatsuFinisherFx::before,
+.tokusatsuFinisherFx::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(50vmin, 520px);
+  aspect-ratio: 1;
+  border: 3px solid #ffd44c;
+  content: "";
+  transform: translate(-50%, -50%) rotate(0deg) scale(0.12);
+  box-shadow: 0 0 46px rgba(255, 212, 76, 0.5), inset 0 0 64px rgba(51, 168, 255, 0.3);
+  clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 94%, 50% 72%, 21% 94%, 32% 57%, 2% 35%, 39% 35%);
+  animation: tokusatsu-finisher-star 2.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.tokusatsuFinisherFx::after {
+  width: min(31vmin, 320px);
+  border-color: #33a8ff;
+  animation-delay: 120ms;
+  animation-direction: reverse;
+}
+
+.tokusatsuFinisherFx > i {
+  --toku-finisher-ray: 0deg;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 120vmax;
+  height: 3px;
+  background: #ffd44c;
+  box-shadow: 0 0 16px #ffd44c, 0 0 45px rgba(51, 168, 255, 0.56);
+  transform-origin: left center;
+  animation: tokusatsu-finisher-ray 2.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.tokusatsuFinisherFx > i:nth-of-type(2) { --toku-finisher-ray: 30deg; animation-delay: 45ms; }
+.tokusatsuFinisherFx > i:nth-of-type(3) { --toku-finisher-ray: 60deg; animation-delay: 90ms; }
+.tokusatsuFinisherFx > i:nth-of-type(4) { --toku-finisher-ray: 90deg; animation-delay: 135ms; }
+.tokusatsuFinisherFx > i:nth-of-type(5) { --toku-finisher-ray: 120deg; animation-delay: 180ms; }
+.tokusatsuFinisherFx > i:nth-of-type(6) { --toku-finisher-ray: 150deg; animation-delay: 225ms; }
+
+.tokusatsuFinisherBelt,
+.tokusatsuFinisherGlove,
+.tokusatsuFinisherTrain {
+  position: absolute;
+  z-index: 2;
+  display: block;
+}
+
+.tokusatsuFinisherBelt {
+  top: 50%;
+  left: 37%;
+  width: min(24vw, 310px);
+  aspect-ratio: 1.6;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  animation: tokusatsu-belt-cutin 2.6s ease both;
+}
+
+.tokusatsuFinisherBelt img,
+.tokusatsuFinisherGlove img,
+.tokusatsuFinisherTrain img {
+  object-fit: contain;
+}
+
+.tokusatsuFinisherGlove {
+  top: 52%;
+  left: 35%;
+  width: min(31vw, 410px);
+  aspect-ratio: 1.5;
+  transform: translate(-50%, -50%);
+  animation: tokusatsu-glove-smash 2.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.tokusatsuFinisherTrain {
+  top: 54%;
+  left: 35%;
+  width: min(46vw, 620px);
+  aspect-ratio: 1.19;
+  transform: translate(-140%, -50%);
+  filter: drop-shadow(0 0 18px rgba(76, 236, 255, 0.78));
+  animation: tokusatsu-train-kick 2.6s cubic-bezier(0.12, 0.8, 0.18, 1) both;
+}
+
+.tokusatsuFinisherFx[data-finisher-kind="tokusatsu_rainbow"]::before {
+  border-color: #4cecff;
+  filter: hue-rotate(20deg) saturate(1.5);
+}
+
+.tokusatsuFinisherFx[data-finisher-kind="tokusatsu_rainbow"] > i:nth-of-type(1) { background: #ff465e; }
+.tokusatsuFinisherFx[data-finisher-kind="tokusatsu_rainbow"] > i:nth-of-type(2) { background: #ffd44c; }
+.tokusatsuFinisherFx[data-finisher-kind="tokusatsu_rainbow"] > i:nth-of-type(3) { background: #64ff72; }
+.tokusatsuFinisherFx[data-finisher-kind="tokusatsu_rainbow"] > i:nth-of-type(4) { background: #4cecff; }
+.tokusatsuFinisherFx[data-finisher-kind="tokusatsu_rainbow"] > i:nth-of-type(5) { background: #33a8ff; }
+.tokusatsuFinisherFx[data-finisher-kind="tokusatsu_rainbow"] > i:nth-of-type(6) { background: #a96cff; }
+
+.cinematic[data-cinematic-theme^="tokusatsu_"] .cinematicArt {
+  background-position: center top;
+  filter: drop-shadow(0 0 28px rgba(100, 255, 114, 0.46)) contrast(1.08);
+  animation: tokusatsu-finisher-art 2.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.cinematic[data-cinematic-theme^="tokusatsu_"] .cinematicCopy {
+  animation: tokusatsu-finisher-copy 2.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.cinematic[data-cinematic-theme="tokusatsu_monster"] .cinematicCopy h2 {
+  text-shadow: 7px 7px 0 rgba(5, 59, 43, 0.96), 0 0 34px rgba(255, 212, 76, 0.46);
+}
+
+.cinematic[data-cinematic-theme="tokusatsu_rainbow"] .cinematicCopy h2 {
+  text-shadow: 7px 7px 0 rgba(51, 168, 255, 0.78), 0 0 34px rgba(255, 70, 94, 0.42);
+}
+
 .cinematicScan {
   position: absolute;
   z-index: 5;
@@ -1651,6 +1878,117 @@
     repeating-linear-gradient(0deg, transparent 0 5px, rgba(255, 255, 255, 0.035) 6px);
 }
 
+.transformation[data-transformation-theme="tokusatsu"] {
+  --transform-accent: #64ff72;
+  background: #020706;
+}
+
+.transformation[data-transformation-theme="tokusatsu"] .transformationGrid {
+  background:
+    linear-gradient(115deg, transparent 0 44%, rgba(100, 255, 114, 0.1) 44% 56%, transparent 56%),
+    repeating-linear-gradient(0deg, transparent 0 5px, rgba(76, 236, 255, 0.035) 6px);
+}
+
+.transformation[data-transformation-theme="tokusatsu"]::before,
+.transformation[data-transformation-theme="tokusatsu"]::after,
+.transformation[data-transformation-theme="tokusatsu"] .formBefore,
+.transformation[data-transformation-theme="tokusatsu"] .formAfter,
+.transformation[data-transformation-theme="tokusatsu"] .formTransfer,
+.transformation[data-transformation-theme="tokusatsu"] .transformationProgress i {
+  animation-duration: 3.6s;
+}
+
+.tokusatsuTransformationFx {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.tokusatsuTransformationFx::before,
+.tokusatsuTransformationFx::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(62vmin, 620px);
+  aspect-ratio: 1;
+  border: 2px solid rgba(100, 255, 114, 0.66);
+  border-radius: 50%;
+  box-shadow: 0 0 44px rgba(100, 255, 114, 0.36), inset 0 0 70px rgba(76, 236, 255, 0.14);
+  content: "";
+  animation: tokusatsu-transform-ring 3.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.tokusatsuTransformationFx::after {
+  width: min(42vmin, 420px);
+  border-color: rgba(76, 236, 255, 0.72);
+  border-style: dashed;
+  animation-direction: reverse;
+}
+
+.tokusatsuTransformationFx > i {
+  --transform-ray: 0deg;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 110vmax;
+  height: 2px;
+  background: #64ff72;
+  box-shadow: 0 0 15px #64ff72;
+  transform-origin: left center;
+  animation: tokusatsu-transform-ray 3.6s ease both;
+}
+
+.tokusatsuTransformationFx > i:nth-of-type(2) { --transform-ray: 30deg; animation-delay: 45ms; }
+.tokusatsuTransformationFx > i:nth-of-type(3) { --transform-ray: 60deg; animation-delay: 90ms; }
+.tokusatsuTransformationFx > i:nth-of-type(4) { --transform-ray: 90deg; animation-delay: 135ms; }
+.tokusatsuTransformationFx > i:nth-of-type(5) { --transform-ray: 120deg; animation-delay: 180ms; }
+.tokusatsuTransformationFx > i:nth-of-type(6) { --transform-ray: 150deg; animation-delay: 225ms; }
+
+.tokusatsuTransformBody,
+.tokusatsuTransformBelt,
+.tokusatsuTransformProp {
+  position: absolute;
+  display: block;
+}
+
+.tokusatsuTransformBody img,
+.tokusatsuTransformBelt img,
+.tokusatsuTransformProp img {
+  object-fit: contain;
+}
+
+.tokusatsuTransformBody {
+  top: -7%;
+  left: 50%;
+  width: min(48vw, 560px);
+  height: 112%;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 0 28px rgba(100, 255, 114, 0.46));
+  opacity: 0;
+  animation: tokusatsu-transform-body 3.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.tokusatsuTransformBelt {
+  top: 54%;
+  left: 50%;
+  width: min(27vw, 350px);
+  aspect-ratio: 1.5;
+  transform: translate(-50%, -50%);
+  animation: tokusatsu-transform-belt 3.6s ease both;
+}
+
+.tokusatsuTransformProp {
+  top: 48%;
+  left: 64%;
+  width: min(17vw, 230px);
+  height: 56%;
+  transform: translate(-50%, -50%) rotate(13deg);
+  filter: drop-shadow(0 0 18px rgba(76, 236, 255, 0.54));
+  animation: tokusatsu-transform-prop 3.6s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
 .transformationHeader {
   position: relative;
   z-index: 3;
@@ -1720,6 +2058,7 @@
 }
 
 .formCard > i {
+  position: relative;
   display: grid;
   place-items: center;
   width: 104px;
@@ -1730,6 +2069,16 @@
   font-size: 58px;
   font-style: normal;
   line-height: 1;
+}
+
+.formCard > i.formPortrait {
+  overflow: hidden;
+  border-color: currentColor;
+  background: #fff;
+}
+
+.formPortrait img {
+  object-fit: cover;
 }
 
 .formCard > strong {
@@ -2837,6 +3186,135 @@
   22% { transform: translate(-5px, 1px); }
   55% { filter: contrast(1.4); transform: translate(0); }
   58% { transform: translate(6px, -1px); }
+}
+
+@keyframes tokusatsu-green-impact {
+  0% { opacity: 0; background: rgba(100, 255, 114, 0); }
+  18% { opacity: 1; background: rgba(100, 255, 114, 0.2); }
+  100% { opacity: 0; background: rgba(100, 255, 114, 0); }
+}
+
+@keyframes tokusatsu-impact-ray {
+  0% { opacity: 0; transform: translateY(-50%) rotate(var(--toku-ray)) scaleX(0); }
+  22% { opacity: 1; transform: translateY(-50%) rotate(var(--toku-ray)) scaleX(0.18); }
+  100% { opacity: 0; transform: translateY(-50%) rotate(var(--toku-ray)) scaleX(1); }
+}
+
+@keyframes tokusatsu-slash-impact {
+  0% { opacity: 0; background: rgba(1, 8, 7, 0); }
+  22% { opacity: 1; background: rgba(1, 8, 7, 0.44); }
+  100% { opacity: 0; background: rgba(100, 255, 114, 0.08); }
+}
+
+@keyframes tokusatsu-screen-slash {
+  0% { opacity: 0; transform: rotate(var(--slash-rotation)) scaleX(0); }
+  35% { opacity: 1; transform: rotate(var(--slash-rotation)) scaleX(1); }
+  100% { opacity: 0; transform: rotate(var(--slash-rotation)) scaleX(1.08); }
+}
+
+@keyframes tokusatsu-alchemy-impact {
+  0% { opacity: 0; background: rgba(76, 236, 255, 0); }
+  28% { opacity: 1; background: rgba(76, 236, 255, 0.1); }
+  100% { opacity: 0; background: rgba(100, 255, 114, 0); }
+}
+
+@keyframes tokusatsu-alchemy-ring {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(0) scale(0.18); }
+  34% { opacity: 0.9; }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(220deg) scale(1.5); }
+}
+
+@keyframes tokusatsu-throne-impact {
+  0% { opacity: 0; background: rgba(1, 8, 7, 0); }
+  28% { opacity: 1; background: rgba(3, 34, 25, 0.26); }
+  100% { opacity: 0; background: rgba(1, 8, 7, 0); }
+}
+
+@keyframes tokusatsu-monster-impact {
+  0% { opacity: 0; background: rgba(255, 212, 76, 0); }
+  20% { opacity: 1; background: rgba(255, 212, 76, 0.18); }
+  100% { opacity: 0; background: rgba(51, 168, 255, 0); }
+}
+
+@keyframes tokusatsu-rainbow-impact {
+  0% { opacity: 0; filter: hue-rotate(0deg); }
+  24% { opacity: 1; background: rgba(255, 255, 255, 0.18); }
+  100% { opacity: 0; filter: hue-rotate(180deg); }
+}
+
+@keyframes tokusatsu-finisher-star {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(-80deg) scale(0.12); }
+  30%, 76% { opacity: 0.9; }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(240deg) scale(1.42); }
+}
+
+@keyframes tokusatsu-finisher-ray {
+  0%, 12% { opacity: 0; transform: rotate(var(--toku-finisher-ray)) scaleX(0); }
+  32% { opacity: 0.78; transform: rotate(var(--toku-finisher-ray)) scaleX(0.28); }
+  100% { opacity: 0; transform: rotate(var(--toku-finisher-ray)) scaleX(1); }
+}
+
+@keyframes tokusatsu-belt-cutin {
+  0%, 8% { opacity: 0; scale: 0.68; filter: brightness(1); }
+  22%, 45% { opacity: 1; scale: 1; filter: brightness(1.4); }
+  58%, 100% { opacity: 0; scale: 1.18; filter: brightness(2.8); }
+}
+
+@keyframes tokusatsu-glove-smash {
+  0%, 24% { opacity: 0; transform: translate(-90%, -50%) rotate(-18deg) scale(0.42); }
+  48% { opacity: 1; transform: translate(-50%, -50%) rotate(4deg) scale(1.04); }
+  72% { opacity: 1; transform: translate(-40%, -50%) rotate(8deg) scale(1.22); }
+  100% { opacity: 0; transform: translate(34%, -50%) rotate(16deg) scale(1.55); }
+}
+
+@keyframes tokusatsu-train-kick {
+  0%, 26% { opacity: 0; transform: translate(-140%, -50%) rotate(-9deg) scale(0.72); }
+  42% { opacity: 1; }
+  70% { opacity: 1; transform: translate(-12%, -50%) rotate(0) scale(1.08); }
+  100% { opacity: 0; transform: translate(84%, -50%) rotate(4deg) scale(1.32); }
+}
+
+@keyframes tokusatsu-finisher-art {
+  0% { opacity: 0; transform: translateX(-18%) scale(0.9); }
+  22%, 82% { opacity: 0.9; transform: translateX(0) scale(1); }
+  100% { opacity: 0; transform: translateX(8%) scale(1.08); }
+}
+
+@keyframes tokusatsu-finisher-copy {
+  0%, 18% { opacity: 0; transform: translateX(36px); }
+  34%, 84% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(-16px); }
+}
+
+@keyframes tokusatsu-transform-ring {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(0) scale(0.18); }
+  24%, 72% { opacity: 0.72; }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(320deg) scale(1.48); }
+}
+
+@keyframes tokusatsu-transform-ray {
+  0%, 12% { opacity: 0; transform: rotate(var(--transform-ray)) scaleX(0); }
+  32% { opacity: 0.55; transform: rotate(var(--transform-ray)) scaleX(0.28); }
+  100% { opacity: 0; transform: rotate(var(--transform-ray)) scaleX(1); }
+}
+
+@keyframes tokusatsu-transform-body {
+  0%, 28% { opacity: 0; filter: brightness(0) drop-shadow(0 0 28px rgba(100, 255, 114, 0)); transform: translateX(-50%) scale(0.82); }
+  46% { opacity: 0.18; filter: brightness(4) drop-shadow(0 0 38px rgba(100, 255, 114, 0.84)); transform: translateX(-50%) scale(1.03); }
+  62%, 88% { opacity: 0.24; filter: brightness(1.12) drop-shadow(0 0 28px rgba(100, 255, 114, 0.46)); transform: translateX(-50%) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) scale(1.08); }
+}
+
+@keyframes tokusatsu-transform-belt {
+  0%, 10% { opacity: 0; transform: translate(-50%, -50%) scale(0.55); }
+  28%, 48% { opacity: 0.9; transform: translate(-50%, -50%) scale(1); filter: brightness(1.5); }
+  62%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.24); filter: brightness(3); }
+}
+
+@keyframes tokusatsu-transform-prop {
+  0%, 34% { opacity: 0; transform: translate(-20%, -50%) rotate(34deg) scale(0.62); }
+  52%, 84% { opacity: 0.88; transform: translate(-50%, -50%) rotate(13deg) scale(1); }
+  100% { opacity: 0; transform: translate(-68%, -50%) rotate(-8deg) scale(1.12); }
 }
 
 @media (max-width: 1120px) {

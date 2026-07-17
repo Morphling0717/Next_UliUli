@@ -73,11 +73,11 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
   }
 
   if (activeTeams.size <= 1 && !preventEnd) {
-    const winners = winningCombatants.map((fighter) => {
+    const winnerNames = winningCombatants.map((fighter) => {
       if (!fighter.isSummon || !fighter.summonerId) return fighter.name;
-      const summoner = runtime.fighters.find((candidate) => candidate.id === fighter.summonerId);
-      return summoner ? `${fighter.name}（${summoner.name}召唤）` : fighter.name;
-    }).join(' & ');
+      return runtime.fighters.find((candidate) => candidate.id === fighter.summonerId)?.name ?? fighter.name;
+    });
+    const winners = [...new Set(winnerNames)].join(' & ');
     const winTeam = winningCombatants.length > 0 ? (winningCombatants[0].teamId ? `【${winningCombatants[0].teamId}】` : '') : '';
     const winnerLabel = [winTeam, winners || '无（同归于尽）'].filter(Boolean).join(' ');
     runtime.log('win', `🏆 最终胜者：${winnerLabel}！`);

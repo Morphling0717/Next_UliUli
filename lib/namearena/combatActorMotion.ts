@@ -38,6 +38,10 @@ export const TING_SELF_DESTRUCT_TIMELINE = {
 const MOTION_TIMINGS: Record<CombatActorMotion, CombatActorMotionTiming> = {
   stationary: { durationMs: 0, effectDelayMs: 0, impactDelayMs: 0 },
   melee_lunge: { durationMs: 620, effectDelayMs: 180, impactDelayMs: 205 },
+  aerial_kick: { durationMs: 920, effectDelayMs: 300, impactDelayMs: 470 },
+  delayed_slash: { durationMs: 980, effectDelayMs: 320, impactDelayMs: 520 },
+  heavy_lunge: { durationMs: 780, effectDelayMs: 220, impactDelayMs: 340 },
+  multi_melee_lunge: { durationMs: 1320, effectDelayMs: 180, impactDelayMs: 300 },
   self_destruct_cling: {
     durationMs: TING_SELF_DESTRUCT_TIMELINE.durationMs,
     effectDelayMs: TING_SELF_DESTRUCT_TIMELINE.effectDelayMs,
@@ -77,7 +81,11 @@ function getDestination(
     + Math.abs(ny) * (actorRect.height + targetRect.height) / 2;
   const stopDistance = motion === 'self_destruct_cling'
     ? Math.max(22, touchDistance * 0.28)
-    : Math.max(54, touchDistance * 0.92 + 6);
+    : motion === 'delayed_slash'
+      ? Math.max(38, touchDistance * 0.72)
+      : motion === 'heavy_lunge' || motion === 'multi_melee_lunge'
+        ? Math.max(46, touchDistance * 0.8)
+        : Math.max(54, touchDistance * 0.92 + 6);
   const travel = Math.max(0, distance - stopDistance);
   const sideOffset = motion === 'self_destruct_cling' ? Math.min(10, touchDistance * 0.08) : 0;
   return {
@@ -110,6 +118,52 @@ export function createCombatActorMotionPlan(
         { offset: 0.35, x: destination.x, y: destination.y, easing: 'cubic-bezier(0.1, 0.78, 0.18, 1)' },
         { offset: 0.62, x: destination.x, y: destination.y },
         { offset: 0.72, x: destination.x + nx * 7, y: destination.y + ny * 7, easing: 'ease-out' },
+        { offset: 1, x: 0, y: 0, easing: 'cubic-bezier(0.28, 0.02, 0.36, 1)' },
+      ],
+    };
+  }
+
+  if (motion === 'aerial_kick') {
+    const arcHeight = Math.min(118, Math.max(48, distance * 0.24));
+    return {
+      ...timing,
+      destination,
+      frames: [
+        { offset: 0, x: 0, y: 0 },
+        { offset: 0.12, x: -nx * 8, y: -ny * 8 + 8, easing: 'ease-in' },
+        { offset: 0.36, x: destination.x * 0.58, y: destination.y * 0.58 - arcHeight, easing: 'cubic-bezier(0.16, 0.76, 0.28, 1)' },
+        { offset: 0.52, x: destination.x, y: destination.y, easing: 'cubic-bezier(0.08, 0.8, 0.16, 1)' },
+        { offset: 0.64, x: destination.x + nx * 12, y: destination.y + ny * 12 },
+        { offset: 1, x: 0, y: 0, easing: 'cubic-bezier(0.28, 0.02, 0.36, 1)' },
+      ],
+    };
+  }
+
+  if (motion === 'delayed_slash') {
+    return {
+      ...timing,
+      destination,
+      frames: [
+        { offset: 0, x: 0, y: 0 },
+        { offset: 0.16, x: -nx * 12, y: -ny * 12, easing: 'ease-in' },
+        { offset: 0.34, x: destination.x, y: destination.y, easing: 'cubic-bezier(0.08, 0.84, 0.16, 1)' },
+        { offset: 0.58, x: destination.x, y: destination.y },
+        { offset: 0.67, x: destination.x + nx * 24, y: destination.y + ny * 24, easing: 'ease-out' },
+        { offset: 1, x: 0, y: 0, easing: 'cubic-bezier(0.28, 0.02, 0.36, 1)' },
+      ],
+    };
+  }
+
+  if (motion === 'heavy_lunge' || motion === 'multi_melee_lunge') {
+    return {
+      ...timing,
+      destination,
+      frames: [
+        { offset: 0, x: 0, y: 0 },
+        { offset: 0.15, x: -nx * 14, y: -ny * 14, easing: 'ease-in' },
+        { offset: 0.4, x: destination.x, y: destination.y, easing: 'cubic-bezier(0.08, 0.82, 0.16, 1)' },
+        { offset: 0.58, x: destination.x + nx * 10, y: destination.y + ny * 10 },
+        { offset: 0.7, x: destination.x, y: destination.y, easing: 'ease-out' },
         { offset: 1, x: 0, y: 0, easing: 'cubic-bezier(0.28, 0.02, 0.36, 1)' },
       ],
     };

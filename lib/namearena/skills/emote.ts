@@ -17,7 +17,7 @@ type EmoteDamageResult = {
   actual: number;
   interrupted: boolean;
   redirected: boolean;
-  redirectKind: 'joker' | 'originium' | 'owl_emperor' | null;
+  redirectKind: 'joker' | 'originium' | 'owl_emperor' | 'momo' | null;
 };
 
 function canContinueEmoteAction(fighter: Fighter): boolean {
@@ -76,7 +76,9 @@ function applyEmoteDamage(
       ? 'originium'
       : damageOptions.redirectedByOwlEmperor
         ? 'owl_emperor'
-        : null;
+        : damageOptions.redirectedByMomo
+          ? 'momo'
+          : null;
   const redirected = redirectKind !== null;
   const resolvedActual = redirectKind === 'joker'
     ? damageOptions.redirectedJokerDamage ?? actual
@@ -84,14 +86,29 @@ function applyEmoteDamage(
       ? damageOptions.redirectedOriginiumDamage ?? actual
       : redirectKind === 'owl_emperor'
         ? damageOptions.redirectedOwlEmperorDamage ?? actual
-      : actual;
+        : redirectKind === 'momo'
+          ? damageOptions.redirectedMomoDamage ?? actual
+          : actual;
   if (!canContinueEmoteAction(ctx.user)) {
     return { actual: resolvedActual, interrupted: true, redirected, redirectKind };
   }
 
-  ctx.log(resolvedActual > 0 ? 'skill' : 'info', redirectKind === 'owl_emperor'
-    ? `🐲 【${actionName}】${ctx.user.name} 对 ${target.name} 的攻击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`
-    : logText(resolvedActual, redirectKind));
+  const outcomeText = resolvedActual > 0
+    ? redirectKind === 'owl_emperor'
+      ? `🐲 【${actionName}】${ctx.user.name} 对 ${target.name} 的攻击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`
+      : redirectKind === 'momo'
+        ? `💗 【${actionName}】${target.name} 通过【|OMO】把伤害均摊给舰长，舰长合计损失 ${resolvedActual} 点生命。`
+        : logText(resolvedActual, redirectKind)
+    : redirectKind === 'joker'
+      ? `🎭 【${actionName}】攻击被 ${target.name} 的随机恶作剧带偏，但转移后仍被化解，没有单位损失生命。`
+      : redirectKind === 'originium'
+        ? `𖽚 【${actionName}】攻击被阿喃那转入源石网络，但源石结晶均未损失生命。`
+        : redirectKind === 'owl_emperor'
+          ? `🐲 【${actionName}】攻击被帝王之征全数接走，但龙未损失生命。`
+          : redirectKind === 'momo'
+            ? `💗 【${actionName}】${target.name} 通过【|OMO】完成均摊，但舰长均未损失生命。`
+            : `🛡️ 【${actionName}】${ctx.user.name} 的攻击被 ${target.name} 化解，没有造成生命伤害。`;
+  ctx.log(resolvedActual > 0 ? 'skill' : 'info', outcomeText);
   if (resolvedActual > 0) ctx.flushDeferredDamageEvents?.();
   if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     ctx.markDefeated(target, {
@@ -184,7 +201,7 @@ function executeMarkOwner(ctx: SkillContext): boolean {
         ? `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但阿喃那将冲击转入源石网络，共对源石结晶结算 ${damage} 点伤害；阿喃那本体未受伤！`
         : damage > 0
           ? `👁️ 【先认个脸熟】${ctx.user.name} 死死盯住 ${ctx.target.name}，先把未来主人的脸记下来，实际造成 ${damage} 点伤害！`
-          : `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但防护把视线挡开，实际造成 0 点伤害！`,
+          : `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但防护把视线挡开，没有造成生命伤害！`,
     true,
   );
   if (interrupted) return true;
@@ -233,7 +250,7 @@ function executeWheelCleave(ctx: SkillContext): boolean {
     amount,
     '退魔之剑',
     (damage, redirectKind) => {
-      const zeroText = getEmoteClaimableKills(ctx.target) === 0 ? '，零杀锚点目标被轮盘额外校准' : '';
+      const zeroText = getEmoteClaimableKills(ctx.target) === 0 ? '，认主账本余额为 0 的锚点目标被轮盘额外校准' : '';
       if (redirectKind === 'joker') {
         return `🧿 【退魔之剑】${ctx.user.name} 将累计适应值压进轮盘，一刀切向 ${ctx.target.name}${zeroText}，但刀路被随机恶作剧带偏，转移目标实际承受 ${damage} 点伤害！`;
       }
@@ -297,7 +314,7 @@ function executeAllMastersReturn(ctx: SkillContext): boolean {
   if (killsBefore > 0 && killsAfter === 0) {
     const healed = healFighter(ctx.user, Math.floor(ctx.user.wis + adaptTotal * 0.08), ctx.log);
     if (healed > 0) {
-      ctx.log('heal', `🔁 【零杀锚点】场上出现新的 0 击杀玩家，${ctx.user.name} 的复活锚点发亮，恢复 ${healed} 点生命。`);
+      ctx.log('heal', `🔁 【零杀锚点】场上出现新的“认主账本余额为 0”玩家，${ctx.user.name} 的复活锚点发亮，恢复 ${healed} 点生命。`);
     }
   }
   return true;

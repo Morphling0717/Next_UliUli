@@ -218,6 +218,13 @@ const DEFENSE_STATUS_PROFILES: Record<string, DefenseStatusProfile> = {
     spellBlockText: '🛐 【古之咒文】唤起太阳神威，为 {target} 挡下了{source}{healText}！',
     preSkillBlockText: '🛐 【古之咒文】唤起太阳神威，为 {target} 挡下了 {user} 的【{skill}】{healText}！',
   },
+  momo_guard_vent: {
+    name: '防御降临',
+    spellBlockText: '🛡️ 【GUARD VENT】降下的契约盾为 {target} 挡下了{source}{healText}！',
+    preSkillBlockText: '🛡️ 【GUARD VENT】降下的契约盾为 {target} 挡下了 {user} 的【{skill}】{healText}！',
+    controlBlockText: '🛡️ 【GUARD VENT】的契约盾替 {target} 隔绝了{effect}！',
+    controlCleanseText: '🛡️ 【GUARD VENT】的契约盾替 {target} 清除了控制与沉默！',
+  },
   gacha_heavenly_exchange: {
     name: '天井兑换',
     spellBlockText: '💰 【天井兑换】检索出的防御牌替 {target} 挡下了{source}{healText}！',

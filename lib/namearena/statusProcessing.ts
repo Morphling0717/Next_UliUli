@@ -67,6 +67,21 @@ function findStatusApplier(runtime: StatusProcessingRuntime, status: StatusEntry
     : undefined;
 }
 
+const STATUS_SETTLEMENT_ORDER = new Map<string, number>([
+  ['POISON', 0],
+  ['BURN', 1],
+  ['BLEED', 2],
+  ['WATER_PRISON', 3],
+  ['REGEN', 10],
+  ['WT_REPAIRING', 11],
+  ['STYLE_FAMILY', 12],
+  ['PLUG_HEART', 13],
+]);
+
+function statusSettlementPriority(status: StatusEntry): number {
+  return STATUS_SETTLEMENT_ORDER.get(status.type) ?? 100;
+}
+
 function normalizeLegacyAirborne(actor: Fighter): void {
   const entries = actor.status.filter((status) => status.type === 'AIRBORNE' || status.type === 'WT_AIRBORNE');
   if (entries.length === 0) return;
@@ -163,9 +178,13 @@ export function resolveAirborneLanding(
   runtime.flushDeferredDamageEvents(actor, 'mitigation');
   runtime.log(
     actualDamage > 0 ? 'poison' : 'info',
-    isWarThunder
-      ? `🚀 【炮震坠落】${actor.name} 从大口径冲击中重重落地，实际损失 ${actualDamage} 点生命！`
-      : `🚀 【击飞坠地】${actor.name} 重重砸回战场，实际损失 ${actualDamage} 点生命！`,
+    actualDamage > 0
+      ? isWarThunder
+        ? `🚀 【炮震坠落】${actor.name} 从大口径冲击中重重落地，实际损失 ${actualDamage} 点生命！`
+        : `🚀 【击飞坠地】${actor.name} 重重砸回战场，实际损失 ${actualDamage} 点生命！`
+      : isWarThunder
+        ? `🚀 【炮震坠落】${actor.name} 完成落地，但防护吸收了全部冲击，未损失生命！`
+        : `🚀 【击飞坠地】${actor.name} 砸回战场，但落地冲击被全部化解，未损失生命！`,
   );
   if (actualDamage > 0 || (actor.pendingDamageEvents?.length ?? 0) > 0) {
     runtime.flushDeferredDamageEvents(actor);
@@ -216,6 +235,17 @@ export function advanceGlobalTimedStatuses(
       return [];
     });
     cleanupOrphanedTimedStatModifiers(fighter);
+  });
+}
+
+export function stampNewGlobalTimedStatuses(fighters: Fighter[], turnCount: number): void {
+  fighters.forEach((fighter) => {
+    fighter.status.forEach((status) => {
+      normalizeStatusEntry(status);
+      if (status.expiresOn === 'global_action_end' && status.duration < 999 && status.appliedTurn === undefined) {
+        status.appliedTurn = turnCount;
+      }
+    });
   });
 }
 
@@ -277,13 +307,19 @@ export function processStatusTurn(
   );
   const nextStatusEntries: Array<{ original: StatusEntry; next: StatusEntry }> = [];
   const processedStatuses = new Set(actor.status);
-  const statusesToProcess = [...actor.status];
+  // Damage-over-time always resolves before recovery. A fixed secondary order
+  // prevents insertion history from deciding survival or kill ownership.
+  const statusesToProcess = actor.status
+    .map((status, index) => ({ status, index }))
+    .sort((a, b) => statusSettlementPriority(a.status) - statusSettlementPriority(b.status) || a.index - b.index)
+    .map(({ status }) => status);
   const isSlacking = actor.status.some((status) => status.type === 'SYNERGY_SLACKING');
   let pendingAirborneLanding: StatusEntry | undefined;
   let pendingActionBlockExpiry: StatusEntry | undefined;
 
   for (const status of statusesToProcess) {
     if (actor.currentHp <= 0 || actor.isDead || actor.isDeadAnnounced) break;
+    if (!actor.status.includes(status)) continue;
 
     if (!isSlacking && isStatusType(status.type, DOT_STATUS_TYPES)) {
       const poisonStacks = Math.max(1, Math.min(3, status.stacks ?? 1));
@@ -312,6 +348,8 @@ export function processStatusTurn(
       if (actualDmg > 0) {
         const stackText = status.type === 'POISON' ? `（${poisonStacks} 层）` : '';
         runtime.log('poison', `${statusInfo?.icon ?? ''} ${actor.name} ${actionText}${stackText}，实际损失 ${actualDmg} 点生命！`);
+      } else if (damageOptions.redirectedByMomo) {
+        runtime.log('info', `${statusInfo?.icon ?? ''} ${actor.name} 的【${statusInfo?.name ?? status.type}】触发【|OMO】，舰长合计损失 ${damageOptions.redirectedMomoDamage ?? 0} 点生命；${actor.name} 本体未受伤。`);
       } else {
         runtime.log('info', `${statusInfo?.icon ?? ''} ${actor.name} 的【${statusInfo?.name ?? status.type}】本次没有穿透防护，生命未减少。`);
       }

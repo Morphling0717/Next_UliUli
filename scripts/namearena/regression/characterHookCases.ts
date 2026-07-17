@@ -381,7 +381,7 @@ export function runCharacterHookCases(): string[] {
     engine.markDefeated(engineCroc, { message: '💀 【测试】牢鳄被小汀击倒。', killer: engineTing });
 
     assert(engineTing.stats.kills === 1, `Ting should receive the Croc kill, got ${engineTing.stats.kills}`);
-    assert(engineTing.currentHp === 2400, `Ting Croc-kill momentum should heal 35% max HP, got ${engineTing.currentHp}`);
+    assert(engineTing.currentHp === 3320, `Ting Croc-kill momentum should heal 58% max HP, got ${engineTing.currentHp}`);
     assert(engineTing.atk === 120 && engineTing.def === 240 && engineTing.res === 180, 'Ting Croc-kill momentum should restore zeroed stats');
     assert(!engineTing.status.some((status) => ['POISON', 'STUN', 'NO_HEAL', 'ZEROED'].includes(status.type)), 'Ting Croc-kill momentum should cleanse dangerous negative statuses');
     assert(['INVUL', 'BKB', 'SPELL_BLOCK', 'REGEN'].every((type) => engineTing.status.some((status) => status.type === type)), 'Ting Croc-kill momentum should grant short survival statuses');
@@ -427,7 +427,7 @@ export function runCharacterHookCases(): string[] {
 
     assert(engine.fighters[1].currentHp > 0 && !engine.fighters[1].isDeadAnnounced, 'Ting suicide bomb should not one-shot full-health transformed Croc');
     assert(engine.fighters[0].currentHp > 0 && !engine.fighters[0].isDeadAnnounced, 'Ting suicide bomb recoil should not directly remove Ting from the battlefield');
-    assert(engine.fighters[0].hpPct <= 0.5, `Ting suicide bomb should still leave Ting heavily damaged, got hpPct ${engine.fighters[0].hpPct}`);
+    assert(engine.fighters[0].hpPct >= 0.6 && engine.fighters[0].hpPct <= 0.85, `Ting suicide bomb should leave a meaningful but non-crippling recoil cost after lifesteal, got hpPct ${engine.fighters[0].hpPct}`);
     cases.push('Ting suicide bomb damages without double-removal');
   }
 
@@ -454,7 +454,7 @@ export function runCharacterHookCases(): string[] {
     engine.handleTransformations(engine.fighters[0]);
     engine.fighters[0].tokusatsuThroneResonance = 4;
 
-    const selectedSkill = withRandomSequence([0.3], () => engine.selectSkill(engine.fighters[0]));
+    const selectedSkill = withRandomSequence([0.09], () => engine.selectSkill(engine.fighters[0]));
 
     assert(selectedSkill === 'bujin_chair', `Tokusatsu throne resonance should raise high-HP chair chance enough to select bujin_chair, got ${selectedSkill}`);
     cases.push('Tokusatsu throne resonance raises chair selection chance');
@@ -874,6 +874,22 @@ export function runCharacterHookCases(): string[] {
 
     assert(selectedSkill === 'gamer_clutch_ace', `Gamer solo clutch hook should select gamer_clutch_ace, got ${selectedSkill}`);
     cases.push('Gamer solo clutch skill-selection hook');
+  }
+
+  {
+    const gamer = makeFighter('玄凝@A');
+    const marked = makeFighter('玄凝已读输入目标@B');
+    const other = makeFighter('玄凝随机干扰目标@C');
+    const { engine } = makeDeathEngine([gamer, marked, other]);
+    engine.fighters[0].job = 'ALL_PLATFORM_CHAMPION';
+    engine.fighters[0].gamerMarkedTargetId = engine.fighters[1].id;
+
+    const resolved = withRandomSequence([0.99], () =>
+      engine.resolveTarget(engine.fighters[0], null, engine.getSelectableTargets(engine.fighters[0])),
+    );
+
+    assert(resolved?.target.id === engine.fighters[1].id, 'Gamer should execute the selected champion skill against the attacker whose inputs were marked');
+    cases.push('Gamer marked-target skill selection and action targeting stay aligned');
   }
 
   {
@@ -1605,8 +1621,8 @@ export function runCharacterHookCases(): string[] {
 
     engine.checkWinCondition([exodia]);
 
-    assert(logs.some((entry) => entry.text.includes('黑暗大法师（牢鳄召唤）')), 'Summon-only win log should attribute victory to the summoner');
-    cases.push('Summon victory log attributes summoner');
+    assert(logs.some((entry) => entry.text.includes('最终胜者：牢鳄') && !entry.text.includes('黑暗大法师')), 'Summon-only win log should name the summoner without listing the summon as a co-winner');
+    cases.push('Summon victory log names only the summoner');
   }
 
   {
@@ -1616,7 +1632,7 @@ export function runCharacterHookCases(): string[] {
     engine.handleTransformations(engine.fighters[0]);
 
     assert(engine.fighters[0].job === 'CHIMERA', `Succubus hook should transform to CHIMERA, got ${engine.fighters[0].job}`);
-    assert(engine.fighters[0].spd === 121, 'Succubus hook should set chimera speed');
+    assert(engine.fighters[0].spd >= 145, 'Succubus hook should set the balanced chimera speed floor');
     assert(engine.fighters[0].status.some((status) => status.type === 'BKB' && status.sourceId === 'chimera_startup_core'), 'Succubus transform should add startup core BKB');
     assert(engine.fighters[0].status.some((status) => status.type === 'SPELL_BLOCK' && status.sourceId === 'chimera_startup_core'), 'Succubus transform should add startup core spell block');
     assert(logs.some((entry) => entry.text.includes('肉体开始重组')), 'Succubus hook should keep the original transform log');
@@ -1798,7 +1814,7 @@ export function runCharacterHookCases(): string[] {
 
     assert(engine.fighters[0].job === 'VERSATILE_RABBIT', `Bunny hook should transform to VERSATILE_RABBIT, got ${engine.fighters[0].job}`);
     STAT_KEYS.forEach((key) => {
-      assert(engine.fighters[0][key] === 150, `Bunny hook should set ${key} to 150`);
+      assert(engine.fighters[0][key] === 170, `Bunny hook should set ${key} to 170`);
     });
     assert(logs.some((entry) => entry.text.includes('六边形战士')), 'Bunny hook should keep the original transform log');
     cases.push('Bunny transform hook');
@@ -1869,6 +1885,30 @@ export function runCharacterHookCases(): string[] {
     assert(damageIndex >= 0 && defianceIndex > damageIndex, 'Rabbit overtime hit should log its damage before Ting death-save resolution');
     assert(statusIndex > defianceIndex, 'Rabbit overtime post-hit statuses should be logged after Ting death-save resolution');
     cases.push('Rabbit calculator orders damage-save-status causally');
+  }
+
+  {
+    const bunny = makeFighter('兔卷卷@A');
+    const target = makeFighter('爆燃致死测试靶@B');
+    const { engine, logs } = makeDeathEngine([bunny, target]);
+    const engineBunny = engine.fighters[0];
+    const engineTarget = engine.fighters[1];
+    localProject.setCurrentHp(engineBunny, Math.floor(engineBunny.maxHp * 0.4));
+    engine.handleTransformations(engineBunny);
+    engineBunny.mag = 120;
+    engineTarget.transformed = true;
+    engineTarget.maxHp = 1000;
+    engineTarget.status.push({ type: 'BURN', duration: 1 });
+    localProject.setCurrentHp(engineTarget, 240);
+
+    withRandomSequence([0.99, 0.5, 0.5, 0.5], () => {
+      engine.executeSkillAction('v_rabbit_calc_rng', engineBunny, engineTarget);
+    });
+
+    const deathIndex = logs.findIndex((entry) => entry.text.includes('爆燃吞没'));
+    assert(deathIndex >= 0, 'Rabbit overtime should preserve a lethal burn-refresh death log');
+    assert(!logs.slice(deathIndex + 1).some((entry) => entry.text.includes('【无休加班】') && entry.text.includes('被附加')), 'Rabbit overtime must not announce statuses after burn refresh already killed the target');
+    cases.push('Rabbit calculator stops post-hit statuses after lethal burn refresh');
   }
 
   {
@@ -2281,6 +2321,23 @@ export function runCharacterHookCases(): string[] {
 
   {
     const sigua = makeFighter('丝瓜uli@A');
+    const wounded = makeFighter('瓦学妹残局目标@B');
+    const healthy = makeFighter('瓦学妹随机干扰目标@C');
+    const { engine } = makeDeathEngine([sigua, wounded, healthy]);
+    engine.fighters[0].job = 'VALO_JUNIOR';
+    engine.fighters[0].crosshairFocus = 9;
+    localProject.setCurrentHp(engine.fighters[1], Math.floor(engine.fighters[1].maxHp * 0.2));
+
+    const resolved = withRandomSequence([0.99], () =>
+      engine.resolveTarget(engine.fighters[0], null, engine.getSelectableTargets(engine.fighters[0])),
+    );
+
+    assert(resolved?.target.id === engine.fighters[1].id, 'Valorant execute and headshot decisions should resolve against the wounded enemy that triggered them');
+    cases.push('Valorant tactical skill selection and action targeting stay aligned');
+  }
+
+  {
+    const sigua = makeFighter('丝瓜uli@A');
     const { engine } = makeDeathEngine([sigua, makeFighter('选技旁观者@B')]);
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[0]);
@@ -2464,7 +2521,7 @@ export function runCharacterHookCases(): string[] {
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[0]);
 
-    const selectedSkill = withRandomSequence([0.7], () => engine.selectSkill(engine.fighters[0]));
+    const selectedSkill = withRandomSequence([0.69], () => engine.selectSkill(engine.fighters[0]));
 
     assert(selectedSkill === 'chimera_install', `Succubus hook should select chimera_install, got ${selectedSkill}`);
     cases.push('Succubus install skill-selection hook');
@@ -2526,18 +2583,18 @@ export function runCharacterHookCases(): string[] {
     assert(engine.fighters[0].stats.kills === 1, `Killer should receive the kill before emote owner clearing, got ${engine.fighters[0].stats.kills}`);
     assert(engine.fighters[0].atk === killerAtkBefore, 'Emote adaptation should not reduce killer stats');
     assert(engine.fighters[0].maxHp === killerMaxHpBefore, 'Emote adaptation should not reduce killer HP');
-    assert(engineEmote.atk === 11, `Emote should copy 10 atk from killer, got ${engineEmote.atk}`);
-    assert(engineEmote.maxHp === 101, `Emote should copy 100 max HP from killer, got ${engineEmote.maxHp}`);
-    assert((engineEmote.emoteAdaptStats?.atk ?? 0) === 10, `Emote adapt atk should record 10, got ${engineEmote.emoteAdaptStats?.atk}`);
-    assert((engineEmote.emoteAdaptStats?.maxHp ?? 0) === 100, `Emote adapt maxHp should record 100, got ${engineEmote.emoteAdaptStats?.maxHp}`);
+    assert(engineEmote.atk === 7, `Emote should copy 6 atk from killer, got ${engineEmote.atk}`);
+    assert(engineEmote.maxHp === 63, `Emote should copy 62 max HP from killer, got ${engineEmote.maxHp}`);
+    assert((engineEmote.emoteAdaptStats?.atk ?? 0) === 6, `Emote adapt atk should record 6, got ${engineEmote.emoteAdaptStats?.atk}`);
+    assert((engineEmote.emoteAdaptStats?.maxHp ?? 0) === 62, `Emote adapt maxHp should record 62, got ${engineEmote.emoteAdaptStats?.maxHp}`);
     assert(engineOwner.stats.kills === 3, `Owner true kill statistics should remain authoritative, got ${engineOwner.stats.kills}`);
     assert(engineOwner.emoteClaimedKills === 3, `Owner recognition ledger should consume all 3 claimable kills, got ${engineOwner.emoteClaimedKills}`);
-    assert(engineOwner.atk === ownerAtkBefore + 10, `Owner should receive this death's atk bonus, got ${engineOwner.atk}`);
-    assert(engineOwner.maxHp === ownerMaxHpBefore + 100, `Owner should receive this death's max HP bonus, got ${engineOwner.maxHp}`);
+    assert(engineOwner.atk === ownerAtkBefore + 6, `Owner should receive this death's atk bonus, got ${engineOwner.atk}`);
+    assert(engineOwner.maxHp === ownerMaxHpBefore + 62, `Owner should receive this death's max HP bonus, got ${engineOwner.maxHp}`);
     assert(logs.some((entry) => entry.text.includes('属性和生命不会降低')), 'Emote death log should clarify copied stats and HP do not reduce source');
-    assert(logs.some((entry) => entry.text.includes('本次击杀者 10% 生命与属性')), 'Owner bonus log should say the bonus comes from this death only');
+    assert(logs.some((entry) => entry.text.includes('本次击杀者 6.25% 生命与属性')), 'Owner bonus log should say the bonus comes from this death only');
 
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       engine.turnCount += 1;
       engine.finishStep({ current: false });
     }
@@ -2545,18 +2602,18 @@ export function runCharacterHookCases(): string[] {
     assert(!engineEmote.isDead, 'Emote should revive while zero-kill anchors exist and more than two players are alive');
     assert(engineOwner.atk === ownerAtkBefore, `Owner temporary bonus should be removed after emote revive, got ${engineOwner.atk}`);
     assert(engineOwner.maxHp === ownerMaxHpBefore, `Owner temporary HP bonus should be removed after emote revive, got ${engineOwner.maxHp}`);
-    assert(engineEmote.atk === 11, `Emote permanent adaptation should remain after revive, got ${engineEmote.atk}`);
-    assert(engineEmote.currentHp === engineEmote.maxHp && engineEmote.maxHp === 101, `Emote should revive to copied max HP, got ${engineEmote.currentHp}/${engineEmote.maxHp}`);
+    assert(engineEmote.atk === 7, `Emote permanent adaptation should remain after revive, got ${engineEmote.atk}`);
+    assert(engineEmote.currentHp === Math.floor(engineEmote.maxHp * 0.82) && engineEmote.maxHp === 63, `Emote should revive to 82% copied max HP, got ${engineEmote.currentHp}/${engineEmote.maxHp}`);
     engine.fighters[0].atk = 200;
     engine.fighters[0].maxHp = 500;
     localProject.setCurrentHp(engine.fighters[0], 500);
     withRandomSequence([0.3], () => {
       engine.markDefeated(engine.fighters[4], { message: '💀 【测试】表情第二次被击倒。', killer: engine.fighters[0] });
     });
-    assert(engineOwner.atk === ownerAtkBefore + 20, `Owner second bonus should use only the second killer slice, got ${engineOwner.atk}`);
-    assert(engineOwner.maxHp === ownerMaxHpBefore + 50, `Owner second HP bonus should use only the second killer slice, got ${engineOwner.maxHp}`);
+    assert(engineOwner.atk === ownerAtkBefore + 12, `Owner second bonus should use only the second killer slice, got ${engineOwner.atk}`);
+    assert(engineOwner.maxHp === ownerMaxHpBefore + 31, `Owner second HP bonus should use only the second killer slice, got ${engineOwner.maxHp}`);
 
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       engine.turnCount += 1;
       engine.finishStep({ current: false });
     }
@@ -3035,8 +3092,8 @@ export function runCharacterHookCases(): string[] {
 
     assert(engineYuzu.yuzuMarkedTargetId === engineTarget.id, 'Yuzu phase 3 should mark the first available target under deterministic roll');
     const mitigated = engine.applyDamage(engineYuzu, 500, 'skill', false, engineBystander, { actionName: '非目标攻击' });
-    assert(mitigated === 85, `Yuzu should take 20% non-marked damage before phase-3 reduction, got ${mitigated}`);
-    assert(logs.some((entry) => entry.text.includes('唯一目标') && entry.text.includes('非目标敌人') && entry.text.includes('剩余 100 点继续结算')), 'Yuzu non-target mitigation should be logged');
+    assert(mitigated === 95, `Yuzu should take 23% non-marked damage before phase-3 reduction, got ${mitigated}`);
+    assert(logs.some((entry) => entry.text.includes('唯一目标') && entry.text.includes('非目标敌人') && entry.text.includes('剩余 115 点继续结算')), 'Yuzu non-target mitigation should be logged');
 
     engineTarget.maxHp = 100000;
     localProject.setCurrentHp(engineTarget, 100000);
@@ -3271,6 +3328,193 @@ export function runCharacterHookCases(): string[] {
     assert(engineGamer.emoteClaimedKills === 1, `Directly hit gamer should lose one recognition-ledger kill, got ${engineGamer.emoteClaimedKills}`);
     assert((engineJoker.emoteClaimedKills ?? 0) === 0, 'Emote all-masters should not consume a redirected Joker ledger entry');
     cases.push('Emote all-masters isolates redirected targets and true kill stats');
+  }
+
+  {
+    const drawer = makeFighter('强欲套娃测试者@A');
+    const target = makeFighter('强欲套娃旁观者@B');
+    const { engine, logs } = makeDeathEngine([drawer, target]);
+    const pot = engine.Data.GACHA_SSR_POOL.find((entry) => entry.triggerAgain === 2);
+    assert(pot, 'Pot-of-Greed chain test requires the triggerAgain card');
+    const terminal: GachaEntry = {
+      text: '🎁 {USER} 抽到【套娃终点奖励】，获得一次瞄准！',
+      tag: 'buff',
+      status: 'AIM',
+    };
+    engine.SKILLS.gacha_chain_regression = {
+      name: '连锁抽卡测试',
+      tag: 'special',
+      isGacha: true,
+      pool: [pot, terminal],
+      text: '连锁抽卡测试',
+    };
+
+    withRandomSequence([0, 0, 0, 0, 0.99, 0, 0.99, 0, 0.99], () => {
+      engine.executeSkillAction('gacha_chain_regression', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(logs.filter((entry) => entry.text.includes('强欲之壶')).length === 2, 'A Pot drawn by another Pot should activate normally');
+    assert(logs.filter((entry) => entry.text.includes('套娃终点奖励')).length === 3, 'Root Pot plus nested Pot should resolve all three resulting terminal draws');
+    cases.push('Pot of Greed recursively draws two more cards when it draws itself');
+  }
+
+  {
+    const ra = makeFighter('翼神龙治疗日志@A');
+    const target = makeFighter('翼神龙治疗靶@B');
+    const { engine, logs } = makeDeathEngine([ra, target]);
+    const raJob = localProject.jobs.RA_WINGED_DRAGON;
+    assert(raJob, 'Ra healing log test requires RA_WINGED_DRAGON');
+    engine.fighters[0].job = 'RA_WINGED_DRAGON';
+    engine.fighters[0].jobData = { ...raJob, skills: [...raJob.skills] };
+    engine.fighters[0].maxHp = 5000;
+    localProject.setCurrentHp(engine.fighters[0], 4990);
+    engine.fighters[0].mag = 1000;
+    engine.fighters[0].agl = 10000;
+    engine.fighters[0].status.push({ type: 'AIM', duration: 1 });
+    engine.fighters[1].maxHp = 100000;
+    localProject.setCurrentHp(engine.fighters[1], 100000);
+
+    withRandomSequence([0.99, 0.99], () => {
+      engine.executeSkillAction('ra_sun_flare', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[0].currentHp === 5000, 'Ra should clamp healing to missing HP');
+    assert(logs.some((entry) => entry.text.includes('吸收太阳神火') && entry.text.includes('实际恢复 10 点生命')), 'Ra healing log should report the actual clamped heal');
+    cases.push('Ra solar healing log reports actual recovery');
+  }
+
+  {
+    const ultimate = makeFighter('青眼究极龙反噬日志@A');
+    const target = makeFighter('究极龙反噬靶@B');
+    const { engine, logs } = makeDeathEngine([ultimate, target]);
+    const ultimateJob = localProject.jobs.BLUE_EYES_ULTIMATE_DRAGON;
+    assert(ultimateJob, 'Ultimate Dragon recoil test requires BLUE_EYES_ULTIMATE_DRAGON');
+    engine.fighters[0].job = 'BLUE_EYES_ULTIMATE_DRAGON';
+    engine.fighters[0].jobData = { ...ultimateJob, skills: [...ultimateJob.skills] };
+    engine.fighters[0].blueEyesUltimateStrain = 2;
+    engine.fighters[0].agl = 10000;
+    localProject.setCurrentHp(engine.fighters[0], 1);
+    engine.fighters[1].maxHp = 100000;
+    localProject.setCurrentHp(engine.fighters[1], 100000);
+
+    withRandomSequence(Array(20).fill(0.5), () => {
+      engine.executeSkillAction('triple_dragon_head', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[0].currentHp === 1, 'Ultimate Dragon recoil should preserve the one-HP floor');
+    assert(logs.some((entry) => entry.text.includes('融合反噬没有继续扣除生命')), 'Ultimate Dragon recoil log should not claim theoretical damage at the one-HP floor');
+    cases.push('Ultimate Dragon recoil log reports actual HP loss');
+  }
+
+  {
+    const attacker = makeFighter('预估日志攻击者@A');
+    const yuzu = makeFighter('柚子@B');
+    const { engine, logs } = makeDeathEngine([attacker, yuzu]);
+    const engineYuzu = engine.fighters[1];
+    engineYuzu.yuzuShield = 99999;
+    engineYuzu.status = engineYuzu.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    engineYuzu.status.push({ type: 'YUZU_BARRIER', duration: 999 });
+    engine.fighters[0].agl = 10000;
+    engine.fighters[0].status.push({ type: 'AIM', duration: 1 });
+
+    withRandomSequence([0.99], () => {
+      engine.executeSkillAction('bash', engine.fighters[0], engineYuzu);
+    });
+
+    const previewIndex = logs.findIndex((entry) => entry.text.includes('举盾猛击'));
+    const shieldIndex = logs.findIndex((entry) => entry.text.includes('镜界护盾') && entry.text.includes('挡下'));
+    const statusIndex = logs.findIndex((entry) => entry.text.includes('状态结算') && entry.text.includes('眩晕'));
+    assert(previewIndex >= 0 && logs[previewIndex]!.text.includes('预计造成') && logs[previewIndex]!.text.includes('尝试眩晕') && logs[previewIndex]!.text.includes('若伤害发生变化会追加实际结算'), 'Offensive skill preview should label damage and statuses as pending resolution');
+    assert(previewIndex < shieldIndex && shieldIndex < statusIndex, 'Skill cause, mitigation, and failed status outcome should appear in causal order');
+    cases.push('generic skill logs distinguish preview from actual settlement');
+  }
+
+  {
+    const attacker = makeFighter('状态结算攻击者@A');
+    const target = makeFighter('状态结算目标@B');
+    const { engine, logs } = makeDeathEngine([attacker, target]);
+    engine.fighters[0].agl = 10000;
+    engine.fighters[0].status.push({ type: 'AIM', duration: 1 });
+
+    withRandomSequence([0.99], () => {
+      engine.executeSkillAction('bash', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(logs.some((entry) => entry.text.includes('【状态结算】') && entry.text.includes('【眩晕】') && entry.text.includes('接下来 2 次自身行动')), 'A successful declarative status should be confirmed immediately with its clock');
+    cases.push('generic skill logs confirm successful status application immediately');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const joker = makeFighter('屑@B');
+    const laterTarget = makeFighter('群伤缓存后置目标@C');
+    const { engine, logs } = makeDeathEngine([tokusatsu, joker, laterTarget]);
+    const jokerJob = localProject.jobs.GOD_OF_TROLLS;
+    assert(jokerJob, 'Dead-target AoE regression requires GOD_OF_TROLLS');
+    engine.fighters[1].job = 'GOD_OF_TROLLS';
+    engine.fighters[1].jobData = { ...jokerJob, skills: [...jokerJob.skills] };
+    engine.fighters[1].transformed = true;
+    localProject.setCurrentHp(engine.fighters[2], 1);
+
+    withRandomSequence([0, 0.99], () => {
+      engine.executeSkillAction('monster_roar', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[2].isDeadAnnounced, 'Joker redirect should defeat the later cached AoE target in this regression');
+    assert(!logs.some((entry) => entry.text.includes('咆哮冲击') && entry.text.includes(engine.fighters[2].name)), 'The AoE loop must not attack or log a target that died earlier in the same action');
+    cases.push('custom AoE skips targets defeated earlier in the same action');
+  }
+
+  {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const joker = makeFighter('屑@B');
+    const laterTarget = makeFighter('连斩缓存后置目标@C');
+    const { engine, logs } = makeDeathEngine([tokusatsu, joker, laterTarget]);
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    const jokerJob = localProject.jobs.GOD_OF_TROLLS;
+    assert(monsterJob && jokerJob, 'Cached combo-target regression requires monster Bujin and GOD_OF_TROLLS');
+    engine.fighters[0].job = 'MIRACLE_MONSTER_BUJIN';
+    engine.fighters[0].jobData = { ...monsterJob, skills: [...monsterJob.skills] };
+    engine.fighters[0].transformed = true;
+    engine.fighters[1].job = 'GOD_OF_TROLLS';
+    engine.fighters[1].jobData = { ...jokerJob, skills: [...jokerJob.skills] };
+    engine.fighters[1].transformed = true;
+    localProject.setCurrentHp(engine.fighters[2], 1);
+
+    withRandomSequence([0, 0.99], () => {
+      engine.executeSkillAction('bujin_monster_combo', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(engine.fighters[2].isDeadAnnounced, 'Joker redirect should defeat the cached later combo target');
+    assert(!logs.some((entry) => entry.text.includes('第 2 斩') && entry.text.includes(engine.fighters[2].name)), 'A cached combo target killed by an earlier redirected hit must not be attacked again');
+    cases.push('cached multi-hit list skips targets defeated by an earlier redirected hit');
+  }
+
+  {
+    const succubus = makeFighter('克蕾儿丝菲尔@A');
+    const joker = makeFighter('屑@B');
+    const transferVictim = makeFighter('插件转移承受者@C');
+    const { engine, logs } = makeDeathEngine([succubus, joker, transferVictim]);
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    engine.handleTransformations(engine.fighters[0]);
+    const jokerJob = localProject.jobs.GOD_OF_TROLLS;
+    assert(jokerJob, 'Chimera redirected side-damage regression requires GOD_OF_TROLLS');
+    engine.fighters[1].job = 'GOD_OF_TROLLS';
+    engine.fighters[1].jobData = { ...jokerJob, skills: [...jokerJob.skills] };
+    engine.fighters[1].transformed = true;
+
+    withRandomSequence([0, 0, 0.99], () => {
+      engine.executeSupportSkill(
+        chimeraInstallSkillByStatus('PLUG_HEAD'),
+        engine.fighters[0],
+        null,
+        engine.getTeamId(engine.fighters[0]),
+      );
+    });
+
+    assert(logs.some((entry) => entry.text.includes('【暴食之口启动】') && entry.text.includes('转移目标实际承受')), 'Chimera side damage should retain the actual damage after Joker transfer');
+    assert(!logs.some((entry) => entry.text.includes('【暴食之口启动】') && entry.text.includes('实际造成 0 点')), 'Chimera side-damage log must not turn a successful Joker transfer into a zero-damage hit');
+    cases.push('Chimera side damage preserves Joker-redirected settlement');
   }
 
   return cases;

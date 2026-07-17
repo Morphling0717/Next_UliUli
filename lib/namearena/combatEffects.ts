@@ -16,6 +16,10 @@ export type TingCombatMotion =
 export type CombatActorMotion =
   | 'stationary'
   | 'melee_lunge'
+  | 'aerial_kick'
+  | 'delayed_slash'
+  | 'heavy_lunge'
+  | 'multi_melee_lunge'
   | 'self_destruct_cling';
 
 export type CombatImpactTheme =
@@ -30,7 +34,13 @@ export type CombatImpactTheme =
   | 'gacha_summon'
   | 'gacha_dragon'
   | 'gacha_solar'
-  | 'gacha_void';
+  | 'gacha_void'
+  | 'tokusatsu_green'
+  | 'tokusatsu_slash'
+  | 'tokusatsu_alchemy'
+  | 'tokusatsu_throne'
+  | 'tokusatsu_monster'
+  | 'tokusatsu_rainbow';
 
 export type TingCombatEffectCue = {
   theme: 'ting';
@@ -109,7 +119,63 @@ export type GachaCombatEffectCue = {
   stageImpact: boolean;
 };
 
-export type CombatEffectCue = TingCombatEffectCue | GachaCombatEffectCue;
+export type TokusatsuCombatMotion =
+  | 'fan_strike'
+  | 'fan_rider_kick'
+  | 'fan_cross_beam'
+  | 'fan_rocket'
+  | 'fan_hero_punch'
+  | 'henshin_rehearsal'
+  | 'tokusatsu_soul'
+  | 'bujin_slash'
+  | 'black_mist_wave'
+  | 'adversity_flash'
+  | 'miracle_magic'
+  | 'miracle_alchemy'
+  | 'alchemy_armor'
+  | 'bujin_throne'
+  | 'monster_punch'
+  | 'energy_crush'
+  | 'miracle_armor'
+  | 'bujin_monster_combo'
+  | 'monster_roar'
+  | 'great_monster_victory'
+  | 'rainbow_fever';
+
+export type TokusatsuCombatEffectId =
+  | 'toku_fan_strike'
+  | 'toku_fan_rider_kick'
+  | 'toku_fan_cross_beam'
+  | 'toku_fan_rocket'
+  | 'toku_fan_hero_punch'
+  | 'toku_henshin_rehearsal'
+  | 'toku_soul'
+  | 'toku_bujin_slash'
+  | 'toku_black_mist_wave'
+  | 'toku_adversity_flash'
+  | 'toku_miracle_magic'
+  | 'toku_miracle_alchemy'
+  | 'toku_alchemy_armor'
+  | 'toku_bujin_chair'
+  | 'toku_monster_punch'
+  | 'toku_energy_crush'
+  | 'toku_miracle_armor'
+  | 'toku_monster_combo'
+  | 'toku_monster_roar'
+  | 'toku_great_monster_victory'
+  | 'toku_rainbow_fever';
+
+export type TokusatsuCombatEffectCue = {
+  theme: 'tokusatsu';
+  motion: TokusatsuCombatMotion;
+  actorMotion: CombatActorMotion;
+  targetMode: 'actor' | 'targets';
+  presentation: SkillPresentation;
+  impact: CombatImpactTheme;
+  stageImpact: boolean;
+};
+
+export type CombatEffectCue = TingCombatEffectCue | GachaCombatEffectCue | TokusatsuCombatEffectCue;
 
 type CombatEffectEvent = Pick<
   BattleEvent,
@@ -131,8 +197,10 @@ const TING_SKILL_EFFECTS: Record<
   summon_puppet_ting: { motion: 'puppet_ritual', actorMotion: 'stationary', targetMode: 'actor', impact: 'ting_blood' },
 };
 
+type GachaCombatEffectId = Exclude<BattleCombatEffectId, TokusatsuCombatEffectId>;
+
 const GACHA_EFFECTS: Record<
-  BattleCombatEffectId,
+  GachaCombatEffectId,
   Omit<GachaCombatEffectCue, 'theme' | 'presentation' | 'stageImpact'>
 > = {
   gacha_blue_sky: { motion: 'blue_sky', actorMotion: 'stationary', targetMode: 'targets', impact: 'gacha_card' },
@@ -194,10 +262,10 @@ const GACHA_EFFECTS: Record<
 };
 
 export const GACHA_COMBAT_EFFECT_IDS = Object.freeze(
-  Object.keys(GACHA_EFFECTS) as BattleCombatEffectId[],
+  Object.keys(GACHA_EFFECTS) as GachaCombatEffectId[],
 );
 
-const SUMMON_SKILL_EFFECTS: Record<string, BattleCombatEffectId> = {
+const SUMMON_SKILL_EFFECTS: Record<string, GachaCombatEffectId> = {
   surtr_laeva: 'summon_surtr_laeva',
   blue_eyes_burst_stream: 'summon_blue_eyes_burst',
   blue_eyes_sweeping_breath: 'summon_blue_eyes_sweep',
@@ -211,14 +279,14 @@ const SUMMON_SKILL_EFFECTS: Record<string, BattleCombatEffectId> = {
   exodia_obliterate: 'summon_exodia_obliterate',
 };
 
-const GACHA_STAGE_IMPACT_EFFECTS = new Set<BattleCombatEffectId>([
+const GACHA_STAGE_IMPACT_EFFECTS = new Set<GachaCombatEffectId>([
   'summon_blue_eyes_burst',
   'summon_ultimate_burst',
   'summon_ra_flare',
   'summon_exodia_obliterate',
 ]);
 
-const ORDINARY_SUMMON_EFFECTS: Record<string, BattleCombatEffectId> = {
+const ORDINARY_SUMMON_EFFECTS: Record<string, GachaCombatEffectId> = {
   '钟离': 'summon_zhongli_geo',
   Saber: 'summon_saber_slash',
   '萨姆': 'summon_sam_drive',
@@ -254,7 +322,7 @@ function makeCue(
 
 function makeGachaCue(
   event: CombatEffectEvent,
-  effectId: BattleCombatEffectId,
+  effectId: GachaCombatEffectId,
 ): GachaCombatEffectCue {
   const presentation = event.presentation ?? (event.skillId === null ? 'basic' : 'skill');
   return {
@@ -265,14 +333,87 @@ function makeGachaCue(
   };
 }
 
+const TOKUSATSU_EFFECTS: Record<
+  TokusatsuCombatEffectId,
+  Omit<TokusatsuCombatEffectCue, 'theme' | 'presentation' | 'stageImpact'>
+> = {
+  toku_fan_strike: { motion: 'fan_strike', actorMotion: 'melee_lunge', targetMode: 'targets', impact: 'tokusatsu_green' },
+  toku_fan_rider_kick: { motion: 'fan_rider_kick', actorMotion: 'aerial_kick', targetMode: 'targets', impact: 'tokusatsu_green' },
+  toku_fan_cross_beam: { motion: 'fan_cross_beam', actorMotion: 'stationary', targetMode: 'targets', impact: 'tokusatsu_green' },
+  toku_fan_rocket: { motion: 'fan_rocket', actorMotion: 'stationary', targetMode: 'targets', impact: 'tokusatsu_green' },
+  toku_fan_hero_punch: { motion: 'fan_hero_punch', actorMotion: 'heavy_lunge', targetMode: 'targets', impact: 'tokusatsu_green' },
+  toku_henshin_rehearsal: { motion: 'henshin_rehearsal', actorMotion: 'stationary', targetMode: 'actor', impact: 'tokusatsu_alchemy' },
+  toku_soul: { motion: 'tokusatsu_soul', actorMotion: 'stationary', targetMode: 'actor', impact: 'tokusatsu_green' },
+  toku_bujin_slash: { motion: 'bujin_slash', actorMotion: 'delayed_slash', targetMode: 'targets', impact: 'tokusatsu_slash' },
+  toku_black_mist_wave: { motion: 'black_mist_wave', actorMotion: 'stationary', targetMode: 'targets', impact: 'tokusatsu_slash' },
+  toku_adversity_flash: { motion: 'adversity_flash', actorMotion: 'delayed_slash', targetMode: 'targets', impact: 'tokusatsu_slash' },
+  toku_miracle_magic: { motion: 'miracle_magic', actorMotion: 'stationary', targetMode: 'targets', impact: 'tokusatsu_alchemy' },
+  toku_miracle_alchemy: { motion: 'miracle_alchemy', actorMotion: 'stationary', targetMode: 'actor', impact: 'tokusatsu_alchemy' },
+  toku_alchemy_armor: { motion: 'alchemy_armor', actorMotion: 'stationary', targetMode: 'actor', impact: 'tokusatsu_alchemy' },
+  toku_bujin_chair: { motion: 'bujin_throne', actorMotion: 'stationary', targetMode: 'actor', impact: 'tokusatsu_throne' },
+  toku_monster_punch: { motion: 'monster_punch', actorMotion: 'heavy_lunge', targetMode: 'targets', impact: 'tokusatsu_monster' },
+  toku_energy_crush: { motion: 'energy_crush', actorMotion: 'heavy_lunge', targetMode: 'targets', impact: 'tokusatsu_monster' },
+  toku_miracle_armor: { motion: 'miracle_armor', actorMotion: 'stationary', targetMode: 'actor', impact: 'tokusatsu_rainbow' },
+  toku_monster_combo: { motion: 'bujin_monster_combo', actorMotion: 'multi_melee_lunge', targetMode: 'targets', impact: 'tokusatsu_monster' },
+  toku_monster_roar: { motion: 'monster_roar', actorMotion: 'stationary', targetMode: 'targets', impact: 'tokusatsu_monster' },
+  toku_great_monster_victory: { motion: 'great_monster_victory', actorMotion: 'heavy_lunge', targetMode: 'targets', impact: 'tokusatsu_monster' },
+  toku_rainbow_fever: { motion: 'rainbow_fever', actorMotion: 'aerial_kick', targetMode: 'targets', impact: 'tokusatsu_rainbow' },
+};
+
+export const TOKUSATSU_COMBAT_EFFECT_IDS = Object.freeze(
+  Object.keys(TOKUSATSU_EFFECTS) as TokusatsuCombatEffectId[],
+);
+
+const TOKUSATSU_SKILL_EFFECTS: Record<string, TokusatsuCombatEffectId> = {
+  tokusatsu_basic: 'toku_fan_strike',
+  rider_kick: 'toku_fan_rider_kick',
+  henshin_rehearsal: 'toku_henshin_rehearsal',
+  tokusatsu_soul: 'toku_soul',
+  bujin_slash: 'toku_bujin_slash',
+  black_mist_wave: 'toku_black_mist_wave',
+  adversity_flash: 'toku_adversity_flash',
+  miracle_magic: 'toku_miracle_magic',
+  miracle_alchemy: 'toku_miracle_alchemy',
+  alchemy_armor: 'toku_alchemy_armor',
+  bujin_chair: 'toku_bujin_chair',
+  monster_punch: 'toku_monster_punch',
+  energy_crush: 'toku_energy_crush',
+  miracle_armor: 'toku_miracle_armor',
+  bujin_monster_combo: 'toku_monster_combo',
+  monster_roar: 'toku_monster_roar',
+  great_monster_victory: 'toku_great_monster_victory',
+  rainbow_fever: 'toku_rainbow_fever',
+};
+
+const TOKUSATSU_STAGE_IMPACT_EFFECTS = new Set<TokusatsuCombatEffectId>([
+  'toku_black_mist_wave',
+  'toku_monster_roar',
+  'toku_great_monster_victory',
+  'toku_rainbow_fever',
+]);
+
+function makeTokusatsuCue(
+  event: CombatEffectEvent,
+  effectId: TokusatsuCombatEffectId,
+): TokusatsuCombatEffectCue {
+  return {
+    theme: 'tokusatsu',
+    presentation: event.presentation ?? (event.skillId === null ? 'basic' : 'skill'),
+    stageImpact: TOKUSATSU_STAGE_IMPACT_EFFECTS.has(effectId),
+    ...TOKUSATSU_EFFECTS[effectId],
+  };
+}
+
 /** Maps authoritative action metadata to a character effect. Text is only used for random-pool subtypes. */
 export function resolveCombatEffect(
   event: CombatEffectEvent,
-  actor?: Pick<Fighter, 'isTing' | 'isSummon' | 'summonBaseName' | 'name'>,
+  actor?: Pick<Fighter, 'isTing' | 'isTokusatsu' | 'isSummon' | 'summonBaseName' | 'name' | 'job'>,
 ): CombatEffectCue | null {
   const skillId = event.skillId;
   if (event.visualCue?.kind === 'combat_fx') {
-    return makeGachaCue(event, event.visualCue.effectId);
+    const effectId = event.visualCue.effectId;
+    if (effectId in TOKUSATSU_EFFECTS) return makeTokusatsuCue(event, effectId as TokusatsuCombatEffectId);
+    return makeGachaCue(event, effectId as GachaCombatEffectId);
   }
 
   if (actor?.isSummon) {
@@ -286,6 +427,9 @@ export function resolveCombatEffect(
   if (skillId && TING_SKILL_EFFECTS[skillId]) {
     return makeCue(event, TING_SKILL_EFFECTS[skillId]);
   }
+
+  const tokusatsuEffectId = skillId ? TOKUSATSU_SKILL_EFFECTS[skillId] : undefined;
+  if (tokusatsuEffectId) return makeTokusatsuCue(event, tokusatsuEffectId);
 
   if (skillId === 'suicide_rng') {
     const motion = resolveSuicidePoolMotion(event.text);
@@ -302,6 +446,17 @@ export function resolveCombatEffect(
       return makeCue(event, { motion: 'wail', actorMotion: 'stationary', targetMode: 'targets', impact: 'ting_curse' });
     }
     return makeCue(event, { motion: 'rage', actorMotion: 'stationary', targetMode: 'actor', impact: 'ting_blood' });
+  }
+
+  if (actor?.isTokusatsu) {
+    if (skillId === null) {
+      if (actor.job === 'MIRACLE_MONSTER_BUJIN') return makeTokusatsuCue(event, 'toku_monster_punch');
+      if (actor.job === 'MIRACLE_BUJIN') return makeTokusatsuCue(event, 'toku_bujin_slash');
+      return makeTokusatsuCue(event, 'toku_fan_strike');
+    }
+    if (event.type === 'buff' || event.type === 'heal') {
+      return makeTokusatsuCue(event, actor.job === 'MIRACLE_MONSTER_BUJIN' ? 'toku_miracle_armor' : 'toku_miracle_alchemy');
+    }
   }
 
   if (!actor?.isTing) return null;

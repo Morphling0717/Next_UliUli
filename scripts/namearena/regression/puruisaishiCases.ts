@@ -105,6 +105,26 @@ export function runPuruisaishiCases(): string[] {
   }
 
   {
+    const { engine } = makeDeathEngine([
+      makeFighter('鸮@A'),
+      makeFighter('源石倍率旁观者B@B'),
+      makeFighter('源石倍率旁观者C@C'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const owl = engine.fighters[0];
+    const core = engine.fighters.find((fighter) => fighter.isOriginiumCore);
+    assert(owl.isOwl && core, 'Owl originium multiplier test requires Owl and Ananna');
+    const damageOptions: DamageApplicationOptions = { actionName: '鸮源石倍率测试' };
+
+    engine.applyDamage(core, 100, 'skill', true, owl, damageOptions);
+
+    assert(damageOptions.redirectedOriginiumDamage === 135, `Owl's 1.35 outgoing multiplier must apply once through Ananna, got ${damageOptions.redirectedOriginiumDamage}`);
+    cases.push('Owl outgoing multiplier applies once through Ananna network');
+  }
+
+  {
     const owner = makeFighter('牢鳄@A');
     const summon = makeFighter('阿喃那分流召唤物@A');
     const observer = makeFighter('延迟日志旁观者@B');
@@ -281,6 +301,30 @@ export function runPuruisaishiCases(): string[] {
   }
 
   {
+    const waiting = makeFighter('增殖等待反击者@A');
+    const acting = makeFighter('增殖普通行动者@B');
+    waiting.status.push({ type: 'WAIT_COUNTER', duration: 3 });
+    const { engine } = makeDeathEngine([waiting, acting]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
+    assert(crystal, 'Formal-round growth test requires one crystal');
+    crystal.originiumSpawnLargeRound = 0;
+
+    noteLargeRoundActor(engine.battleState, engine.fighters, engine.fighters[1]);
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 1, 'Legacy fallback must not grow a crystal while the formal round still waits for a participant');
+
+    engine.fighters[0].status = engine.fighters[0].status.filter((status) => status.type !== 'WAIT_COUNTER');
+    noteLargeRoundActor(engine.battleState, engine.fighters, engine.fighters[0]);
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 2, 'A completed formal round must grow each eligible crystal at most once');
+    cases.push('Formal large round prevents fallback and duplicate crystal growth');
+  }
+
+  {
     const { engine, logs } = makeDeathEngine([
       makeFighter('矿石病患者@A'),
       makeFighter('旁观者B@B'),
@@ -338,6 +382,39 @@ export function runPuruisaishiCases(): string[] {
     assert(!engine.fighters[1].status.some((status) => status.type === 'ORIGINIUM_DISEASE'), 'Puruisaishi retreat should remove disease status');
     assert(logs.some((entry) => entry.text.includes('普瑞赛斯退场') && entry.text.includes('清除全场矿石病')), 'Puruisaishi retreat should be logged');
     cases.push('Puruisaishi phase-2 shield floors at 1 and retreat clears disease');
+  }
+
+  {
+    const { engine, logs } = makeDeathEngine([
+      makeFighter('普瑞退场日志攻击者@A'),
+      makeFighter('普瑞退场日志旁观者@B'),
+      makeFighter('普瑞退场日志旁观者@C'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 50;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
+    assert(puruisaishi, 'Puruisaishi retreat ordering test requires Puruisaishi');
+    engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).forEach((fighter) => {
+      localProject.setCurrentHp(fighter, 0);
+      fighter.isDead = true;
+      fighter.isDeadAnnounced = true;
+    });
+    puruisaishi.puruisaishiShield = 1;
+    engine.fighters[0].agl = 10000;
+    engine.fighters[0].status.push({ type: 'AIM', duration: 1 });
+
+    withRandomSequence([0.99, 0.99], () => {
+      engine.executeSkillAction('serious_punch', engine.fighters[0], puruisaishi);
+    });
+
+    const attackIndex = logs.findIndex((entry) => entry.text.includes('认真一拳') && entry.text.includes('预计造成'));
+    const shieldIndex = logs.findIndex((entry) => entry.text.includes('【普瑞赛斯护盾】'));
+    const settlementIndex = logs.findIndex((entry) => entry.text.includes('实际结算') && entry.text.includes('完全抵消'));
+    const retreatIndex = logs.findIndex((entry) => entry.text.includes('【普瑞赛斯退场】'));
+    assert(attackIndex >= 0 && attackIndex < shieldIndex, 'Puruisaishi shield log must follow the incoming attack preview');
+    assert(shieldIndex < settlementIndex && settlementIndex < retreatIndex, 'Puruisaishi mitigation, actual settlement, and retreat must stay in causal order');
+    cases.push('Puruisaishi retreat logs follow attack and settlement cause');
   }
 
   {
@@ -509,15 +586,20 @@ export function runPuruisaishiCases(): string[] {
     const targetingRuntime = engine.createActionResolutionRuntime();
     assert(getTargetSelectionWeight(targetingRuntime, firstCrystal) === 2.8, 'More than 10 crystals should make each crystal a primary cleanup target');
     assert(getTargetSelectionWeight(targetingRuntime, core) === 1.2, 'Ananna should remain a secondary target while crystals overflow');
-    assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 0.35, 'Puruisaishi should be deprioritized while crystals sustain her shield');
+    assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 1.25, 'Phase-two Puruisaishi should remain slightly more attractive than an ordinary player target while crystals sustain her shield');
     assert(getTargetSelectionWeight(targetingRuntime, engine.fighters[1]) === 1, 'Players should remain valid ordinary targets during the event');
 
     engine.turnCount = 51;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const infectionAfterFirstOverflow = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    engine.turnCount = 52;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const infectionAfterSecondSmallTurn = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
     const overflowLogs = logs.filter((entry) => entry.text.includes('【源石泛滥】'));
     const dotLogs = logs.filter((entry) => entry.text.includes('【矿石病侵蚀】'));
     assert(overflowLogs.length === 1 && overflowLogs[0]?.text.includes('本轮感染：'), 'Crystal overflow should aggregate all stack gains into one readable log');
-    assert(dotLogs.length === 1, `Originium damage should aggregate infected targets into one log per turn, got ${dotLogs.length}`);
+    assert(infectionAfterSecondSmallTurn === infectionAfterFirstOverflow, 'Crystal overflow must not add infection again on another small action in the same large round');
+    assert(dotLogs.length === 2, `Originium damage should aggregate infected targets into one log on each of the two processed turns, got ${dotLogs.length}`);
     assert(!logs.some((entry) => entry.text.includes('因源石结晶泛滥感染加深')), 'Crystal overflow should not emit one repetitive stack log per target');
 
     engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).forEach((crystal) => {

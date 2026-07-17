@@ -1,5 +1,6 @@
 import { getStageFighterImage, getStageFinisherImage } from "./battleStageModel";
 import { SUMMON_CARD_ART_SLOTS } from "./summonCardArt";
+import { TOKUSATSU_ASSET_PATHS } from "./tokusatsuArt";
 import type { Fighter } from "./types";
 
 const preloadRequests = new Map<string, Promise<boolean>>();
@@ -24,6 +25,11 @@ export function collectStageAssetManifest(fighters: readonly Fighter[]): StageAs
       [art.imagePath, art.cutinPath, art.avatarPath].forEach((source) => {
         if (source && !immediate.has(source)) deferred.add(source);
       });
+    });
+  }
+  if (fighters.some((fighter) => fighter.isTokusatsu)) {
+    TOKUSATSU_ASSET_PATHS.forEach((source) => {
+      if (!immediate.has(source)) deferred.add(source);
     });
   }
 

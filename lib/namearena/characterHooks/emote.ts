@@ -14,7 +14,8 @@ import type { CharacterHook, CharacterHookRuntime } from './types';
 import { withTimedStatModifiersSuspended } from '../statModifiers';
 import { grantStatus } from '../defenseStatus';
 
-const EMOTE_DEATH_REVIVE_TICKS = 3;
+const EMOTE_DEATH_REVIVE_TICKS = 5;
+const EMOTE_DEATH_ADAPT_RATIO = 0.0625;
 
 function hasStatus(fighter: Fighter, type: string): boolean {
   return fighter.status.some((status) => status.type === type);
@@ -96,7 +97,7 @@ function applyOwnerBonus(runtime: CharacterHookRuntime, emote: Fighter, owner: F
   grantStatus(owner, 'EMOTE_OWNER_BONUS', 999, emote.id);
   emote.emoteOwnerId = owner.id;
   emote.emoteOwnerBonus = bonus;
-  runtime.log('buff', `📜 【认主补偿】${owner.name} 临时获得本次击杀者 10% 生命与属性（${formatEmoteStats(bonus)}）；这是死亡认主补偿，${emote.name} 的累计适应值不会借出。`);
+  runtime.log('buff', `📜 【认主补偿】${owner.name} 临时获得本次击杀者 6.25% 生命与属性（${formatEmoteStats(bonus)}）；这是死亡认主补偿，${emote.name} 的累计适应值不会借出。`);
 }
 
 function finalizeEmoteTrueDeath(runtime: CharacterHookRuntime, emote: Fighter, reason: string): void {
@@ -120,10 +121,10 @@ function reviveEmote(runtime: CharacterHookRuntime, emote: Fighter): void {
   emote.emoteReviveTurns = 0;
   emote.emoteReviveAppliedTurn = undefined;
   emote.emoteFinalDead = false;
-  emote.currentHp = emote.maxHp;
+  emote.currentHp = Math.max(1, Math.floor(emote.maxHp * 0.82));
   emote.status = [];
   runtime.syncHpPct(emote);
-  runtime.log('buff', `🧿 【四处认主型魔虚罗】${emote.name} 借着场上的 0 击杀锚点满血复活：“快让我看血流成河，布瑠布由良由良”。累计适应值仍然保留（总和 ${getEmoteAdaptTotal(emote)}）。`);
+  runtime.log('buff', `🧿 【四处认主型魔虚罗】${emote.name} 借着场上“认主账本余额为 0”的锚点复活至 82% 生命：“快让我看血流成河，布瑠布由良由良”。累计适应值仍然保留（总和 ${getEmoteAdaptTotal(emote)}）。`);
 }
 
 function tryFinalOwnerChallenge(runtime: CharacterHookRuntime, emote: Fighter, alivePlayers: Fighter[]): boolean {
@@ -132,7 +133,7 @@ function tryFinalOwnerChallenge(runtime: CharacterHookRuntime, emote: Fighter, a
   if (zeroKillAnchors.length === 0) return false;
 
   emote.emoteFinalChallengeUsed = true;
-  runtime.log('buff', `🧿 【最终认主挑战】场上只剩 2 名玩家，但 ${zeroKillAnchors.map((player) => player.name).join('、')} 仍是 0 击杀，${emote.name} 抢到最后一次复活机会！`);
+  runtime.log('buff', `🧿 【最终认主挑战】场上只剩 2 名玩家，但 ${zeroKillAnchors.map((player) => player.name).join('、')} 的认主账本余额仍为 0，${emote.name} 抢到最后一次复活机会！`);
   reviveEmote(runtime, emote);
   return true;
 }
@@ -162,11 +163,11 @@ function advanceEmoteGlobalReviveClock(runtime: CharacterHookRuntime, emote: Fig
   const alivePlayers = activePlayerCandidates(runtime, emote);
   const zeroKillAnchors = alivePlayers.filter((player) => getEmoteClaimableKills(player) === 0);
   if (zeroKillAnchors.length === 0) {
-    finalizeEmoteTrueDeath(runtime, emote, '三次回合末结算后场上没有 0 击杀玩家作为复活锚点');
+    finalizeEmoteTrueDeath(runtime, emote, '五次回合末结算后场上没有认主账本余额为 0 的玩家作为复活锚点');
     return;
   }
 
-  runtime.log('info', `🧿 【零杀锚点】${zeroKillAnchors.map((player) => player.name).join('、')} 仍是 0 击杀，${emote.name} 找到了复活入口。`);
+  runtime.log('info', `🧿 【零杀锚点】${zeroKillAnchors.map((player) => player.name).join('、')} 的认主账本余额仍为 0（真实击杀统计不变），${emote.name} 找到了复活入口。`);
   reviveEmote(runtime, emote);
 }
 
@@ -218,8 +219,8 @@ export const emoteHook: CharacterHook = {
     const source = findKillerFallback(runtime, fighter, killer);
     let deathGain: EmoteStatMap | null = null;
     if (source) {
-      deathGain = grantEmoteAdaptStats(fighter, source, 0.1, [...EMOTE_DEATH_GAIN_KEYS], 1, { healAddedMaxHp: false });
-      runtime.log('buff', `🧿 【死亡适应】${fighter.name} 被 ${source.name} 击倒，复制并永久获得击杀者 10% 生命与属性（${formatEmoteStats(deathGain)}）；${source.name} 的属性和生命不会降低。`);
+      deathGain = grantEmoteAdaptStats(fighter, source, EMOTE_DEATH_ADAPT_RATIO, [...EMOTE_DEATH_GAIN_KEYS], 1, { healAddedMaxHp: false });
+      runtime.log('buff', `🧿 【死亡适应】${fighter.name} 被 ${source.name} 击倒，复制并永久获得击杀者 6.25% 生命与属性（${formatEmoteStats(deathGain)}）；${source.name} 的属性和生命不会降低。`);
     } else {
       runtime.log('info', `🧿 【死亡适应】${fighter.name} 没能锁定击杀者，本次死亡没有复制到属性。`);
     }
@@ -252,7 +253,7 @@ export const emoteHook: CharacterHook = {
 
     fighter.emoteReviveTurns = EMOTE_DEATH_REVIVE_TICKS;
     fighter.emoteReviveAppliedTurn = runtime.turnCount;
-    runtime.log('info', `🧿 【认主倒计时】${fighter.name} 暂未真正退场：3 次回合末结算后若场上仍有 0 击杀玩家且存活玩家数大于 2，就会复活；若只剩 2 名玩家且仍有 0 杀锚点，则可触发一次最终认主挑战。`);
+    runtime.log('info', `🧿 【认主倒计时】${fighter.name} 暂未真正退场：5 次回合末结算后若场上仍有认主账本余额为 0 的玩家且存活玩家数大于 2，就会复活；若只剩 2 名玩家且仍有这种锚点，则可触发一次最终认主挑战。`);
   },
 
   shouldPreventWin: ({ fighter, runtime }) => {

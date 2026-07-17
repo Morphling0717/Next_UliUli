@@ -62,11 +62,7 @@ export interface PuruisaishiRuntime {
     source: string,
     isTrueDamage?: boolean,
     attacker?: Fighter,
-    options?: {
-      deferTransform?: boolean;
-      actionName?: string;
-      respectDefenses?: boolean;
-    },
+    options?: DamageApplicationOptions,
   ) => number;
   flushDeferredDamageEvents?: (fighter: Fighter) => void;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
@@ -377,6 +373,8 @@ function processOriginiumCrystalGrowth(runtime: PuruisaishiRuntime): void {
     const completedRound = runtime.completedLargeRound;
     const core = runtime.fighters.find((fighter) => fighter.isOriginiumCore && runtime.isActiveCombatant(fighter));
     activeCrystals(runtime).forEach((source) => {
+      if (source.originiumLastGrowthLargeRound === completedRound) return;
+      source.originiumLastGrowthLargeRound = completedRound;
       const wasAttacked = !!source.originiumWasAttackedThisGrowthRound;
       source.originiumGrowthRoundActorIds = [];
       source.originiumWasAttackedThisGrowthRound = false;
@@ -391,6 +389,10 @@ function processOriginiumCrystalGrowth(runtime: PuruisaishiRuntime): void {
     });
     return;
   }
+
+  // The fallback actor ledger exists only for old isolated callers. A live
+  // battle with a formal roster must wait for BattleState to complete the round.
+  if (runtime.largeRoundParticipantIds !== undefined) return;
 
   const actors = activePhaseRoundActors(runtime);
   if (actors.length === 0) return;
@@ -420,8 +422,13 @@ export function processPuruisaishiLargeRoundEnd(runtime: PuruisaishiRuntime): vo
 function processCrystalOverflowInfection(runtime: PuruisaishiRuntime): void {
   const count = activeCrystals(runtime).length;
   if (count <= CRYSTAL_THRESHOLD_COUNT) return;
+  const puruisaishi = activePuruisaishi(runtime);
+  if (!puruisaishi) return;
+  const largeRound = runtime.completedLargeRound ?? runtime.largeRound ?? 1;
+  if (puruisaishi.puruisaishiLastOverflowLargeRound === largeRound) return;
   const targets = activeInfectionTargets(runtime);
   if (targets.length === 0) return;
+  puruisaishi.puruisaishiLastOverflowLargeRound = largeRound;
   const terminalTargets: Fighter[] = [];
   const affected = targets.flatMap((target) => {
     const gained = addOriginiumInfection(
@@ -571,6 +578,7 @@ export function redirectOriginiumCoreDamage(
   const baseShare = Math.floor(amount / crystals.length);
   let remainder = amount % crystals.length;
   let actualTotal = 0;
+  const settlements: Array<{ crystal: Fighter; share: number; actual: number }> = [];
   const incoming = attacker
     ? `${attacker.name} 的${options?.actionName ? `【${options.actionName}】` : '攻击'}`
     : options?.actionName
@@ -585,8 +593,17 @@ export function redirectOriginiumCoreDamage(
       deferTransform: true,
       actionName: '阿喃那伤害均摊',
       respectDefenses: false,
+      bypassOwlOutgoingModifier: true,
     });
     actualTotal += actual;
+    settlements.push({ crystal, share, actual });
+  });
+  if (settlements.length > 0) {
+    runtime.log('info', `🜚 【阿喃那分流结算】${settlements.map(({ crystal, share, actual }) =>
+      `${crystal.name} 分得 ${share} 点、生命实际损失 ${actual} 点`
+    ).join('；')}。`);
+  }
+  settlements.forEach(({ crystal, actual }) => {
     runtime.flushDeferredDamageEvents?.(crystal);
     if (crystal.currentHp <= 0 && !crystal.isDead && !crystal.isDeadAnnounced) {
       runtime.markDefeated(crystal, {

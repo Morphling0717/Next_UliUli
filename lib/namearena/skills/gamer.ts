@@ -128,7 +128,7 @@ function applyTrackedDamage(
 ): { actualDmg: number; redirected: boolean } {
   const options: DamageApplicationOptions = { actionName, deferTransform: true, respectDefenses: true };
   const actualDmg = ctx.applyDamage(target, Math.max(0, amount), 'skill', trueDamage, ctx.user, options);
-  if (options.redirectedByJoker || options.redirectedByOriginiumCore || options.redirectedByOwlEmperor) return { actualDmg: 0, redirected: true };
+  if (options.redirectedByJoker || options.redirectedByOriginiumCore || options.redirectedByOwlEmperor || options.redirectedByMomo) return { actualDmg: 0, redirected: true };
   if (actualDmg > 0 && (options.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced)) {
     ctx.log('info', `${logPrefix}，这一击造成 ${actualDmg} 点${trueDamage ? '真实' : ''}伤害并触发了致死连锁；${target.name} 已在后续效果中退场！`);
   } else if (actualDmg > 0) {
@@ -378,9 +378,10 @@ export const gamerSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const boosted = consumeBoost(ctx.user);
       const apmGain = boosted ? 4 : 3;
+      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (boosted ? 0.1 : 0.07)), ctx.log);
       ctx.user.gamerInputBuffer = Math.min(3, (ctx.user.gamerInputBuffer ?? 0) + 1);
       if (boosted) refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'gamer_clutch_focus');
-      ctx.log('buff', `📈 【${boosted ? '强化资源运营' : '资源运营'}】${ctx.user.name} 放弃无意义平 A，重新规划资源，APM +${apmGain}，输入缓存 +1${boosted ? '，并获得法术抵挡' : ''}！`);
+      ctx.log(healed > 0 ? 'heal' : 'buff', `📈 【${boosted ? '强化资源运营' : '资源运营'}】${ctx.user.name} 放弃无意义平 A，重新规划资源，APM +${apmGain}，输入缓存 +1，${recoveryText(healed)}${boosted ? '，并获得法术抵挡' : ''}！`);
       completeTechnique(ctx, 'macro');
       gainApm(ctx, apmGain, '通过资源运营把手感重新拉满');
       return true;

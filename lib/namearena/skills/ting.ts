@@ -60,7 +60,7 @@ export const tingSkills: Record<string, SkillDefinition> = {
     presentation: 'finisher',
     mult: 3.6,
     ignoreDef: true,
-    selfDmgPct: 0.82,
+    selfDmgPct: 0.35,
     selfDmgCanKill: false,
     condition: (user) => user.hpPct > 0.35,
     text: '💣 {USER} 扑向了 {TARGET}，启动了自毁程序！"我和你爆了！！" 爆炸造成 {VAL} 真实伤害，自己也被反冲炸到濒死！',

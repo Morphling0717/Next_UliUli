@@ -60,6 +60,7 @@ const OWL_FORM_STAT_BUFFS: Partial<Record<OwlWarForm, Partial<Record<StatKey, nu
 
 export const OWL_HEAVEN_MAX = 7;
 export const OWL_WILD_MAX = 5;
+export const OWL_HEAVEN_INHERIT_RATIO = 0.085;
 
 function uniqueSummonName(runtime: Pick<OwlRuntime, 'fighters'>, baseName: string): string {
   const count = runtime.fighters.filter((fighter) =>
@@ -211,8 +212,8 @@ export function switchOwlWarForm(runtime: OwlRuntime, owl: Fighter, next: OwlWar
     );
     const healed = healFighter(owl, Math.floor(owl.maxHp * 0.3), runtime.log);
     runtime.log('heal', healed > 0
-      ? `🕯️ 【哀兵】${owl.name} 清除全部异常与减益，恢复 ${healed} 点生命！`
-      : `🕯️ 【哀兵】${owl.name} 清除全部异常与减益；生命已经全满。`);
+      ? `🕯️ 【哀兵】${owl.name} 清除所有可驱散的异常与减益（矿石病等不可驱散状态保留），恢复 ${healed} 点生命！`
+      : `🕯️ 【哀兵】${owl.name} 清除所有可驱散的异常与减益（矿石病等不可驱散状态保留）；生命已经全满。`);
   }
   runtime.log('buff', `🦉 【天意侵蚀】${owl.name} 由【${OWL_FORM_NAMES[previous]}】转入【${OWL_FORM_NAMES[next]}】：${reason}。`);
   return true;
@@ -289,6 +290,7 @@ export function releaseOwlPhaseTwoLightning(runtime: OwlRuntime, owl: Fighter): 
   const raw = Math.max(80, Math.floor(owl.mag * 0.72 + owl.wis * 0.28));
   runtime.log('skill', `⚡ 【煮酒惊雷】${owl.name}：“这雷把我吓死了！”雷光席卷全场！`);
   targets.forEach((target) => {
+    if (!runtime.isActiveCombatant(target)) return;
     const damageOptions: import('./types').DamageApplicationOptions = {
       actionName: '煮酒惊雷',
       respectDefenses: true,
@@ -299,7 +301,8 @@ export function releaseOwlPhaseTwoLightning(runtime: OwlRuntime, owl: Fighter): 
     const redirected = !!(
       damageOptions.redirectedByJoker ||
       damageOptions.redirectedByOriginiumCore ||
-      damageOptions.redirectedByOwlEmperor
+      damageOptions.redirectedByOwlEmperor ||
+      damageOptions.redirectedByMomo
     );
     if (!redirected) {
       runtime.log(
@@ -364,7 +367,7 @@ export function spawnOwlEmperor(runtime: OwlRuntime, owl: Fighter): Fighter {
   if (existing) return existing;
   return spawnOwlSummon(runtime, owl, {
     kind: 'emperor', baseName: '帝王之征', job: 'OWL_EMPEROR_DRAGON',
-    hp: 3600, atk: 260, def: 145, spd: 135, agl: 100, mag: 260, res: 145, wis: 150,
+    hp: 3650, atk: 260, def: 145, spd: 135, agl: 100, mag: 260, res: 145, wis: 150,
   });
 }
 
@@ -389,8 +392,8 @@ export function enterOwlPhaseThree(runtime: OwlRuntime, owl: Fighter): boolean {
   if (!nextJob) return false;
   const hpRatio = owl.maxHp > 0 ? owl.currentHp / owl.maxHp : 1;
   withTimedStatModifiersSuspended(owl, () => {
-    owl.maxHp = Math.max(3900, Math.min(4700, Math.floor(owl.maxHp * 1.25)));
-    owl.currentHp = Math.max(1, Math.floor(owl.maxHp * Math.max(0.5, hpRatio)));
+    owl.maxHp = Math.max(3950, Math.min(4750, Math.floor(owl.maxHp * 1.26)));
+    owl.currentHp = Math.max(1, Math.floor(owl.maxHp * Math.max(0.57, hpRatio)));
     owl.atk = scaleStat(owl.atk, 1.35, 270);
     owl.def = scaleStat(owl.def, 1.25, 205);
     owl.spd = scaleStat(owl.spd, 1.2, 160);
@@ -434,19 +437,19 @@ export function grantOwlHeavenFromDeath(runtime: OwlRuntime, fallen: Fighter): v
     if (state.phase !== 2) return;
     const gains: string[] = [];
     withTimedStatModifiersSuspended(owl, () => {
-      const hpGain = Math.max(1, Math.floor(fallen.maxHp * 0.1));
+      const hpGain = Math.max(1, Math.floor(fallen.maxHp * OWL_HEAVEN_INHERIT_RATIO));
       owl.maxHp += hpGain;
       owl.currentHp += hpGain;
       gains.push(`血+${hpGain}`);
       INHERITED_STATS.forEach((key) => {
-        const gain = Math.max(1, Math.floor(fallen[key] * 0.1));
+        const gain = Math.max(1, Math.floor(fallen[key] * OWL_HEAVEN_INHERIT_RATIO));
         owl[key] += gain;
         gains.push(`${key}+${gain}`);
       });
     });
     state.heavenStacks = Math.min(OWL_HEAVEN_MAX, state.heavenStacks + 1);
     runtime.syncHpPct(owl);
-    runtime.log('buff', `🦉 【不可能！】${owl.name}：“我二弟天下无敌！”继承 ${fallen.name} 10% 数值（${gains.join(' / ')}），天意 ${state.heavenStacks}/${OWL_HEAVEN_MAX}。`);
+    runtime.log('buff', `🦉 【不可能！】${owl.name}：“我二弟天下无敌！”继承 ${fallen.name} 8.5% 数值（${gains.join(' / ')}），天意 ${state.heavenStacks}/${OWL_HEAVEN_MAX}。`);
     if (state.heavenStacks >= OWL_HEAVEN_MAX) enterOwlPhaseThree(runtime, owl);
   });
 }

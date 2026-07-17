@@ -153,7 +153,7 @@ export function loadProject(root = projectRoot, options: { purge?: boolean } = {
 }
 
 export const localProject = loadProject(projectRoot);
-export const SPECIALS = ['水人', '玄凝', '小汀', '牢鳄', '克蕾儿丝菲尔', '丝瓜uli', '兔卷卷', '刺猬人', '屑', 'M1A2_abrams_sep', '表情', '柚子', '鸮'];
+export const SPECIALS = ['水人', '玄凝', '小汀', '牢鳄', '克蕾儿丝菲尔', '丝瓜uli', '兔卷卷', '刺猬人', '屑', 'M1A2_abrams_sep', '表情', '柚子', '鸮', '萌月沫沫'];
 export const NO_WATER = SPECIALS.filter((name) => name !== '水人');
 export const DEFAULT_REGRESSION_MAX_TURNS = 1200;
 export const DEFAULT_STRESS_MAX_TURNS = Number.parseInt(process.env.NAMEARENA_MAX_TURNS ?? '1600', 10);
@@ -366,7 +366,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     for (let i = recentDeaths.length - 1; i >= 0; i -= 1) {
       const recentDeath = recentDeaths[i];
       if (!recentDeath) continue;
-      if (text.includes(recentDeath.name) && /复活|死者苏生|拉回战场|从地狱归来|并没有死|浴火重生|被水人救起|备用载具|重新部署/.test(text)) {
+      if (text.includes(recentDeath.name) && /复活|死者苏生|拉回战场|从地狱归来|从水里捞起|并没有死|浴火重生|被水人救起|备用载具|重新部署/.test(text)) {
         recentDeaths.splice(i, 1);
       } else if (
         line <= recentDeath.deadline &&
