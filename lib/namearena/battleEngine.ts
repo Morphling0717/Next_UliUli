@@ -1401,7 +1401,8 @@ export class BattleEngine {
       attacker &&
       attacker.id !== target.id &&
       source !== 'momo_cost' &&
-      source !== 'momo_share'
+      source !== 'momo_share' &&
+      source !== 'yuzu_share'
     ) {
       const captains = activeMomoShareCaptains(this.createMomoRuntime(), target);
       const shares = splitDamageAcrossTargets(amount, captains.length);

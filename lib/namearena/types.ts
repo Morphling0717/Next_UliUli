@@ -626,6 +626,8 @@ export interface Fighter {
   yuzuPhase?: number;
   yuzuShield?: number;
   yuzuOpeningShieldApplied?: boolean;
+  /** Preserves temporary FFA teammates after their dynamic team link is removed. */
+  yuzuKnownTeammateIds?: string[];
   yuzuMarkedTargetId?: string;
   yuzuMarkedHitCount?: number;
   yuzuFuriosoCountedTurn?: number;

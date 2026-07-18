@@ -23,8 +23,8 @@ import { findActivePuppetProtector, isSelectableTargetFor } from '../targeting';
 const { SKILL_TAGS } = Data;
 
 const YUZU_PHASE_TWO_DAMAGE_SCALE = 0.9;
-const YUZU_PHASE_THREE_DAMAGE_SCALE = 0.76;
-const YUZU_FURIOSO_DAMAGE_SCALE = 0.72;
+const YUZU_PHASE_THREE_DAMAGE_SCALE = 0.707;
+const YUZU_FURIOSO_DAMAGE_SCALE = 0.667;
 const YUZU_MARKED_MAX_HP_FLOOR_RATIO = 0.022;
 const YUZU_MARKED_ATK_FLOOR_RATIO = 0.18;
 const YUZU_FURIOSO_ATK_FLOOR_RATIO = 1.05;

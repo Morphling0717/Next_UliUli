@@ -3,6 +3,8 @@ import {
   clearYuzuMark,
   drawYuzuWeapon,
   ensureYuzuMarkedTarget,
+  YUZU_PHASE_THREE_REDUCTION,
+  YUZU_UNMARKED_INCOMING_DAMAGE_MULTIPLIER,
 } from '../../../lib/namearena/yuzuMechanics';
 import {
   processPuruisaishiRoundEnd,
@@ -3092,7 +3094,10 @@ export function runCharacterHookCases(): string[] {
 
     assert(engineYuzu.yuzuMarkedTargetId === engineTarget.id, 'Yuzu phase 3 should mark the first available target under deterministic roll');
     const mitigated = engine.applyDamage(engineYuzu, 500, 'skill', false, engineBystander, { actionName: '非目标攻击' });
-    assert(mitigated === 95, `Yuzu should take 23% non-marked damage before phase-3 reduction, got ${mitigated}`);
+    const expectedMitigated = Math.floor(
+      Math.floor(500 * YUZU_UNMARKED_INCOMING_DAMAGE_MULTIPLIER) * (1 - YUZU_PHASE_THREE_REDUCTION),
+    );
+    assert(mitigated === expectedMitigated, `Yuzu should apply non-marked mitigation before phase-3 reduction, expected ${expectedMitigated}, got ${mitigated}`);
     assert(logs.some((entry) => entry.text.includes('唯一目标') && entry.text.includes('非目标敌人') && entry.text.includes('剩余 115 点继续结算')), 'Yuzu non-target mitigation should be logged');
 
     engineTarget.maxHp = 100000;

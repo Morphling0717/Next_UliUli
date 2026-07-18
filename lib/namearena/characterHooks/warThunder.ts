@@ -8,6 +8,9 @@ const WT_BACKUP_COST = 7;
 const WT_CAS_COST = 5;
 const WT_PRECISE_CAS_COST = 4;
 const WT_SP_MAX = 8;
+const WT_TOP_TIER_MAX_HP = 4580;
+const WT_TOP_TIER_DEF = 261;
+const WT_TOP_TIER_RES = 216;
 
 const WT_REPAIR_STATUS_TYPES = new Set([
   'STUN',
@@ -150,11 +153,11 @@ export const warThunderHook: CharacterHook = {
     if (!fighter.isWT || !WT_TOP_TIER) return false;
 
     transform('WT_TOP_TIER', `🚨 【乘员昏迷 / 载具大破】\n${fighter.name} 原下载具被毁！气得一拳砸碎键盘："防空车呢？！我直接上顶级备用载具！"\n🚜 重装巨兽降临！转职为【${WT_TOP_TIER.name}】，满挂爆反装甲接管战区！`, () => {
-      fighter.maxHp = 4550;
+      fighter.maxHp = WT_TOP_TIER_MAX_HP;
       fighter.currentHp = fighter.maxHp;
       fighter.atk = 275;
-      fighter.def = 260;
-      fighter.res = 215;
+      fighter.def = WT_TOP_TIER_DEF;
+      fighter.res = WT_TOP_TIER_RES;
       fighter.spd = 120;
       fighter.agl = 90;
       fighter.wis = 180;
@@ -183,11 +186,11 @@ export const warThunderHook: CharacterHook = {
     fighter.defeatHooksResolved = false;
     fighter.job = 'WT_TOP_TIER';
     if (WT_TOP_TIER) fighter.jobData = cloneJobDefinition(WT_TOP_TIER);
-    fighter.maxHp = 4550;
+    fighter.maxHp = WT_TOP_TIER_MAX_HP;
     fighter.currentHp = Math.floor(fighter.maxHp * 0.45);
     fighter.atk = 275;
-    fighter.def = 260;
-    fighter.res = 215;
+    fighter.def = WT_TOP_TIER_DEF;
+    fighter.res = WT_TOP_TIER_RES;
     fighter.spd = 120;
     fighter.agl = 90;
     fighter.wis = 180;

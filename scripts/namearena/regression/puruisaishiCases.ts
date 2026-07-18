@@ -584,10 +584,23 @@ export function runPuruisaishiCases(): string[] {
     firstCrystal.untargetableUntilTurn = 0;
     core.untargetableUntilTurn = 0;
     const targetingRuntime = engine.createActionResolutionRuntime();
-    assert(getTargetSelectionWeight(targetingRuntime, firstCrystal) === 2.8, 'More than 10 crystals should make each crystal a primary cleanup target');
-    assert(getTargetSelectionWeight(targetingRuntime, core) === 1.2, 'Ananna should remain a secondary target while crystals overflow');
-    assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 1.25, 'Phase-two Puruisaishi should remain slightly more attractive than an ordinary player target while crystals sustain her shield');
+    assert(getTargetSelectionWeight(targetingRuntime, firstCrystal) === 3.05, 'More than 10 crystals should make each crystal a primary cleanup target');
+    assert(getTargetSelectionWeight(targetingRuntime, core) === 1.32, 'Ananna should remain a secondary cleanup target while crystals overflow');
+    assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 1.35, 'Puruisaishi should remain a useful target while her shield is still above its crystal floor');
     assert(getTargetSelectionWeight(targetingRuntime, engine.fighters[1]) === 1, 'Players should remain valid ordinary targets during the event');
+    const activeShieldTarget = withRandomSequence([0, 0], () =>
+      engine.resolveTarget(engine.fighters[0], null, engine.getSelectableTargets(engine.fighters[0])),
+    );
+    assert(activeShieldTarget?.target.isPuruisaishi, 'A phase-two response may keep damaging Puruisaishi before her shield reaches its crystal floor');
+    puruisaishi.puruisaishiShield = 1;
+    assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 0.05, 'Players should stop wasting attacks on Puruisaishi once crystals lock her shield at 1');
+    const focusedTarget = withRandomSequence([0, 0], () =>
+      engine.resolveTarget(engine.fighters[0], null, engine.getSelectableTargets(engine.fighters[0])),
+    );
+    assert(
+      !!focusedTarget && (focusedTarget.target.isOriginiumCrystal || focusedTarget.target.isOriginiumCore),
+      'A phase-two event response should focus a crystal or Ananna while the shield network is active',
+    );
 
     engine.turnCount = 51;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
@@ -607,8 +620,20 @@ export function runPuruisaishiCases(): string[] {
       crystal.isDead = true;
       crystal.isDeadAnnounced = true;
     });
-    assert(getTargetSelectionWeight(targetingRuntime, core) === 2.2, 'Ananna should draw focus after all crystals are cleared');
-    assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 2.4, 'Puruisaishi should draw focus after all crystals are cleared');
+    assert(getTargetSelectionWeight(targetingRuntime, core) === 2.32, 'Ananna should draw focus after all crystals are cleared');
+    assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 2.55, 'Puruisaishi should draw focus after all crystals are cleared');
+    const exposedTarget = withRandomSequence([0, 0], () =>
+      engine.resolveTarget(engine.fighters[0], null, engine.getSelectableTargets(engine.fighters[0])),
+    );
+    assert(
+      !!exposedTarget && (exposedTarget.target.isPuruisaishi || exposedTarget.target.isOriginiumCore),
+      'A phase-two event response should press Puruisaishi or disable Ananna after crystals are cleared',
+    );
+    const forcedPlayer = engine.fighters[1];
+    const forcedResult = withRandomSequence([0], () =>
+      engine.resolveTarget(engine.fighters[0], forcedPlayer, engine.getSelectableTargets(engine.fighters[0])),
+    );
+    assert(forcedResult?.target.id === forcedPlayer.id, 'Explicit forced targets must still override the shared event response');
     cases.push('Puruisaishi phase-2 focus shifts dynamically with crystal pressure');
   }
 

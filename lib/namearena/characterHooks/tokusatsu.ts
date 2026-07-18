@@ -11,6 +11,9 @@ import {
   getTokusatsuThroneChance,
 } from '../tokusatsuMechanics';
 
+const TOKUSATSU_MONSTER_ATK_MULTIPLIER = 1.445;
+const TOKUSATSU_MONSTER_MAG_MULTIPLIER = 1.495;
+
 function refreshStatus(target: Parameters<CharacterHookRuntime['syncHpPct']>[0], type: string, duration: number, sourceId?: string): void {
   grantStatus(target, type, duration, sourceId);
 }
@@ -61,10 +64,10 @@ export function enterTokusatsuMonsterForm(
       const monsterMaxHp = Math.max(3000, Math.min(4100, Math.floor(previousMaxHp * 1.2)));
       target.maxHp = monsterMaxHp;
       target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.67)));
-      target.atk = Math.max(180, Math.floor(target.atk * 1.45));
+      target.atk = Math.max(180, Math.floor(target.atk * TOKUSATSU_MONSTER_ATK_MULTIPLIER));
       target.def = Math.max(108, Math.floor(target.def * 1.44));
       target.res = Math.max(128, Math.floor(target.res * 1.55));
-      target.mag = Math.max(100, Math.floor(target.mag * 1.5));
+      target.mag = Math.max(100, Math.floor(target.mag * TOKUSATSU_MONSTER_MAG_MULTIPLIER));
       target.spd = Math.max(128, Math.floor(target.spd * 1.15));
       target.agl = Math.max(104, Math.floor(target.agl * 1.18));
       target.wis = Math.max(220, Math.floor(target.wis * 1.15));

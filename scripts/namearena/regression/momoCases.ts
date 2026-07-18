@@ -13,6 +13,7 @@ import {
   tryMomoStealYuzuMeal,
 } from '../../../lib/namearena/momoMechanics';
 import { cleanupOrphanedTimedStatModifiers } from '../../../lib/namearena/statModifiers';
+import { enterYuzuPhaseTwo } from '../../../lib/namearena/yuzuMechanics';
 import type { DamageApplicationOptions, Fighter, SpinalSwordRef } from '../../../lib/namearena/types';
 import {
   assert,
@@ -57,6 +58,44 @@ export function runMomoCases(): string[] {
     assert(canonical.job === 'MOMO_BUBBLE_GOD' && alias.job === 'MOMO_BUBBLE_GOD', 'Both Momo inputs should map to 泡沫之神');
     statKeys.forEach((key) => assert(canonical[key] === alias[key], `Momo alias should preserve seeded ${key}`));
     cases.push('Momo canonical name and alias generate the same special fighter');
+  }
+
+  {
+    const momo = makeFighter('萌月沫沫');
+    const yuzu = makeFighter('柚子');
+    const enemy = makeFighter('沫柚交互攻击者');
+    const { engine, logs } = makeDeathEngine([momo, yuzu, enemy]);
+    const engineMomo = engine.fighters[0];
+    const engineYuzu = engine.fighters[1];
+    const attacker = engine.fighters[2];
+
+    withRandomSequence([0], () => engine.initializeMomoTeams());
+    assert(engineMomo.momoState?.partnerTargetId === engineYuzu.id, 'FFA Momo should select Yuzu under the forced roll');
+    assert(engineYuzu.yuzuKnownTeammateIds?.includes(engineMomo.id), 'Yuzu should remember a dynamically assigned FFA Momo teammate');
+    enterPhaseTwo(engine, engineMomo);
+    enterYuzuPhaseTwo(engine.createCharacterHookRuntime(), engineYuzu, '沫柚交互测试');
+
+    const momoHpBeforeYuzuShare = engineMomo.currentHp;
+    const yuzuHpBeforeShare = engineYuzu.currentHp;
+    const sharedOverflow = 200;
+    const breakBothShieldsDamage = (engineYuzu.yuzuShield ?? 0) + (engineMomo.yuzuShield ?? 0) + sharedOverflow;
+    engine.applyDamage(engineYuzu, breakBothShieldsDamage, 'skill', true, attacker, { actionName: '沫柚镜界分摊测试' });
+
+    assert(engineMomo.currentHp === momoHpBeforeYuzuShare - sharedOverflow, `Yuzu-shared damage should land on Momo instead of bouncing back, got ${momoHpBeforeYuzuShare - engineMomo.currentHp}`);
+    assert(engineYuzu.currentHp === yuzuHpBeforeShare, 'Yuzu should not receive her own team-share damage back through |OMO');
+    assert(engineYuzu.yuzuPhase === 2, 'Yuzu must remain phase 2 while FFA teammate Momo is still alive');
+
+    const momoHpBeforeDirectHit = engineMomo.currentHp;
+    const yuzuHpBeforeMomoShare = engineYuzu.currentHp;
+    engine.applyDamage(engineMomo, 300, 'skill', true, attacker, { actionName: '直接攻击沫沫测试' });
+    assert(engineMomo.currentHp === momoHpBeforeDirectHit, 'A direct hit on phase-2 Momo should still be protected by |OMO');
+    assert(engineYuzu.currentHp === yuzuHpBeforeMomoShare - 300, 'Direct Momo damage should still be transferred to captain Yuzu exactly once');
+
+    engine.markDefeated(engineMomo, { message: '💀 【测试】沫沫临时队友退场。', killer: attacker });
+    engine.finishStep({ current: false });
+    assert(Number(engineYuzu.yuzuPhase) === 3, `Yuzu should enter phase 3 after remembered FFA teammate Momo dies, got ${engineYuzu.yuzuPhase}`);
+    assert(logs.some((entry) => entry.text.includes('队友全部阵亡') && entry.text.includes('苦痛啊，你是我的唯一')), 'FFA Momo team loss should produce Yuzu phase-3 causal text');
+    cases.push('Momo-Yuzu FFA sharing terminates once and Yuzu enters phase 3 only after Momo dies');
   }
 
   {

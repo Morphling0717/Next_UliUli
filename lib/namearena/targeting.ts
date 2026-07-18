@@ -14,10 +14,16 @@ export interface TargetSelectionResult {
 }
 
 type OriginiumTargetingState = {
+  eventActive: boolean;
   phaseTwo: boolean;
+  puruisaishiShield: number;
   activeCrystalCount: number;
   coreActive: boolean;
 };
+
+// These rolls supplement normal target weights; they are not the total event-target chance.
+const ORIGINIUM_RESPONSE_CHANCE_PHASE_ONE = 0.01;
+const ORIGINIUM_RESPONSE_CHANCE_PHASE_TWO = 0.02;
 
 export function isCompetitiveTarget(target: Fighter): boolean {
   return !target.isNpc && !target.cannotWin;
@@ -72,12 +78,13 @@ export function findActivePuppetProtector(
 }
 
 function getOriginiumTargetingState(runtime: TargetingRuntime): OriginiumTargetingState {
+  const activePuruisaishi = runtime.fighters.find((fighter) =>
+    fighter.isPuruisaishi && runtime.isActiveCombatant(fighter),
+  );
   return {
-    phaseTwo: runtime.fighters.some((fighter) =>
-      fighter.isPuruisaishi &&
-      (fighter.puruisaishiPhase ?? 1) >= 2 &&
-      runtime.isActiveCombatant(fighter),
-    ),
+    eventActive: !!activePuruisaishi,
+    phaseTwo: (activePuruisaishi?.puruisaishiPhase ?? 1) >= 2,
+    puruisaishiShield: Math.max(0, activePuruisaishi?.puruisaishiShield ?? 0),
     activeCrystalCount: runtime.fighters.filter((fighter) =>
       fighter.isOriginiumCrystal && runtime.isActiveCombatant(fighter),
     ).length,
@@ -89,21 +96,21 @@ function getOriginiumTargetingState(runtime: TargetingRuntime): OriginiumTargeti
 
 function targetWeight(target: Fighter, originium: OriginiumTargetingState): number {
   if (target.isOriginiumCrystal) {
-    if (!originium.phaseTwo) return 0.18;
-    if (originium.activeCrystalCount > 10) return 2.8;
-    if (originium.activeCrystalCount >= 8) return 1.6;
-    if (originium.activeCrystalCount >= 4) return 0.95;
-    return 0.6;
+    if (!originium.phaseTwo) return 0.32;
+    if (originium.activeCrystalCount > 10) return 3.05;
+    if (originium.activeCrystalCount >= 8) return 1.85;
+    if (originium.activeCrystalCount >= 4) return 1.1;
+    return 0.72;
   }
   if (target.isOriginiumCore) {
-    if (!originium.phaseTwo) return 0.28;
-    if (originium.activeCrystalCount === 0) return 2.2;
-    return originium.activeCrystalCount >= 8 ? 1.2 : 0.75;
+    if (!originium.phaseTwo) return 0.36;
+    if (originium.activeCrystalCount === 0) return 2.32;
+    return originium.activeCrystalCount >= 8 ? 1.32 : 0.85;
   }
   if (target.isPuruisaishi) {
     if (!originium.phaseTwo) return 0.5;
-    if (originium.activeCrystalCount > 0) return 1.25;
-    return originium.coreActive ? 2.4 : 4;
+    if (originium.activeCrystalCount > 0) return originium.puruisaishiShield > 1 ? 1.35 : 0.05;
+    return originium.coreActive ? 2.55 : 4.35;
   }
   const waitingOnTokusatsuThrone = target.isTokusatsu &&
     target.job === 'MIRACLE_BUJIN' &&
@@ -115,8 +122,11 @@ export function getTargetSelectionWeight(runtime: TargetingRuntime, target: Figh
   return targetWeight(target, getOriginiumTargetingState(runtime));
 }
 
-function pickWeightedTarget(runtime: TargetingRuntime, targets: Fighter[]): Fighter {
-  const originium = getOriginiumTargetingState(runtime);
+function pickWeightedTarget(
+  runtime: TargetingRuntime,
+  targets: Fighter[],
+  originium = getOriginiumTargetingState(runtime),
+): Fighter {
   const totalWeight = targets.reduce((sum, target) => sum + targetWeight(target, originium), 0);
   if (totalWeight <= 0) return targets[Math.floor(Math.random() * targets.length)]!;
 
@@ -126,6 +136,34 @@ function pickWeightedTarget(runtime: TargetingRuntime, targets: Fighter[]): Figh
     if (roll <= 0) return target;
   }
   return targets[targets.length - 1]!;
+}
+
+function pickOriginiumResponseTarget(
+  runtime: TargetingRuntime,
+  targets: Fighter[],
+  originium: OriginiumTargetingState,
+): Fighter | undefined {
+  if (!originium.eventActive) return undefined;
+
+  let eventTargets: Fighter[];
+  if (!originium.phaseTwo) {
+    eventTargets = targets.filter((target) => target.isOriginiumCrystal || target.isOriginiumCore);
+  } else if (originium.activeCrystalCount > 0) {
+    eventTargets = targets.filter((target) =>
+      target.isOriginiumCrystal ||
+      target.isOriginiumCore ||
+      (target.isPuruisaishi && originium.puruisaishiShield > 1),
+    );
+  } else {
+    eventTargets = targets.filter((target) => target.isPuruisaishi || target.isOriginiumCore);
+  }
+  if (eventTargets.length === 0) return undefined;
+
+  const responseChance = originium.phaseTwo
+    ? ORIGINIUM_RESPONSE_CHANCE_PHASE_TWO
+    : ORIGINIUM_RESPONSE_CHANCE_PHASE_ONE;
+  if (Math.random() >= responseChance) return undefined;
+  return pickWeightedTarget(runtime, eventTargets, originium);
 }
 
 function lowestHealthTarget(targets: Fighter[], hpPctThreshold: number, flatHpFloor: number): Fighter | undefined {
@@ -186,9 +224,14 @@ export function resolveTarget(
   let target: Fighter;
   if (forcedTargetValid) target = forcedTarget!;
   else if (tauntingTargets.length > 0) target = pickWeightedTarget(runtime, tauntingTargets);
-  else if (markedWarThunderTarget) target = markedWarThunderTarget;
-  else if (tacticalTarget) target = tacticalTarget;
-  else target = pickWeightedTarget(runtime, availableTargets);
+  else {
+    const originium = getOriginiumTargetingState(runtime);
+    const originiumResponseTarget = pickOriginiumResponseTarget(runtime, availableTargets, originium);
+    if (originiumResponseTarget) target = originiumResponseTarget;
+    else if (markedWarThunderTarget) target = markedWarThunderTarget;
+    else if (tacticalTarget) target = tacticalTarget;
+    else target = pickWeightedTarget(runtime, availableTargets, originium);
+  }
   let isIntercepted = false;
   let protectedTarget: Fighter | undefined;
   const protector = findActivePuppetProtector(runtime, target, user);

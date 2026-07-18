@@ -53,7 +53,7 @@ export const YUZU_WEAPONS: Record<YuzuWeaponId, YuzuWeapon> = {
 };
 
 export const YUZU_PHASE_ONE_REDUCTION = 0.15;
-export const YUZU_PHASE_THREE_REDUCTION = 0.17;
+export const YUZU_PHASE_THREE_REDUCTION = 0.157;
 export const YUZU_TEAM_SHARE_RATIO = 1;
 export const YUZU_OPENING_SHIELD_RATIO = 0.2;
 export const YUZU_PHASE_TWO_SOLO_SHIELD_RATIO = 0.65;
@@ -103,23 +103,30 @@ function sameTeam(runtime: Pick<YuzuRuntime, 'getTeamId'>, a: Fighter, b: Fighte
   return runtime.getTeamId(a) === runtime.getTeamId(b);
 }
 
-export function activeYuzuTeammates(runtime: YuzuRuntime, yuzu: Fighter): Fighter[] {
+function currentYuzuTeamMembers(runtime: YuzuRuntime, yuzu: Fighter): Fighter[] {
   return runtime.fighters.filter((fighter) =>
     fighter.id !== yuzu.id &&
     !fighter.isSummon &&
     !fighter.isNpc &&
     !fighter.cannotWin &&
-    runtime.isActiveCombatant(fighter) &&
     sameTeam(runtime, yuzu, fighter),
   );
 }
 
+export function activeYuzuTeammates(runtime: YuzuRuntime, yuzu: Fighter): Fighter[] {
+  return currentYuzuTeamMembers(runtime, yuzu).filter((fighter) => runtime.isActiveCombatant(fighter));
+}
+
 export function hasAnyYuzuTeammate(runtime: YuzuRuntime, yuzu: Fighter): boolean {
-  return runtime.fighters.some((fighter) =>
-    fighter.id !== yuzu.id &&
-    !fighter.isSummon &&
-    sameTeam(runtime, yuzu, fighter),
-  );
+  return currentYuzuTeamMembers(runtime, yuzu).length > 0 || (yuzu.yuzuKnownTeammateIds?.length ?? 0) > 0;
+}
+
+export function rememberYuzuTeammates(runtime: YuzuRuntime, yuzu: Fighter): string[] {
+  ensureYuzuState(yuzu);
+  const knownIds = new Set(yuzu.yuzuKnownTeammateIds ?? []);
+  currentYuzuTeamMembers(runtime, yuzu).forEach((fighter) => knownIds.add(fighter.id));
+  yuzu.yuzuKnownTeammateIds = [...knownIds];
+  return yuzu.yuzuKnownTeammateIds;
 }
 
 export function activeYuzuFriendlyUnits(runtime: YuzuRuntime, yuzu: Fighter, includeSelf = true): Fighter[] {
@@ -205,6 +212,7 @@ export function consumeYuzuShield(target: Fighter, incomingAmount: number): { ab
 export function ensureYuzuState(yuzu: Fighter): void {
   yuzu.yuzuPhase = Math.max(1, yuzu.yuzuPhase ?? 1);
   yuzu.yuzuShield = Math.max(0, Math.floor(yuzu.yuzuShield ?? 0));
+  yuzu.yuzuKnownTeammateIds = [...new Set((yuzu.yuzuKnownTeammateIds ?? []).filter((id) => id && id !== yuzu.id))];
   yuzu.yuzuMarkedHitCount = Math.max(0, yuzu.yuzuMarkedHitCount ?? 0);
   if (yuzu.yuzuFuriosoCountedTurn !== undefined) {
     yuzu.yuzuFuriosoCountedTurn = Math.floor(yuzu.yuzuFuriosoCountedTurn);
@@ -284,8 +292,13 @@ export function tryAdvanceYuzuPhaseByTeamLoss(runtime: YuzuRuntime, yuzu: Fighte
   ensureYuzuState(yuzu);
   const phase = yuzu.yuzuPhase ?? 1;
   if (phase >= 3) return false;
-  if (!hasAnyYuzuTeammate(runtime, yuzu)) return false;
-  if (activeYuzuTeammates(runtime, yuzu).length > 0) return false;
+  const knownTeammateIds = rememberYuzuTeammates(runtime, yuzu);
+  if (knownTeammateIds.length === 0) return false;
+  const livingTeammateExists = knownTeammateIds.some((id) => {
+    const teammate = runtime.fighters.find((fighter) => fighter.id === id);
+    return !!teammate && runtime.isActiveCombatant(teammate);
+  });
+  if (livingTeammateExists) return false;
   if (phase < 2) {
     const enteredPhaseTwo = enterYuzuPhaseTwo(runtime, yuzu, '队友全部阵亡，镜界被迫提前重构');
     if (!enteredPhaseTwo && (yuzu.yuzuPhase ?? 1) < 2) return false;

@@ -2,6 +2,7 @@ import { cloneJobDefinition, healFighter } from './combatState';
 import { grantStatus } from './defenseStatus';
 import { createLifecycleStatus, refreshLifecycleStatus } from './statusLifecycle';
 import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from './statusRules';
+import { rememberYuzuTeammates } from './yuzuMechanics';
 import {
   applyTimedStatModifier,
   cleanupOrphanedTimedStatModifiers,
@@ -306,6 +307,9 @@ export function chooseMomoPartner(runtime: MomoRuntime, momo: Fighter, reason: s
   state.partnerReselectPending = false;
   state.dynamicTeamId = joinedTeamId;
   state.assignedMemberIds = [momo.id];
+  runtime.fighters
+    .filter((fighter) => fighter.isYuzu && runtime.getTeamId(fighter) === joinedTeamId)
+    .forEach((yuzu) => rememberYuzuTeammates(runtime, yuzu));
   runtime.log('buff', target.id === anchor.id
     ? `🫧 【随机组队】${momo.name} ${reason}，随机拉住 ${target.name} 成为队友！（认主 ${state.partnerSelectionCount}/${MOMO_DYNAMIC_TEAM_LIMIT}）`
     : `🫧 【随机组队】${momo.name} ${reason}，选中了召唤物 ${target.name}，因此其主人 ${anchor.name} 与同主召唤物一并成为队友！（认主 ${state.partnerSelectionCount}/${MOMO_DYNAMIC_TEAM_LIMIT}）`);

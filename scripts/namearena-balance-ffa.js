@@ -19,6 +19,8 @@ const fairShare = 100 / NO_WATER.length;
 const targetLow = Number.parseFloat(process.env.NAMEARENA_BALANCE_LOW ?? String(fairShare - 0.5));
 const targetHigh = Number.parseFloat(process.env.NAMEARENA_BALANCE_HIGH ?? String(fairShare + 0.5));
 const progressEvery = Number.parseInt(process.env.NAMEARENA_BALANCE_PROGRESS ?? '500', 10);
+const puruisaishiMinRetreatRate = Number.parseFloat(process.env.NAMEARENA_PURUISAISHI_MIN_RETREAT_RATE ?? '50');
+const puruisaishiMaxRetreatRate = Number.parseFloat(process.env.NAMEARENA_PURUISAISHI_MAX_RETREAT_RATE ?? '55');
 
 function createCounter() {
   return Object.fromEntries(NO_WATER.map((name) => [name, 0]));
@@ -50,6 +52,48 @@ function findWinners(result) {
 
 function percent(value, total) {
   return total > 0 ? (value / total) * 100 : 0;
+}
+
+function wilsonInterval(successes, total, z = 1.959963984540054) {
+  if (total <= 0) return { low: 0, high: 0 };
+  const rate = successes / total;
+  const zSquared = z * z;
+  const denominator = 1 + zSquared / total;
+  const center = (rate + zSquared / (2 * total)) / denominator;
+  const margin = z * Math.sqrt((rate * (1 - rate) + zSquared / (4 * total)) / total) / denominator;
+  return {
+    low: Math.max(0, center - margin) * 100,
+    high: Math.min(1, center + margin) * 100,
+  };
+}
+
+function getPuruisaishiOutcome(fighters, battleEndTurn) {
+  const puruisaishi = fighters.find((fighter) => fighter.isPuruisaishi);
+  if (!puruisaishi) {
+    return {
+      appeared: false,
+      phaseTwoReached: false,
+      retreated: false,
+      activeAtEnd: false,
+      remainingShield: 0,
+      remainingCrystals: 0,
+      enteredTurn: 0,
+      battleEndTurn,
+    };
+  }
+
+  return {
+    appeared: true,
+    phaseTwoReached: (puruisaishi.puruisaishiPhase ?? 1) >= 2,
+    retreated: !!puruisaishi.isDead && (puruisaishi.puruisaishiShield ?? 0) <= 0,
+    activeAtEnd: !puruisaishi.isDead && !puruisaishi.isDeadAnnounced && puruisaishi.currentHp > 0,
+    remainingShield: Math.max(0, puruisaishi.puruisaishiShield ?? 0),
+    remainingCrystals: fighters.filter((fighter) =>
+      fighter.isOriginiumCrystal && !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
+    ).length,
+    enteredTurn: puruisaishi.puruisaishiEnteredTurn ?? 0,
+    battleEndTurn,
+  };
 }
 
 function runFastNoWaterBattle(seed, index) {
@@ -101,6 +145,9 @@ function runFastNoWaterBattle(seed, index) {
         dmgDealt: fighter.stats.dmgDealt,
         dmgTaken: fighter.stats.dmgTaken,
       }));
+    const momo = fighters.find((fighter) => fighter.isMomo);
+    const yuzu = fighters.find((fighter) => fighter.isYuzu);
+    const momoYuzuTeamed = !!momo && !!yuzu && !!yuzu.yuzuKnownTeammateIds?.includes(momo.id);
 
     return {
       label: `balance-no-water-ffa-${index}`,
@@ -113,6 +160,8 @@ function runFastNoWaterBattle(seed, index) {
       lastLogs,
       winText,
       playerStats,
+      momoYuzuTeamed,
+      puruisaishi: getPuruisaishiOutcome(fighters, turnCount),
     };
   });
 }
@@ -136,6 +185,24 @@ function main() {
     error: 0,
     invariant: 0,
   };
+  const puruisaishiCounts = {
+    appeared: 0,
+    phaseTwoReached: 0,
+    retreated: 0,
+    activeAtEnd: 0,
+    activePhaseTwoAtEnd: 0,
+    remainingShield: 0,
+    remainingCrystals: 0,
+    enteredTurn: 0,
+    battleEndTurn: 0,
+  };
+  const momoYuzuCounts = {
+    teamedBattles: 0,
+    yuzuWinCreditsWhenTeamed: 0,
+    yuzuWinCreditsWithoutTeaming: 0,
+    momoWinCreditsWhenTeamed: 0,
+    momoWinCreditsWithoutTeaming: 0,
+  };
   const examples = [];
   const startedAt = Date.now();
 
@@ -158,9 +225,36 @@ function main() {
     if (result.error) issueCounts.error += 1;
     if (result.invariantErrors.length > 0) issueCounts.invariant += result.invariantErrors.length;
 
+    if (result.puruisaishi.appeared) {
+      puruisaishiCounts.appeared += 1;
+      if (result.puruisaishi.phaseTwoReached) puruisaishiCounts.phaseTwoReached += 1;
+      if (result.puruisaishi.retreated) puruisaishiCounts.retreated += 1;
+      if (result.puruisaishi.activeAtEnd) {
+        puruisaishiCounts.activeAtEnd += 1;
+        if (result.puruisaishi.phaseTwoReached) {
+          puruisaishiCounts.activePhaseTwoAtEnd += 1;
+          puruisaishiCounts.remainingShield += result.puruisaishi.remainingShield;
+          puruisaishiCounts.remainingCrystals += result.puruisaishi.remainingCrystals;
+        }
+      }
+      puruisaishiCounts.enteredTurn += result.puruisaishi.enteredTurn;
+      puruisaishiCounts.battleEndTurn += result.puruisaishi.battleEndTurn;
+    }
+
     const winners = findWinners(result);
+    const winnerCredit = winners.length > 0 ? 1 / winners.length : 0;
+    const yuzuCredit = winners.includes('柚子') ? winnerCredit : 0;
+    const momoCredit = winners.includes('萌月沫沫') ? winnerCredit : 0;
+    if (result.momoYuzuTeamed) {
+      momoYuzuCounts.teamedBattles += 1;
+      momoYuzuCounts.yuzuWinCreditsWhenTeamed += yuzuCredit;
+      momoYuzuCounts.momoWinCreditsWhenTeamed += momoCredit;
+    } else {
+      momoYuzuCounts.yuzuWinCreditsWithoutTeaming += yuzuCredit;
+      momoYuzuCounts.momoWinCreditsWithoutTeaming += momoCredit;
+    }
     if (winners.length > 0) {
-      const credit = 1 / winners.length;
+      const credit = winnerCredit;
       winners.forEach((winner) => {
         winCredits[winner] += credit;
         coWins[winner] += 1;
@@ -208,11 +302,43 @@ function main() {
     inTarget: percent(winCredits[name], battleCount) >= targetLow && percent(winCredits[name], battleCount) <= targetHigh,
   })).sort((a, b) => b.creditRate - a.creditRate);
 
+  const retreatConfidence = wilsonInterval(puruisaishiCounts.retreated, puruisaishiCounts.appeared);
+  const observedRetreatRate = percent(puruisaishiCounts.retreated, puruisaishiCounts.appeared);
+  const puruisaishi = {
+    appearedBattles: puruisaishiCounts.appeared,
+    appearanceRate: Number(percent(puruisaishiCounts.appeared, battleCount).toFixed(3)),
+    phaseTwoBattles: puruisaishiCounts.phaseTwoReached,
+    phaseTwoRateOfAppeared: Number(percent(puruisaishiCounts.phaseTwoReached, puruisaishiCounts.appeared).toFixed(3)),
+    retreatedBattles: puruisaishiCounts.retreated,
+    retreatRateOfAppeared: Number(observedRetreatRate.toFixed(3)),
+    retreatRateWilson95: [
+      Number(retreatConfidence.low.toFixed(3)),
+      Number(retreatConfidence.high.toFixed(3)),
+    ],
+    retreatRateOfPhaseTwo: Number(percent(puruisaishiCounts.retreated, puruisaishiCounts.phaseTwoReached).toFixed(3)),
+    activeAtEndBattles: puruisaishiCounts.activeAtEnd,
+    activePhaseTwoAtEndBattles: puruisaishiCounts.activePhaseTwoAtEnd,
+    averageRemainingShieldWhenPhaseTwoSurvives: Number((puruisaishiCounts.remainingShield / Math.max(1, puruisaishiCounts.activePhaseTwoAtEnd)).toFixed(1)),
+    averageRemainingCrystalsWhenPhaseTwoSurvives: Number((puruisaishiCounts.remainingCrystals / Math.max(1, puruisaishiCounts.activePhaseTwoAtEnd)).toFixed(2)),
+    averageAppearanceTurn: Number((puruisaishiCounts.enteredTurn / Math.max(1, puruisaishiCounts.appeared)).toFixed(1)),
+    averageBattleEndTurnOfAppeared: Number((puruisaishiCounts.battleEndTurn / Math.max(1, puruisaishiCounts.appeared)).toFixed(1)),
+    minimumRetreatRate: puruisaishiMinRetreatRate,
+    maximumRetreatRate: puruisaishiMaxRetreatRate,
+    observedTargetMet: puruisaishiCounts.appeared > 0 &&
+      observedRetreatRate >= puruisaishiMinRetreatRate &&
+      observedRetreatRate <= puruisaishiMaxRetreatRate,
+    confidenceAboveMinimum: puruisaishiCounts.appeared > 0 && retreatConfidence.low >= puruisaishiMinRetreatRate,
+    targetMet: puruisaishiCounts.appeared > 0 &&
+      observedRetreatRate >= puruisaishiMinRetreatRate &&
+      observedRetreatRate <= puruisaishiMaxRetreatRate,
+  };
+
   const summary = {
     ok: standings.every((entry) => entry.inTarget) &&
       issueCounts.timedOut === 0 &&
       issueCounts.error === 0 &&
-      issueCounts.invariant === 0,
+      issueCounts.invariant === 0 &&
+      puruisaishi.targetMet,
     battleCount,
     baseSeed,
     seedStrategy: '32-bit avalanche mix of baseSeed + battle index',
@@ -220,6 +346,15 @@ function main() {
     target: [targetLow, targetHigh],
     elapsedMs: Date.now() - startedAt,
     standings,
+    momoYuzuInteraction: {
+      teamedBattles: momoYuzuCounts.teamedBattles,
+      teamedRate: Number(percent(momoYuzuCounts.teamedBattles, battleCount).toFixed(3)),
+      yuzuWinRateWhenTeamed: Number(percent(momoYuzuCounts.yuzuWinCreditsWhenTeamed, momoYuzuCounts.teamedBattles).toFixed(3)),
+      yuzuWinRateWithoutTeaming: Number(percent(momoYuzuCounts.yuzuWinCreditsWithoutTeaming, battleCount - momoYuzuCounts.teamedBattles).toFixed(3)),
+      momoWinRateWhenTeamed: Number(percent(momoYuzuCounts.momoWinCreditsWhenTeamed, momoYuzuCounts.teamedBattles).toFixed(3)),
+      momoWinRateWithoutTeaming: Number(percent(momoYuzuCounts.momoWinCreditsWithoutTeaming, battleCount - momoYuzuCounts.teamedBattles).toFixed(3)),
+    },
+    puruisaishi,
     issueCounts,
     examples,
   };
