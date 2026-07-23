@@ -3,8 +3,10 @@ import {
   MOMO_CAPTAIN_HP_BONUS,
   MOMO_DYNAMIC_TEAM_LIMIT,
   addMomoCrowdJoy,
+  cleanseMomoCaptains,
   chooseMomoPartner,
   ensureMomoState,
+  enterMomoPhaseThree,
   grantMomoSword,
   processMomoActorTurnEnd,
   processMomoGlobalTick,
@@ -12,10 +14,17 @@ import {
   tryMomoBanishBlueEyes,
   tryMomoStealYuzuMeal,
 } from '../../../lib/namearena/momoMechanics';
-import { cleanupOrphanedTimedStatModifiers } from '../../../lib/namearena/statModifiers';
-import { enterYuzuPhaseTwo } from '../../../lib/namearena/yuzuMechanics';
+import { getBarrierTotal, removeEffects } from '../../../lib/namearena/statusSystem';
+import { getEffectiveCombatStat, settleBurnAtLargeRound } from '../../../lib/namearena/statusMechanics';
+import {
+  clearYuzuShield,
+  enterYuzuPhaseTwo,
+  setYuzuShield,
+  YUZU_BARRIER_IDENTITY,
+} from '../../../lib/namearena/yuzuMechanics';
 import type { DamageApplicationOptions, Fighter, SpinalSwordRef } from '../../../lib/namearena/types';
 import {
+  applyTestStatus,
   assert,
   localProject,
   makeFighter,
@@ -25,7 +34,7 @@ import {
 import { makeDeathEngine } from './deathAccountingCases';
 
 function hasOwnedStatus(fighter: Fighter, type: string, sourceId: string): boolean {
-  return fighter.status.some((status) => status.type === type && status.sourceId === sourceId);
+  return fighter.statuses.some((status) => status.identityId === type && status.attribution.effectSourceId === sourceId);
 }
 
 function enterPhaseTwo(engine: BattleEngineInstance, momo: Fighter): void {
@@ -33,6 +42,10 @@ function enterPhaseTwo(engine: BattleEngineInstance, momo: Fighter): void {
   engine.handleTransformations(momo);
   assert(momo.momoState?.phase === 2, `Momo should enter phase 2, got ${momo.momoState?.phase}`);
   assert(momo.transformed, 'Momo phase 2 should consume the standard phase transformation');
+  const cues = engine.events.filter((event) => event.visualCue?.kind === 'transformation' && event.visualCue.fighterId === momo.id);
+  assert(cues.length === 1, `Momo phase 2 should publish exactly one transformation cue, got ${cues.length}`);
+  const cue = cues[0]?.visualCue;
+  assert(cue?.kind === 'transformation' && cue.from.phase === 1 && cue.to.phase === 2, 'Momo phase-2 cue should atomically describe phase 1 -> 2');
   localProject.setCurrentHp(momo, momo.maxHp);
 }
 
@@ -48,6 +61,24 @@ function makeBlueEyes(owner: Fighter): Fighter {
 
 export function runMomoCases(): string[] {
   const cases: string[] = [];
+
+  {
+    const momo = makeFighter('萌月沫沫@A');
+    const captain = makeFighter('普通净化舰长@A');
+    const enemy = makeFighter('净化来源@B');
+    const { engine } = makeDeathEngine([momo, captain, enemy]);
+    engine.initializeMomoTeams();
+    const engineMomo = engine.fighters[0];
+    const engineCaptain = engine.fighters[1];
+    const engineEnemy = engine.fighters[2];
+    assert(engineCaptain.statuses.some((status) => status.identityId === 'MOMO_CAPTAIN'), 'explicit-team ally should be a Momo captain for cleanse testing');
+    engine.applyStatus(engineCaptain, { identityId: 'BURN', count: 2, attribution: { applierId: engineEnemy.id, applierName: engineEnemy.name } });
+    engine.applyStatus(engineCaptain, { identityId: 'STUN', remainingTurns: 2, attribution: { applierId: engineEnemy.id, applierName: engineEnemy.name } });
+    cleanseMomoCaptains(engine.createMomoRuntime(), engineMomo);
+    assert(!engineCaptain.statuses.some((status) => status.identityId === 'BURN'), 'Momo captain cleanse should remove normal-dispellable debuffs');
+    assert(engineCaptain.statuses.some((status) => status.identityId === 'STUN'), 'Momo captain cleanse is normal dispel and must preserve strong-only control');
+    cases.push('Momo captain cleanse uses normal dispel and preserves strong-only control');
+  }
 
   {
     const canonical = makeFighter('萌月沫沫@A');
@@ -78,7 +109,8 @@ export function runMomoCases(): string[] {
     const momoHpBeforeYuzuShare = engineMomo.currentHp;
     const yuzuHpBeforeShare = engineYuzu.currentHp;
     const sharedOverflow = 200;
-    const breakBothShieldsDamage = (engineYuzu.yuzuShield ?? 0) + (engineMomo.yuzuShield ?? 0) + sharedOverflow;
+    const yuzuBarrierSelector = { identityIds: [YUZU_BARRIER_IDENTITY] };
+    const breakBothShieldsDamage = getBarrierTotal(engineYuzu, yuzuBarrierSelector) + getBarrierTotal(engineMomo, yuzuBarrierSelector) + sharedOverflow;
     engine.applyDamage(engineYuzu, breakBothShieldsDamage, 'skill', true, attacker, { actionName: '沫柚镜界分摊测试' });
 
     assert(engineMomo.currentHp === momoHpBeforeYuzuShare - sharedOverflow, `Yuzu-shared damage should land on Momo instead of bouncing back, got ${momoHpBeforeYuzuShare - engineMomo.currentHp}`);
@@ -201,11 +233,11 @@ export function runMomoCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('舰长联动') && entry.text.includes('吸血恢复 50')), 'Captain lifesteal and Momo feedback should have a causal log');
 
     processMomoActorTurnEnd(engine.createMomoRuntime(), engineCaptain, false);
-    let joy = engineCaptain.status.find((status) => status.type === 'MOMO_CROWD_JOY' && status.sourceId === engineMomo.id);
-    assert(joy?.stacks === 50, 'A skipped or blocked action must not decay Crowd Joy');
+    let joy = engineCaptain.statuses.find((status) => status.identityId === 'MOMO_CROWD_JOY' && status.attribution.effectSourceId === engineMomo.id);
+    assert(joy?.potency === 50, 'A skipped or blocked action must not decay Crowd Joy');
     processMomoActorTurnEnd(engine.createMomoRuntime(), engineCaptain, true);
-    joy = engineCaptain.status.find((status) => status.type === 'MOMO_CROWD_JOY' && status.sourceId === engineMomo.id);
-    assert(joy?.stacks === 40, `Captain action end should decay Crowd Joy 50 -> 40, got ${joy?.stacks}`);
+    joy = engineCaptain.statuses.find((status) => status.identityId === 'MOMO_CROWD_JOY' && status.attribution.effectSourceId === engineMomo.id);
+    assert(joy?.potency === 40, `Captain action end should decay Crowd Joy 50 -> 40, got ${joy?.potency}`);
     cases.push('Momo captain damage grants scoped lifesteal, owner healing, and per-actor decay');
   }
 
@@ -252,19 +284,67 @@ export function runMomoCases(): string[] {
     assert(options.redirectedByMomo && options.redirectedMomoDamage === 301, '|OMO should expose an explicit Momo redirect settlement');
     assert(options.resolution?.outcome === 'redistributed', `|OMO should settle as redistributed, got ${options.resolution?.outcome}`);
 
+    const tinyShareLogStart = logs.length;
+    engine.applyDamage(engineMomo, 1, 'skill', true, attacker, { actionName: '|OMO最小分摊测试', respectDefenses: true });
+    const tinyShareLog = logs.slice(tinyShareLogStart).find((entry) => entry.text.includes('【|OMO】') && entry.text.includes('均摊给'));
+    assert(tinyShareLog?.text.includes(captains[0].name), 'A one-point |OMO share should name the captain who receives the positive allocation');
+    assert(!tinyShareLog?.text.includes(captains[1].name), 'A one-point |OMO share must not list a zero-allocation captain as a recipient');
+
     const captainHpAfterShare = captains.map((captain) => captain.currentHp);
     const momoCostBefore = engineMomo.currentHp;
-    engineMomo.yuzuShield = 100;
+    setYuzuShield(engineMomo, 100, engineMomo.id, engineMomo.name);
     engine.executeSkillAction('momo_top_rank', engineMomo, attacker);
     assert(engineMomo.currentHp === momoCostBefore - 15, 'Momo self-cost should remain on Momo instead of entering |OMO');
-    assert(engineMomo.yuzuShield === 100, 'Momo self-cost should bypass rather than consume a shared mirror shield');
+    assert(getBarrierTotal(engineMomo, { identityIds: [YUZU_BARRIER_IDENTITY] }) === 100, 'Momo self-cost should bypass rather than consume a shared mirror shield');
     captains.forEach((captain, index) => assert(captain.currentHp === captainHpAfterShare[index], 'Momo self-cost must not damage captains'));
 
-    engineMomo.yuzuShield = 0;
+    clearYuzuShield(engineMomo);
     engine.executeSkillAction('serious_punch', attacker, engineMomo);
     assert(logs.some((entry) => entry.text.includes('【|OMO】')), 'Standard skill flow should retain the |OMO causal log');
     assert(!logs.some((entry) => entry.text.includes(engineMomo.name) && entry.text.includes('完全抵消了这次伤害')), 'Standard skill flow must not mislabel |OMO as full mitigation');
     cases.push('Momo |OMO preserves damage, excludes self-costs, and reports redistribution coherently');
+  }
+
+  {
+    const water = makeFighter('水人@A');
+    const primary = makeFighter('洪水主目标@C');
+    const momo = makeFighter('萌月沫沫@B');
+    const captain = makeFighter('洪水舰长@B');
+    primary.maxHp = 100000;
+    captain.maxHp = 100000;
+    localProject.setCurrentHp(primary, primary.maxHp);
+    localProject.setCurrentHp(captain, captain.maxHp);
+    const { engine, logs } = makeDeathEngine([water, primary, momo, captain]);
+    engine.initializeMomoTeams();
+    enterPhaseTwo(engine, engine.fighters[2]);
+
+    withRandomSequence([0.5, 0.5, 0.5, 0.5], () => {
+      engine.executeSkillAction('apocalyptic_flood', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const momoFloodResult = logs.find((entry) =>
+      entry.text.includes('狂暴洪水卷向 萌月沫沫') &&
+      entry.text.includes('【|OMO】') &&
+      entry.text.includes('舰长合计损失'),
+    );
+    assert(momoFloodResult, 'Apocalyptic Flood must state how its Momo secondary hit was redistributed');
+    cases.push('Apocalyptic Flood gives redirected Momo secondary hits an explicit outcome');
+  }
+
+  {
+    const momo = makeFighter('萌月沫沫@A');
+    const captain = makeFighter('认脸舰长@A');
+    const emote = makeFighter('表情@B');
+    const { engine, logs } = makeDeathEngine([momo, captain, emote]);
+    engine.initializeMomoTeams();
+    enterPhaseTwo(engine, engine.fighters[0]);
+
+    engine.executeSkillAction('emote_mark_owner', engine.fighters[2], engine.fighters[0]);
+
+    const failureLog = logs.find((entry) => entry.text.includes('【脸熟失败】'));
+    assert(failureLog?.text.includes('【|OMO】均摊给舰长'), 'Momo redirect should name |OMO as the reason face marking failed');
+    assert(!failureLog?.text.includes('随机恶作剧'), 'Momo redirect must not be mislabeled as Joker random mischief');
+    cases.push('Emote face-mark failure identifies Momo |OMO redirect correctly');
   }
 
   {
@@ -304,8 +384,7 @@ export function runMomoCases(): string[] {
     assert(hasOwnedStatus(engineMomo, 'MOMO_AWAKENED_SWORD', engineMomo.id), 'Phase-3 way?! should guarantee an awakened sword');
     assert(!hasOwnedStatus(engineMomo, 'MOMO_VILLAGE_SWORD', engineMomo.id), 'Awakened sword should replace rather than stack with village sword');
 
-    engineMomo.status = engineMomo.status.filter((status) => status.type !== 'MOMO_AWAKENED_SWORD');
-    cleanupOrphanedTimedStatModifiers(engineMomo);
+    removeEffects(engineMomo, { identityIds: ['MOMO_AWAKENED_SWORD'], reason: 'dispel' });
     processMomoGlobalTick(engine.createMomoRuntime());
     assert(hasOwnedStatus(engineMomo, 'MOMO_AWAKENED_SWORD', engineMomo.id), 'Phase-3 way?! should restore an awakened sword removed by an external dispel');
     const countLogsBefore = logs.filter((entry) => entry.text.includes('【骑士踢计数】')).length;
@@ -313,6 +392,22 @@ export function runMomoCases(): string[] {
     assert(engineMomo.momoState?.riderKickCount === 7, 'Phase-3 rider kick progress must remain capped at seven');
     assert(logs.filter((entry) => entry.text.includes('【骑士踢计数】')).length === countLogsBefore, 'Phase-3 attacks must not keep logging meaningless 7/7 progress');
     cases.push('Momo enters phase 3 on seven rider kicks and replaces village sword with awakened sword');
+  }
+
+  {
+    const momo = makeFighter('萌月沫沫@A');
+    const ally = makeFighter('沫沫三阶段舰长@A');
+    const enemy = makeFighter('沫沫三阶段敌人@B');
+    const { engine } = makeDeathEngine([momo, ally, enemy]);
+    const engineMomo = engine.fighters[0];
+    engine.initializeMomoTeams();
+    enterPhaseTwo(engine, engineMomo);
+    engineMomo.maxHp = 6000;
+    localProject.setCurrentHp(engineMomo, 6000);
+
+    assert(enterMomoPhaseThree(engine.createMomoRuntime(), engineMomo, '生命钳制回归测试'), 'Momo should enter phase 3 for HP clamping regression');
+    assert(engineMomo.currentHp === engineMomo.maxHp, `Phase-3 capped max HP must also clamp current HP, got ${engineMomo.currentHp}/${engineMomo.maxHp}`);
+    cases.push('Momo phase-3 capped max HP never leaves current HP above the new maximum');
   }
 
   {
@@ -336,10 +431,10 @@ export function runMomoCases(): string[] {
 
     engine.executeSkillAction('momo_guard_vent', dragon, engine.fighters[1]);
     engine.executeSkillAction('momo_guard_vent', dragon, engine.fighters[1]);
-    assert(engineMomo.status.filter((status) => status.type === 'SPELL_BLOCK' && status.sourceId === 'momo_guard_vent').length === 1, 'GUARD VENT should provide exactly one non-stacking spell block');
+    assert(engineMomo.statuses.filter((status) => status.identityId === 'SPELL_BLOCK' && status.attribution.effectSourceId === 'momo_guard_vent').length === 1, 'GUARD VENT should provide exactly one non-stacking spell block');
 
     engine.executeSkillAction('momo_sword_vent', dragon, engine.fighters[1]);
-    assert(engineMomo.status.filter((status) => status.sourceId === engineMomo.id && (status.type === 'MOMO_VILLAGE_SWORD' || status.type === 'MOMO_AWAKENED_SWORD')).length === 1, 'SWORD VENT should equip exactly one sword state');
+    assert(engineMomo.statuses.filter((status) => status.attribution.effectSourceId === engineMomo.id && (status.identityId === 'MOMO_VILLAGE_SWORD' || status.identityId === 'MOMO_AWAKENED_SWORD')).length === 1, 'SWORD VENT should equip exactly one sword state');
 
     const kicksBefore = ensureMomoState(engineMomo).riderKickCount;
     engine.executeSkillAction('momo_final_vent', dragon, engine.fighters[1]);
@@ -363,7 +458,7 @@ export function runMomoCases(): string[] {
 
     assert(winner?.id === engineMomo.id, 'Forced successful meal contest should return Momo as winner');
     assert(engineMomo.currentHp === hpBefore - expectedCost, 'Winning Yuzu meal contest should cost Momo 5% max HP');
-    assert(engineMomo.status.some((status) => status.type === 'POISON' && status.stacks === 3), 'Winning Yuzu meal contest should grant exactly three poison stacks');
+    assert(engineMomo.statuses.some((status) => status.identityId === 'POISON' && status.potency === 3), 'Winning Yuzu meal contest should grant exactly three poison stacks');
     cases.push('Momo can win Yuzu spoon meal contest and pays the toxic meal cost');
   }
 
@@ -382,7 +477,7 @@ export function runMomoCases(): string[] {
 
     assert(!engine.fighters.some((fighter) => fighter.id === meal.id), 'Successful Momo food roll should consume one Owl food unit without leaving a corpse');
     assert(engineMomo.currentHp === hpBefore - Math.max(1, Math.floor(engineMomo.maxHp * 0.05)), 'Eating Owl food should cost Momo 5% max HP');
-    assert(engineMomo.status.some((status) => status.type === 'POISON' && status.stacks === 3), 'Eating Owl food should grant three poison stacks');
+    assert(engineMomo.statuses.some((status) => status.identityId === 'POISON' && status.potency === 3), 'Eating Owl food should grant three poison stacks');
     cases.push('Momo phase-3 action can consume Owl food at its independent toxic-meal roll');
   }
 
@@ -424,7 +519,7 @@ export function runMomoCases(): string[] {
     assert(!engineMomo.isDead && !engineMomo.isDeadAnnounced && engineMomo.currentHp === engineMomo.maxHp, 'Active Water should revive Momo at full HP');
     assert(engineMomo.job === 'MOMO_WATER_DAUGHTER', `Revived Momo should become water daughter, got ${engineMomo.job}`);
     assert(engineMomo.momoState?.waterDaughter && engineMomo.momoState.teamMode === 'water', 'Water daughter state should be permanent and use Water team mode');
-    assert(engine.getTeamId(engineMomo) === 'WATER_TEAM', 'Water daughter should join the actual Water team');
+    assert(engine.getTeamId(engineMomo) === engine.getTeamId(engine.fighters[1]), 'Water daughter should join the active Waterman\'s actual team');
 
     engine.markDefeated(engineMomo, { message: '测试沫沫第二次死亡', killer: engine.fighters[2] });
     engine.handleDeathsAndRevives(spinalSwordRef);
@@ -455,12 +550,37 @@ export function runMomoCases(): string[] {
     const hpBeforeZero = engineMomo.currentHp;
 
     engine.executeSkillAction('v_rabbit_zero', engine.fighters[1], engineMomo);
-    assert(!hasOwnedStatus(engineMomo, 'MOMO_CAPTAIN', engineMomo.id), 'Rabbit zero should visibly strip captain status until Momo resynchronizes it');
-    assert(engineMomo.maxHp === maxBeforeZero && engineMomo.currentHp === hpBeforeZero, 'Stripping captain text must not silently alter its source-scoped HP ledger');
+    assert(hasOwnedStatus(engineMomo, 'MOMO_CAPTAIN', engineMomo.id), 'Rabbit strong dispel must preserve the independent captain relationship');
+    assert(engineMomo.maxHp === maxBeforeZero && engineMomo.currentHp === hpBeforeZero, 'Preserving captain status must leave its source-scoped HP ledger unchanged');
     engine.initializeMomoTeams();
-    assert(hasOwnedStatus(engineMomo, 'MOMO_CAPTAIN', engineMomo.id), 'Momo should restore captain status after an external dispel');
-    assert(engineMomo.maxHp === maxBeforeZero && engineMomo.currentHp === hpBeforeZero, 'Restoring a dispelled captain status must not stack or heal 138 HP');
-    cases.push('Momo captain HP bookkeeping survives Rabbit zero without stacking or healing');
+    assert(hasOwnedStatus(engineMomo, 'MOMO_CAPTAIN', engineMomo.id), 'Momo synchronization should keep the existing captain status');
+    assert(engineMomo.maxHp === maxBeforeZero && engineMomo.currentHp === hpBeforeZero, 'Resynchronizing an intact captain status must not stack or heal 138 HP');
+    cases.push('Momo captain relationship survives Rabbit strong dispel without stacking or healing');
+  }
+
+  {
+    const momo = makeFighter('萌月沫沫@A');
+    const captain = makeFighter('绝对驱散舰长@A');
+    const enemy = makeFighter('舰长恢复旁观者@B');
+    const { engine, logs } = makeDeathEngine([momo, captain, enemy]);
+    engine.initializeMomoTeams();
+    const engineCaptain = engine.fighters[1];
+    const maxHpBefore = engineCaptain.maxHp;
+    const hpBefore = engineCaptain.currentHp;
+
+    engine.dispelStatusEffects(engineCaptain, {
+      strength: 'absolute',
+      direction: 'all',
+      includeNeutral: true,
+      includeIndependent: true,
+    });
+    assert(!hasOwnedStatus(engineCaptain, 'MOMO_CAPTAIN', engine.fighters[0].id), 'Absolute dispel should temporarily remove the captain status layer');
+    processMomoGlobalTick(engine.createMomoRuntime());
+
+    assert(hasOwnedStatus(engineCaptain, 'MOMO_CAPTAIN', engine.fighters[0].id), 'The surviving team relationship should restore captain status on the next global synchronization');
+    assert(engineCaptain.maxHp === maxHpBefore && engineCaptain.currentHp === hpBefore, 'Restoring a dispelled captain status must not duplicate or heal the existing 138 HP relationship bonus');
+    assert(logs.some((entry) => entry.text.includes('【重新上舰】') && entry.text.includes(engineCaptain.name)), 'Automatic captain restoration must be visible in the battle log');
+    cases.push('Momo captain restoration after absolute dispel is explicit and non-stacking');
   }
 
   {
@@ -498,21 +618,21 @@ export function runMomoCases(): string[] {
       engine.executeSkillAction('slacking', engineSigua, engine.fighters[2]),
     );
     processMomoGlobalTick(engine.createMomoRuntime());
-    assert(engineSigua.status.some((status) => status.type === 'SYNERGY_SLACKING'), 'Forced slacking roll should place Sigua off field');
+    assert(engineSigua.statuses.some((status) => status.identityId === 'SYNERGY_SLACKING'), 'Forced slacking roll should place Sigua off field');
     assert(!hasOwnedStatus(engineSigua, 'MOMO_CAPTAIN', engineMomo.id), 'Off-field OB should temporarily remove captain status');
     assert(hasOwnedStatus(engineSigua, 'MOMO_CROWD_JOY', engineMomo.id), 'Off-field OB must preserve source-scoped Crowd Joy');
     assert(engineSigua.maxHp === activeMaxHp - MOMO_CAPTAIN_HP_BONUS && engineSigua.currentHp === activeHp - MOMO_CAPTAIN_HP_BONUS, 'Off-field OB should suspend the captain HP bonus exactly once');
     processMomoActorTurnEnd(engine.createMomoRuntime(), engineSigua, false);
-    assert(engineSigua.status.find((status) => status.type === 'MOMO_CROWD_JOY' && status.sourceId === engineMomo.id)?.stacks === 50, 'Off-field skipped turns must not decay preserved Crowd Joy');
+    assert(engineSigua.statuses.find((status) => status.identityId === 'MOMO_CROWD_JOY' && status.attribution.effectSourceId === engineMomo.id)?.potency === 50, 'Off-field skipped turns must not decay preserved Crowd Joy');
 
     let settlementCount = 0;
-    while (engineSigua.status.some((status) => status.type === 'SYNERGY_SLACKING') && settlementCount < 8) {
+    while (engineSigua.statuses.some((status) => status.identityId === 'SYNERGY_SLACKING') && settlementCount < 8) {
       engine.turnCount += 1;
       engine.finishStep({ current: false });
       settlementCount += 1;
     }
     assert(hasOwnedStatus(engineSigua, 'MOMO_CAPTAIN', engineMomo.id), 'Returning from OB should immediately restore captain status');
-    assert(engineSigua.status.find((status) => status.type === 'MOMO_CROWD_JOY' && status.sourceId === engineMomo.id)?.stacks === 50, 'Returning from OB should retain the original Crowd Joy stacks');
+    assert(engineSigua.statuses.find((status) => status.identityId === 'MOMO_CROWD_JOY' && status.attribution.effectSourceId === engineMomo.id)?.potency === 50, 'Returning from OB should retain the original Crowd Joy stacks');
     assert(engineSigua.maxHp === activeMaxHp && engineSigua.currentHp === activeHp, 'Returning from OB should restore, not duplicate, the suspended captain HP bonus');
     assert(settlementCount >= 5 && settlementCount <= 6, `Natural OB should last five global turns, settled after ${settlementCount}`);
     assert(logs.some((entry) => entry.text.includes('摸鱼时间结束') && entry.text.includes(engineSigua.name)), 'Natural OB return should retain its explicit return log');
@@ -523,7 +643,7 @@ export function runMomoCases(): string[] {
     const momo = makeFighter('萌月沫沫@A');
     const blockedDecoy = makeFighter('错误抵挡候选@B');
     const actualTarget = makeFighter('沫沫强制攻击目标@C');
-    blockedDecoy.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'gamer_linken_sphere' });
+    applyTestStatus(blockedDecoy, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'gamer_linken_sphere' } });
     actualTarget.maxHp = 10000;
     localProject.setCurrentHp(actualTarget, 10000);
     const { engine } = makeDeathEngine([momo, blockedDecoy, actualTarget]);
@@ -531,12 +651,12 @@ export function runMomoCases(): string[] {
     const engineDecoy = engine.fighters[1];
     const engineTarget = engine.fighters[2];
     engine.initializeMomoTeams();
-    engineMomo.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineMomo, { identityId: 'AIM', charges: 1 });
     const targetHpBefore = engineTarget.currentHp;
 
     engine.executeSkillAction('momo_what_zone', engineMomo, engineTarget);
     assert(engineTarget.currentHp < targetHpBefore, 'Momo single-target damage should land on the target selected by the shared pipeline');
-    assert(engineDecoy.status.some((status) => status.type === 'SPELL_BLOCK'), 'An unrelated target spell block must not cancel Momo attack setup');
+    assert(engineDecoy.statuses.some((status) => status.identityId === 'SPELL_BLOCK'), 'An unrelated target spell block must not cancel Momo attack setup');
     cases.push('Momo attacks use one shared target for selection, defense, and damage');
   }
 
@@ -556,7 +676,7 @@ export function runMomoCases(): string[] {
     const engineOwner = engine.fighters[1];
     const enginePuppet = engine.fighters[2];
     engine.initializeMomoTeams();
-    engineMomo.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineMomo, { identityId: 'AIM', charges: 1 });
     const ownerHpBefore = engineOwner.currentHp;
     const puppetHpBefore = enginePuppet.currentHp;
 
@@ -569,12 +689,12 @@ export function runMomoCases(): string[] {
   {
     const momo = makeFighter('萌月沫沫@A');
     const ethereal = makeFighter('沫沫虚无规则目标@B');
-    ethereal.status.push({ type: 'ETHEREAL', duration: 2 });
+    applyTestStatus(ethereal, { identityId: 'ETHEREAL', remainingTurns: 2 });
     const { engine, logs } = makeDeathEngine([momo, ethereal]);
     const engineMomo = engine.fighters[0];
     const engineTarget = engine.fighters[1];
     engine.initializeMomoTeams();
-    engineMomo.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineMomo, { identityId: 'AIM', charges: 1 });
     const hpBefore = engineTarget.currentHp;
     engine.executeSkillAction('momo_wps_pillar', engineMomo, engineTarget);
     assert(engineTarget.currentHp === hpBefore, 'Physical Momo attacks must not touch an ethereal target');
@@ -587,24 +707,48 @@ export function runMomoCases(): string[] {
     const counterTarget = makeFighter('沫沫物理反击目标@B');
     counterTarget.maxHp = 10000;
     localProject.setCurrentHp(counterTarget, 10000);
-    counterTarget.status.push({ type: 'COUNTER', duration: 2 });
+    applyTestStatus(counterTarget, { identityId: 'COUNTER', remainingTurns: 2 });
     const { engine, logs } = makeDeathEngine([momo, counterTarget]);
     const engineMomo = engine.fighters[0];
     const engineTarget = engine.fighters[1];
     engine.initializeMomoTeams();
-    engineMomo.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineMomo, { identityId: 'AIM', charges: 1 });
     const momoHpBefore = engineMomo.currentHp;
     const targetHpBefore = engineTarget.currentHp;
     engine.executeSkillAction('momo_what_zone', engineMomo, engineTarget);
     assert(engineTarget.currentHp < targetHpBefore && engineMomo.currentHp < momoHpBefore, 'Momo physical hits should deal damage and then receive COUNTER reflection');
-    assert(logs.some((entry) => entry.text.includes('触发反击') && entry.text.includes('反弹伤害')), 'Momo physical reflection should have a complete counter log');
+    const counterCauseIndex = logs.findIndex((entry) => entry.text.includes('触发反击') && entry.text.includes('反弹伤害'));
+    const counterResultIndex = logs.findIndex((entry) => entry.text.includes('反击结算') && entry.text.includes('实际承受'));
+    assert(counterCauseIndex >= 0 && counterResultIndex > counterCauseIndex, 'Momo physical reflection should log the counter cause before its result');
     cases.push('Momo attacks respect physical counter reflection');
   }
 
   {
     const momo = makeFighter('萌月沫沫@A');
+    const finalTarget = makeFighter('桃桃最后目标@B');
+    const { engine, logs } = makeDeathEngine([momo, finalTarget]);
+    const engineMomo = engine.fighters[0];
+    const engineTarget = engine.fighters[1];
+    engine.initializeMomoTeams();
+    engineMomo.atk = 10000;
+    engineMomo.agl = 10000;
+    engineTarget.agl = 0;
+    localProject.setCurrentHp(engineTarget, 1);
+
+    withRandomSequence(Array(16).fill(0.5), () => {
+      engine.executeSkillAction('momo_peaches', engineMomo, engineTarget);
+    });
+
+    assert(engineTarget.isDeadAnnounced || engineTarget.currentHp <= 0, 'The first Peach hit should defeat the only selectable target');
+    assert(logs.some((entry) => entry.text.includes('剩余 3 击取消')), 'Peaches should explicitly cancel and explain its remaining hits after all targets are gone');
+    assert(!logs.some((entry) => entry.text.includes('第 2/4 击开始随机寻找目标')), 'Peaches must not announce a target search that cannot resolve');
+    cases.push('Momo Peaches explains cancellation after defeating the final target');
+  }
+
+  {
+    const momo = makeFighter('萌月沫沫@A');
     const blocked = makeFighter('沫沫骑士踢抵挡目标@B');
-    blocked.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'gamer_linken_sphere' });
+    applyTestStatus(blocked, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'gamer_linken_sphere' } });
     const { engine } = makeDeathEngine([momo, blocked]);
     const engineMomo = engine.fighters[0];
     const engineTarget = engine.fighters[1];
@@ -613,7 +757,7 @@ export function runMomoCases(): string[] {
     engine.executeSkillAction('momo_345', engineMomo, engineTarget);
     assert(engineTarget.currentHp === hpBefore, 'Spell block should stop the Momo rider-kick impact');
     assert(engineMomo.momoState?.riderKickCount === 1, 'A blocked Momo rider-kick should still count as an attempted rider kick');
-    assert(engineMomo.status.find((status) => status.type === 'MOMO_CROWD_JOY' && status.sourceId === engineMomo.id)?.stacks === 5, 'Rider-kick setup should grant its exact Crowd Joy before the block');
+    assert(engineMomo.statuses.find((status) => status.identityId === 'MOMO_CROWD_JOY' && status.attribution.effectSourceId === engineMomo.id)?.potency === 5, 'Rider-kick setup should grant its exact Crowd Joy before the block');
     cases.push('Momo rider-kick setup settles once even when spell-blocked');
   }
 
@@ -624,13 +768,13 @@ export function runMomoCases(): string[] {
     const engineMomo = engine.fighters[0];
     const engineTarget = engine.fighters[1];
     engine.initializeMomoTeams();
-    engineMomo.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineMomo, { identityId: 'AIM', charges: 1 });
     const hpBefore = engineTarget.currentHp;
-    const defBefore = engineTarget.def;
+    const defBefore = getEffectiveCombatStat(engineTarget, 'def', 'standard');
     engine.executeSkillAction('momo_mic_open', engineMomo, engineTarget);
     assert(engineTarget.currentHp === hpBefore, 'Momo Mic Open should be a true no-damage targeted utility skill');
-    assert(engineTarget.status.some((status) => status.type === 'MOMO_MIC_DEF_DOWN'), 'Momo Mic Open should apply its named debuff after shared defenses');
-    assert(engineTarget.def < defBefore, 'Momo Mic Open should apply its documented 22% defense penalty');
+    assert(engineTarget.statuses.some((status) => status.identityId === 'MOMO_MIC_DEF_DOWN'), 'Momo Mic Open should apply its named debuff after shared defenses');
+    assert(getEffectiveCombatStat(engineTarget, 'def', 'standard') < defBefore, 'Momo Mic Open should apply its documented 22% defense penalty');
     cases.push('Momo Mic Open uses shared defenses without adding fake chip damage');
   }
 
@@ -649,7 +793,7 @@ export function runMomoCases(): string[] {
     localProject.setCurrentHp(engineValo, engineValo.maxHp);
     assert(engineValo.job === 'VALO_JUNIOR', 'Valo |OMO reward test requires phase-2 Sigua');
     localProject.setCurrentHp(engineCaptain, 1);
-    engineValo.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineValo, { identityId: 'AIM', charges: 1 });
 
     engine.executeSkillAction('valo_ult_blade_storm', engineValo, engineMomo);
     assert(engineValo.stats.kills === 1, `A captain killed through |OMO should count for Valo, got ${engineValo.stats.kills}`);
@@ -673,7 +817,7 @@ export function runMomoCases(): string[] {
     localProject.setCurrentHp(engineValo, Math.max(1, Math.floor(engineValo.maxHp * 0.4)));
     engine.handleTransformations(engineValo);
     localProject.setCurrentHp(engineValo, engineValo.maxHp);
-    engineValo.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineValo, { identityId: 'AIM', charges: 1 });
     const momoHpBefore = engineMomo.currentHp;
     const captainHpBefore = engineCaptain.currentHp;
 
@@ -695,18 +839,23 @@ export function runMomoCases(): string[] {
     const engineAttacker = engine.fighters[2];
     engine.initializeMomoTeams();
     enterPhaseTwo(engine, engineMomo);
-    engineAttacker.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineAttacker, { identityId: 'AIM', charges: 1 });
 
     engine.executeSkillAction('bash', engineAttacker, engineMomo);
     assert(logs.some((entry) => entry.text.includes('状态结算') && entry.text.includes('不会跟随伤害转移')), 'A redirected hostile status should explicitly explain why it did not land');
     logs.splice(0, logs.length);
-    engineMomo.status.push({ type: 'BURN', duration: 2, applierId: engineAttacker.id, applierName: engineAttacker.name });
+    applyTestStatus(engineMomo, { identityId: 'POISON', remainingTurns: 2, attribution: { applierId: engineAttacker.id, applierName: engineAttacker.name } });
     const momoHpBefore = engineMomo.currentHp;
     const captainHpBefore = engineCaptain.currentHp;
     engine.processStatusTurn(engineMomo);
     assert(engineMomo.currentHp === momoHpBefore && engineCaptain.currentHp < captainHpBefore, 'Momo DOT should redistribute to active captains through |OMO');
     assert(logs.some((entry) => entry.text.includes('触发【|OMO】') && entry.text.includes('本体未受伤')), 'Redirected DOT should log the actual |OMO outcome');
     assert(!logs.some((entry) => entry.text.includes('没有穿透防护')), 'Redirected DOT must not be mislabeled as fully blocked');
+    logs.splice(0, logs.length);
+    applyTestStatus(engineMomo, { identityId: 'BURN', potency: 6, count: 1, attribution: { applierId: engineAttacker.id, applierName: engineAttacker.name } });
+    settleBurnAtLargeRound(engine.createStatusMechanicsRuntime(), 1);
+    assert(logs.some((entry) => entry.text.includes('【灼烧】') && entry.text.includes('伤害触发【|OMO】') && entry.text.includes('舰长合计实际损失') && entry.text.includes('本体未损失生命')), 'Large-round status damage should explain the exact |OMO redirection outcome');
+    assert(!logs.some((entry) => entry.text.includes('【灼烧】') && entry.text.includes('伤害被完全化解')), 'Redirected burn must not contradict the preceding |OMO settlement');
     cases.push('Momo redirected statuses and DOT logs state their real outcomes');
   }
 
@@ -737,6 +886,22 @@ export function runMomoCases(): string[] {
     engine.handleTransformations(engine.fighters[0]);
     assert(engine.fighters[0].momoState === undefined, 'Momo transform hook must not create Momo state on unrelated fighters');
     cases.push('Momo hooks do not pollute unrelated fighter state');
+  }
+
+  {
+    const winner = makeFighter('水人阵营胜者@A');
+    const defeated = makeFighter('结算旁观者@B');
+    const { engine, logs } = makeDeathEngine([winner, defeated]);
+    engine.fighters[0].teamId = 'WATER_TEAM';
+    localProject.setCurrentHp(engine.fighters[1], 0);
+    engine.fighters[1].isDead = true;
+    engine.fighters[1].isDeadAnnounced = true;
+
+    assert(engine.checkWinCondition([engine.fighters[0]]), 'A lone Water-team survivor should satisfy the normal win condition');
+    const winLog = logs.find((entry) => entry.type === 'win');
+    assert(winLog?.text.includes('【水人阵营】'), 'The Water team should use a player-facing Chinese winner label');
+    assert(!winLog?.text.includes('WATER_TEAM'), 'Winner logs must not expose an internal team identifier');
+    cases.push('Winner logs hide internal dynamic team identifiers');
   }
 
   return cases;

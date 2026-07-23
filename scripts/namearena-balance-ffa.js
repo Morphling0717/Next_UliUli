@@ -1,6 +1,9 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 require('./namearena/shared/register');
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const {
   DEFAULT_STRESS_MAX_TURNS,
   NO_WATER,
@@ -8,12 +11,15 @@ const {
   localProject,
   makeProjectEngine,
   makeProjectFighter,
+  scanLogs,
   withProjectSeed,
 } = require('./namearena/shared/harness.ts');
 const { createBattleState } = require('../lib/namearena/battleState.ts');
+const { getPuruisaishiBarrierTotal } = require('../lib/namearena/puruisaishiMechanics.ts');
 
 const battleCount = Number.parseInt(process.env.NAMEARENA_BALANCE_BATTLES ?? process.argv[2] ?? '15000', 10);
 const baseSeed = Number.parseInt(process.env.NAMEARENA_BALANCE_BASE_SEED ?? process.argv[3] ?? '710000', 10);
+const startIndex = Number.parseInt(process.env.NAMEARENA_BALANCE_START_INDEX ?? '0', 10);
 const maxTurns = Number.parseInt(process.env.NAMEARENA_BALANCE_MAX_TURNS ?? String(DEFAULT_STRESS_MAX_TURNS), 10);
 const fairShare = 100 / NO_WATER.length;
 const targetLow = Number.parseFloat(process.env.NAMEARENA_BALANCE_LOW ?? String(fairShare - 0.5));
@@ -21,6 +27,10 @@ const targetHigh = Number.parseFloat(process.env.NAMEARENA_BALANCE_HIGH ?? Strin
 const progressEvery = Number.parseInt(process.env.NAMEARENA_BALANCE_PROGRESS ?? '500', 10);
 const puruisaishiMinRetreatRate = Number.parseFloat(process.env.NAMEARENA_PURUISAISHI_MIN_RETREAT_RATE ?? '50');
 const puruisaishiMaxRetreatRate = Number.parseFloat(process.env.NAMEARENA_PURUISAISHI_MAX_RETREAT_RATE ?? '55');
+const evaluateBalance = process.env.NAMEARENA_BALANCE_EVALUATE !== 'false';
+const scanBattleLogs = process.env.NAMEARENA_BALANCE_SCAN_LOGS === 'true';
+const outputPath = process.env.NAMEARENA_BALANCE_OUTPUT_PATH;
+const quiet = process.env.NAMEARENA_BALANCE_QUIET === 'true';
 
 function createCounter() {
   return Object.fromEntries(NO_WATER.map((name) => [name, 0]));
@@ -81,13 +91,14 @@ function getPuruisaishiOutcome(fighters, battleEndTurn) {
       battleEndTurn,
     };
   }
+  const remainingShield = getPuruisaishiBarrierTotal(puruisaishi);
 
   return {
     appeared: true,
     phaseTwoReached: (puruisaishi.puruisaishiPhase ?? 1) >= 2,
-    retreated: !!puruisaishi.isDead && (puruisaishi.puruisaishiShield ?? 0) <= 0,
+    retreated: !!puruisaishi.isDead && remainingShield <= 0,
     activeAtEnd: !puruisaishi.isDead && !puruisaishi.isDeadAnnounced && puruisaishi.currentHp > 0,
-    remainingShield: Math.max(0, puruisaishi.puruisaishiShield ?? 0),
+    remainingShield,
     remainingCrystals: fighters.filter((fighter) =>
       fighter.isOriginiumCrystal && !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
     ).length,
@@ -102,6 +113,7 @@ function runFastNoWaterBattle(seed, index) {
     let battleState = createBattleState(seed, 0);
     const spinalSwordRef = { current: false };
     const lastLogs = [];
+    const logs = scanBattleLogs ? [] : null;
     let turnCount = 0;
     let ended = false;
     let error = null;
@@ -109,6 +121,7 @@ function runFastNoWaterBattle(seed, index) {
 
     const appendLog = (entry) => {
       if (entry.type === 'win') winText = entry.text;
+      logs?.push(entry);
       lastLogs.push(entry);
       if (lastLogs.length > 5) lastLogs.shift();
     };
@@ -129,6 +142,13 @@ function runFastNoWaterBattle(seed, index) {
     }
 
     const invariantErrors = checkInvariants(fighters, `balance-no-water-ffa-${index}`, { includeLabel: true });
+    const logIssues = logs ? scanLogs(logs, `balance-no-water-ffa-${index}`, NO_WATER) : [];
+    const logIssueContexts = logs
+      ? logIssues.map((issue) => ({
+          issue,
+          logs: logs.slice(Math.max(0, issue.line - 7), issue.line + 6),
+        }))
+      : [];
     const survivors = fighters
       .filter((fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0)
       .map((fighter) => `${fighter.name}:${fighter.job}:${fighter.currentHp}`);
@@ -156,6 +176,8 @@ function runFastNoWaterBattle(seed, index) {
       timedOut: !ended && !error,
       error,
       invariantErrors,
+      logIssues,
+      logIssueContexts,
       survivors,
       lastLogs,
       winText,
@@ -184,6 +206,7 @@ function main() {
     timedOut: 0,
     error: 0,
     invariant: 0,
+    log: 0,
   };
   const puruisaishiCounts = {
     appeared: 0,
@@ -204,11 +227,13 @@ function main() {
     momoWinCreditsWithoutTeaming: 0,
   };
   const examples = [];
+  const logIssueExamples = [];
   const startedAt = Date.now();
 
   for (let i = 0; i < battleCount; i += 1) {
-    const seed = mixSampleSeed(baseSeed + i);
-    const result = runFastNoWaterBattle(seed, i);
+    const sampleIndex = startIndex + i;
+    const seed = mixSampleSeed(baseSeed + sampleIndex);
+    const result = runFastNoWaterBattle(seed, sampleIndex);
 
     result.playerStats.forEach((fighter) => {
       if (fighter.transformed) transforms[fighter.name] += 1;
@@ -224,6 +249,7 @@ function main() {
     if (result.timedOut) issueCounts.timedOut += 1;
     if (result.error) issueCounts.error += 1;
     if (result.invariantErrors.length > 0) issueCounts.invariant += result.invariantErrors.length;
+    if (result.logIssues.length > 0) issueCounts.log += result.logIssues.length;
 
     if (result.puruisaishi.appeared) {
       puruisaishiCounts.appeared += 1;
@@ -272,12 +298,23 @@ function main() {
           error: result.error,
           timedOut: result.timedOut,
           invariantErrors: result.invariantErrors,
+          logIssues: result.logIssues,
         });
       }
     }
+    if (result.logIssues.length > 0 && logIssueExamples.length < 20) {
+      logIssueExamples.push({
+        seed,
+        label: result.label,
+        survivors: result.survivors,
+        lastLogs: result.lastLogs,
+        logIssues: result.logIssues,
+        logIssueContexts: result.logIssueContexts,
+      });
+    }
 
     if (progressEvery > 0 && (i + 1) % progressEvery === 0) {
-      console.log(`progress ${i + 1}/${battleCount}`);
+      if (!quiet) console.log(`progress ${i + 1}/${battleCount} (sample ${sampleIndex})`);
     }
   }
 
@@ -333,14 +370,21 @@ function main() {
       observedRetreatRate <= puruisaishiMaxRetreatRate,
   };
 
-  const summary = {
-    ok: standings.every((entry) => entry.inTarget) &&
+  const mechanismOk =
       issueCounts.timedOut === 0 &&
       issueCounts.error === 0 &&
       issueCounts.invariant === 0 &&
-      puruisaishi.targetMet,
+      issueCounts.log === 0;
+  const balanceOk = standings.every((entry) => entry.inTarget) && puruisaishi.targetMet;
+  const summary = {
+    ok: mechanismOk && (!evaluateBalance || balanceOk),
+    mechanismOk,
+    balanceEvaluated: evaluateBalance,
+    balanceOk: evaluateBalance ? balanceOk : null,
+    logScanEnabled: scanBattleLogs,
     battleCount,
     baseSeed,
+    startIndex,
     seedStrategy: '32-bit avalanche mix of baseSeed + battle index',
     maxTurns,
     target: [targetLow, targetHigh],
@@ -357,9 +401,14 @@ function main() {
     puruisaishi,
     issueCounts,
     examples,
+    logIssueExamples,
   };
 
-  console.log(JSON.stringify(summary, null, 2));
+  if (outputPath) {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
+  }
+  if (!quiet) console.log(JSON.stringify(summary, null, 2));
   if (!summary.ok) process.exitCode = 1;
 }
 

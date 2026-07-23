@@ -1,6 +1,7 @@
-import { healFighter, isActiveCombatant } from '../combatState';
+import { isActiveCombatant, resolveHealing } from '../combatState';
+import type { HealingResolutionRecord } from '../types';
 import { namerenaData as Data } from '../data';
-import { grantStatus } from '../defenseStatus';
+
 import { namerenaJobs } from '../jobs';
 import {
   MOMO_ALTERNATE_DRAGON_CHANCE,
@@ -13,8 +14,9 @@ import {
   syncMomoCaptains,
   type MomoRuntime,
 } from '../momoMechanics';
-import { applyTimedStatModifier, makeTimedStatModifier } from '../statModifiers';
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
+import { applyStatus, queryMechanic } from '../statusSystem';
+import { getSelectableTargets } from '../targeting';
 
 const { SKILL_TAGS } = Data;
 
@@ -25,12 +27,13 @@ function asMomoRuntime(ctx: SkillContext): MomoRuntime {
     turnCount: ctx.turnCount,
     getTeamId: ctx.getTeamId,
     isActiveCombatant,
-    log: (type, text) => ctx.log(type, text),
+    log: (type, text, metadata) => ctx.log(type, text, metadata),
     syncHpPct: (fighter) => {
       fighter.hpPct = fighter.maxHp > 0 ? fighter.currentHp / fighter.maxHp : 0;
     },
     applyDamage: ctx.applyDamage,
     applyStatus: ctx.applyStatus,
+    dispelStatusEffects: ctx.dispelStatusEffects,
     markDefeated: ctx.markDefeated,
     flushDeferredDamageEvents: (fighter) => {
       if (fighter.id === ctx.target.id || fighter.id === ctx.user.id) ctx.flushDeferredDamageEvents?.();
@@ -39,17 +42,25 @@ function asMomoRuntime(ctx: SkillContext): MomoRuntime {
 }
 
 function momoDamageFormula(multiplier: number, trueDamage = false): NonNullable<SkillDefinition['damageFormula']> {
-  return (attacker, target) => {
-    const raw = attacker.atk * multiplier + attacker.mag * 0.24 + attacker.wis * 0.18;
-    return Math.max(1, raw - (trueDamage ? 0 : target.def * 0.32));
+  return (attacker, target, _fighters, getEffectiveStat) => {
+    const raw = getEffectiveStat(attacker, 'atk') * multiplier +
+      getEffectiveStat(attacker, 'mag') * 0.24 +
+      getEffectiveStat(attacker, 'wis') * 0.18;
+    return Math.max(1, raw - (trueDamage ? 0 : getEffectiveStat(target, 'def') * 0.32));
   };
 }
 
-const finalVentDamageFormula: NonNullable<SkillDefinition['damageFormula']> = (owner, target, fighters) => {
+const finalVentDamageFormula: NonNullable<SkillDefinition['damageFormula']> = (owner, target, fighters, getEffectiveStat) => {
   const dragon = fighters.find((fighter) =>
     fighter.summonerId === owner.id && fighter.momoDragonVariant && isActiveCombatant(fighter),
   );
-  return Math.max(1, owner.atk * 2.15 + (dragon?.atk ?? 0) * 1.45 + owner.wis * 0.3 - target.def * 0.28);
+  return Math.max(
+    1,
+    getEffectiveStat(owner, 'atk') * 2.15 +
+      (dragon ? getEffectiveStat(dragon, 'atk') : 0) * 1.45 +
+      getEffectiveStat(owner, 'wis') * 0.3 -
+      getEffectiveStat(target, 'def') * 0.28,
+  );
 };
 
 function addJoy(ctx: SkillContext, amount: number, actionName: string): void {
@@ -154,12 +165,14 @@ function executeGuardVent(ctx: SkillContext): boolean {
     ctx.log('info', `🛡️ 【GUARD VENT】${ctx.user.name} 找不到仍在场的契约者，防御降临失败。`);
     return true;
   }
-  const exists = owner.status.some((status) => status.type === 'SPELL_BLOCK' && status.sourceId === 'momo_guard_vent');
+  const exists = queryMechanic(owner, 'SPELL_BLOCK').entries.some((status) =>
+    status.attribution.effectSourceId === 'momo_guard_vent',
+  );
   if (exists) {
     ctx.log('info', `🛡️ 【GUARD VENT】${owner.name} 的防御降临仍未消耗，本次不重复装备。`);
     return true;
   }
-  grantStatus(owner, 'SPELL_BLOCK', 1, 'momo_guard_vent');
+  applyStatus(owner, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'momo_guard_vent' } });
   ctx.log('buff', `🛡️ 【GUARD VENT】${ctx.user.name} 降下一面契约盾，为 ${owner.name} 抵挡下一次技能伤害或控制！`);
   return true;
 }
@@ -205,10 +218,19 @@ function executeTenPull(ctx: SkillContext): boolean {
   const runtime = asMomoRuntime(ctx);
   ctx.log('skill', `✨ 【十连！金光！】${ctx.user.name} 开出：电影票×${counts.ticket}、棉花糖×${counts.candy}、爱心抱枕×${counts.pillow}、绮彩权杖×${counts.scepter}、时空之站×${counts.station}、神驹宝玺×${counts.seal}、浪漫城堡×${counts.castle}；现在开始逐项结算。`);
 
-  let healed = 0;
-  healed += healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.06) * counts.ticket, ctx.log);
-  healed += healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.1) * counts.candy, ctx.log);
-  if (counts.pillow > 0) healed += healFighter(ctx.user, ctx.user.maxHp, ctx.log);
+  const healingResults: HealingResolutionRecord[] = [];
+  const settlePrizeHealing = (amount: number, sourceId: string): void => {
+    if (amount <= 0) return;
+    healingResults.push(resolveHealing(ctx.user, amount, {
+      kind: 'direct',
+      sourceId,
+      healer: ctx.user,
+    }, ctx.log));
+  };
+  settlePrizeHealing(Math.floor(ctx.user.maxHp * 0.06) * counts.ticket, '十连·电影票');
+  settlePrizeHealing(Math.floor(ctx.user.maxHp * 0.1) * counts.candy, '十连·棉花糖');
+  if (counts.pillow > 0) settlePrizeHealing(ctx.user.maxHp, '十连·爱心抱枕');
+  const healed = healingResults.reduce((sum, result) => sum + result.actual, 0);
 
   for (let i = 0; i < counts.scepter; i += 1) {
     const captains = activeMomoCaptains(runtime, ctx.user, true);
@@ -234,7 +256,9 @@ function executeTenPull(ctx: SkillContext): boolean {
   }
   const recoveryText = healed > 0
     ? `实际恢复 ${healed} 点生命`
-    : '生命已满，治疗奖品未产生实际恢复';
+    : healingResults.some((result) => result.outcome === 'blocked')
+      ? '治疗奖品被完全阻止，未产生实际恢复'
+      : '生命已满，治疗奖品未产生实际恢复';
   const cleanseText = cleansed > 0
     ? `清除 ${cleansed} 个负面状态`
     : '没有可清除的负面状态';
@@ -247,6 +271,16 @@ function executePeaches(ctx: SkillContext): boolean {
     ctx.log('skill', `🍑 【！？桃桃？！】${ctx.user.name}：“四个桃子花了 40 块钱！”先损失当前生命 40%（实际 ${cost} 点），随后连续出手 4 次！`);
   });
   for (let hit = 1; hit <= 4 && isActiveCombatant(ctx.user); hit += 1) {
+    const selectableTargets = getSelectableTargets({
+      fighters: ctx.fighters,
+      turnCount: ctx.turnCount,
+      getTeamId: ctx.getTeamId,
+      isActiveCombatant,
+    }, ctx.user);
+    if (selectableTargets.length === 0) {
+      ctx.log('info', `🍑 【！？桃桃？！】第 ${hit}/4 击开始前已没有可选目标，剩余 ${5 - hit} 击取消。`);
+      break;
+    }
     ctx.log('skill', `🍑 【！？桃桃？！】第 ${hit}/4 击开始随机寻找目标。`);
     ctx.executeSkillAction('momo_peach_hit', ctx.user, null, ctx.triggerDepth + 1);
   }
@@ -275,16 +309,9 @@ export const momoSkills: Record<string, SkillDefinition> = {
   },
   momo_mic_open: {
     name: '麦霸', tag: SKILL_TAGS.DEBUFF, spellBlockMode: 'afterSetup', noDamage: true,
-    status: 'MOMO_MIC_DEF_DOWN',
+    statusApplications: [{ identityId: 'MOMO_MIC_DEF_DOWN' }],
     text: '🎙️ {USER}：“上厕所忘记关麦了！”尝试让 {TARGET} 陷入【麦霸破防】！',
     onExecute: (ctx) => { addJoy(ctx, 3, '麦霸'); return false; },
-    afterExecute: (ctx) => {
-      if (!ctx.target.status.some((status) => status.type === 'MOMO_MIC_DEF_DOWN')) return;
-      applyTimedStatModifier(
-        ctx.target,
-        makeTimedStatModifier(`momo-mic:${ctx.target.id}`, 'MOMO_MIC_DEF_DOWN', { def: 0.78 }),
-      );
-    },
   },
   momo_top_rank: {
     name: '我要当榜一！', tag: SKILL_TAGS.BUFF,

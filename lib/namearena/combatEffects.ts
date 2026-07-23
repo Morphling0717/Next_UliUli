@@ -197,7 +197,28 @@ const TING_SKILL_EFFECTS: Record<
   summon_puppet_ting: { motion: 'puppet_ritual', actorMotion: 'stationary', targetMode: 'actor', impact: 'ting_blood' },
 };
 
-type GachaCombatEffectId = Exclude<BattleCombatEffectId, TokusatsuCombatEffectId>;
+type TingCombatEffectId = Extract<BattleCombatEffectId,
+  | 'ting_blood_rite'
+  | 'ting_grudge_rend'
+  | 'ting_detonation'
+  | 'ting_detonation_charge'
+  | 'ting_rage'
+  | 'ting_wail'
+>;
+
+const TING_EFFECTS: Record<
+  TingCombatEffectId,
+  Omit<TingCombatEffectCue, 'theme' | 'presentation' | 'stageImpact'>
+> = {
+  ting_blood_rite: { motion: 'blood_rite', actorMotion: 'stationary', targetMode: 'targets', impact: 'ting_blood' },
+  ting_grudge_rend: { motion: 'grudge_rend', actorMotion: 'melee_lunge', targetMode: 'targets', impact: 'ting_slash' },
+  ting_detonation: { motion: 'detonation', actorMotion: 'stationary', targetMode: 'targets', impact: 'ting_detonation' },
+  ting_detonation_charge: { motion: 'detonation', actorMotion: 'melee_lunge', targetMode: 'targets', impact: 'ting_detonation' },
+  ting_rage: { motion: 'rage', actorMotion: 'stationary', targetMode: 'actor', impact: 'ting_blood' },
+  ting_wail: { motion: 'wail', actorMotion: 'stationary', targetMode: 'targets', impact: 'ting_curse' },
+};
+
+type GachaCombatEffectId = Exclude<BattleCombatEffectId, TokusatsuCombatEffectId | TingCombatEffectId>;
 
 const GACHA_EFFECTS: Record<
   GachaCombatEffectId,
@@ -296,18 +317,6 @@ const ORDINARY_SUMMON_EFFECTS: Record<string, GachaCombatEffectId> = {
   '史瓦罗': 'summon_svarog_barrage',
 };
 
-function resolveSuicidePoolMotion(text: string): TingCombatMotion {
-  if (/自爆|尸爆|手雷|坠落|风暴|黑洞|终焉|邪神契约|同归于尽/.test(text)) return 'detonation';
-  if (/斩|刃|切腹|抽骨|碎颅|断腿|禁手|撕下|猛撞/.test(text)) return 'grudge_rend';
-  return 'blood_rite';
-}
-
-function resolveSuicidePoolActorMotion(text: string, motion: TingCombatMotion): CombatActorMotion {
-  if (motion === 'grudge_rend') return 'melee_lunge';
-  if (/自爆卡车|坠落冲击|舍身风暴|碎颅击|断腿踢|碎牙咬|乱舞/.test(text)) return 'melee_lunge';
-  return 'stationary';
-}
-
 function makeCue(
   event: CombatEffectEvent,
   effect: Omit<TingCombatEffectCue, 'theme' | 'presentation' | 'stageImpact'>,
@@ -404,14 +413,20 @@ function makeTokusatsuCue(
   };
 }
 
-/** Maps authoritative action metadata to a character effect. Text is only used for random-pool subtypes. */
+/** Maps authoritative action metadata to a character effect without parsing player-visible log text. */
 export function resolveCombatEffect(
   event: CombatEffectEvent,
   actor?: Pick<Fighter, 'isTing' | 'isTokusatsu' | 'isSummon' | 'summonBaseName' | 'name' | 'job'>,
 ): CombatEffectCue | null {
   const skillId = event.skillId;
-  if (event.visualCue?.kind === 'combat_fx') {
-    const effectId = event.visualCue.effectId;
+  const explicitEffectId = event.visualCue?.kind === 'combat_fx' || event.visualCue?.kind === 'reaction_fx'
+    ? event.visualCue.effectId
+    : event.visualCue?.kind === 'combat_action'
+      ? event.visualCue.effectId
+      : undefined;
+  if (explicitEffectId) {
+    const effectId = explicitEffectId;
+    if (effectId in TING_EFFECTS) return makeCue(event, TING_EFFECTS[effectId as TingCombatEffectId]);
     if (effectId in TOKUSATSU_EFFECTS) return makeTokusatsuCue(event, effectId as TokusatsuCombatEffectId);
     return makeGachaCue(event, effectId as GachaCombatEffectId);
   }
@@ -430,23 +445,6 @@ export function resolveCombatEffect(
 
   const tokusatsuEffectId = skillId ? TOKUSATSU_SKILL_EFFECTS[skillId] : undefined;
   if (tokusatsuEffectId) return makeTokusatsuCue(event, tokusatsuEffectId);
-
-  if (skillId === 'suicide_rng') {
-    const motion = resolveSuicidePoolMotion(event.text);
-    return makeCue(event, {
-      motion,
-      actorMotion: resolveSuicidePoolActorMotion(event.text, motion),
-      targetMode: 'targets',
-      impact: motion === 'detonation' ? 'ting_detonation' : motion === 'grudge_rend' ? 'ting_slash' : 'ting_blood',
-    });
-  }
-
-  if (skillId === 'red_fury_rng') {
-    if (/咆哮|震晕|斗志/.test(event.text)) {
-      return makeCue(event, { motion: 'wail', actorMotion: 'stationary', targetMode: 'targets', impact: 'ting_curse' });
-    }
-    return makeCue(event, { motion: 'rage', actorMotion: 'stationary', targetMode: 'actor', impact: 'ting_blood' });
-  }
 
   if (actor?.isTokusatsu) {
     if (skillId === null) {

@@ -1,23 +1,20 @@
 import { cloneJobDefinition, healFighter } from './combatState';
-import { grantStatus } from './defenseStatus';
-import { createLifecycleStatus, refreshLifecycleStatus } from './statusLifecycle';
-import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from './statusRules';
+import { commitFormTransition } from './battlePresentation';
+
 import { rememberYuzuTeammates } from './yuzuMechanics';
-import {
-  applyTimedStatModifier,
-  cleanupOrphanedTimedStatModifiers,
-  makeTimedStatModifier,
-  removeTimedStatModifier,
-  withTimedStatModifiersSuspended,
-} from './statModifiers';
 import type {
   DamageApplicationOptions,
   DefeatOptions,
   Fighter,
   JobDefinition,
   MomoState,
-  StatusApplicationOptions,
+  StatusApplication,
+  DispelOptions,
+  DispelResolution,
+  BattleLogMetadata,
 } from './types';
+import { applyStatus, consumeStatusValue, hasIdentity, queryMechanic, removeEffects } from './statusSystem';
+import { getEffectiveCombatStat } from './statusMechanics';
 
 export const MOMO_JOY_MAX = 138;
 export const MOMO_RIDER_KICKS_TO_PHASE_THREE = 7;
@@ -30,17 +27,13 @@ export const MOMO_ALTERNATE_DRAGON_CHANCE = 0.2;
 export const MOMO_SWORD_RESONANCE_CHANCE = 0.25;
 export const MOMO_OWL_FOOD_CHANCE = 0.0314;
 
-const CAPTAIN_MODIFIER_PREFIX = 'momo-captain';
-const VILLAGE_SWORD_MODIFIER_PREFIX = 'momo-village-sword';
-const AWAKENED_SWORD_MODIFIER_PREFIX = 'momo-awakened-sword';
-
 export interface MomoRuntime {
   fighters: Fighter[];
   jobs: Partial<Record<string, JobDefinition>>;
   turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   syncHpPct: (fighter: Fighter) => void;
   applyDamage: (
     target: Fighter,
@@ -50,7 +43,8 @@ export interface MomoRuntime {
     attacker?: Fighter,
     options?: DamageApplicationOptions,
   ) => number;
-  applyStatus: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
+  applyStatus: (target: Fighter, application: StatusApplication) => boolean;
+  dispelStatusEffects: (target: Fighter, options: DispelOptions) => DispelResolution;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   flushDeferredDamageEvents: (fighter: Fighter) => void;
 }
@@ -63,7 +57,7 @@ export type MomoDamageReward = {
 };
 
 function hasStatusFrom(fighter: Fighter, type: string, sourceId: string): boolean {
-  return fighter.status.some((status) => status.type === type && status.sourceId === sourceId);
+  return hasIdentity(fighter, type, { effectSourceIds: [sourceId] });
 }
 
 function isFoodUnit(fighter: Fighter): boolean {
@@ -93,14 +87,10 @@ export function ensureMomoState(momo: Fighter): MomoState {
   return state;
 }
 
-function captainModifierId(momoId: string): string {
-  return `${CAPTAIN_MODIFIER_PREFIX}:${momoId}`;
-}
-
 function hasMomoCaptainRelationship(fighter: Fighter, momoId: string): boolean {
-  return !!fighter.momoCaptainBonuses?.[momoId] || fighter.status.some((status) =>
-    status.sourceId === momoId && (status.type === 'MOMO_CAPTAIN' || status.type === 'MOMO_CROWD_JOY'),
-  );
+  return !!fighter.momoCaptainBonuses?.[momoId] ||
+    hasIdentity(fighter, 'MOMO_CAPTAIN', { effectSourceIds: [momoId] }) ||
+    hasIdentity(fighter, 'MOMO_CROWD_JOY', { effectSourceIds: [momoId] });
 }
 
 function removeCaptainHpBonus(fighter: Fighter, momoId: string, keepRecord: boolean): void {
@@ -158,42 +148,43 @@ export function withMomoCaptainHpBonusesSuspended<T>(fighter: Fighter, callback:
 }
 
 function suspendMomoCaptainFrom(runtime: MomoRuntime, fighter: Fighter, momo: Fighter): void {
-  fighter.status = fighter.status.filter((status) => !(
-    status.type === 'MOMO_CAPTAIN' && status.sourceId === momo.id
-  ));
-  removeTimedStatModifier(fighter, captainModifierId(momo.id));
+  removeEffects(fighter, { identityIds: ['MOMO_CAPTAIN'], effectSourceIds: [momo.id], reason: 'scripted' });
   removeCaptainHpBonus(fighter, momo.id, true);
   runtime.syncHpPct(fighter);
 }
 
 function removeMomoCaptainFrom(fighter: Fighter, momo: Fighter, preserveJoy = false): void {
-  fighter.status = fighter.status.filter((status) => !(
-    status.sourceId === momo.id &&
-    (status.type === 'MOMO_CAPTAIN' || (!preserveJoy && status.type === 'MOMO_CROWD_JOY'))
-  ));
-  removeTimedStatModifier(fighter, captainModifierId(momo.id));
+  removeEffects(fighter, {
+    identityIds: preserveJoy ? ['MOMO_CAPTAIN'] : ['MOMO_CAPTAIN', 'MOMO_CROWD_JOY'],
+    effectSourceIds: [momo.id],
+    reason: 'scripted',
+  });
   removeCaptainHpBonus(fighter, momo.id, false);
 }
 
-function grantMomoCaptainTo(runtime: MomoRuntime, momo: Fighter, fighter: Fighter): boolean {
+interface MomoCaptainGrantResult {
+  fighter: Fighter;
+  newRelationship: boolean;
+  statusRestored: boolean;
+  hpBonusActivated: boolean;
+}
+
+function grantMomoCaptainTo(runtime: MomoRuntime, momo: Fighter, fighter: Fighter): MomoCaptainGrantResult {
   const wasNewMember = !fighter.momoCaptainBonuses?.[momo.id];
-  if (!hasStatusFrom(fighter, 'MOMO_CAPTAIN', momo.id)) grantStatus(fighter, 'MOMO_CAPTAIN', 999, momo.id);
-  const status = fighter.status.find((entry) => entry.type === 'MOMO_CAPTAIN' && entry.sourceId === momo.id);
-  if (status) status.displayDesc = `由 ${momo.name} 授予：攻击提高 10%，最大生命与当前生命 +${MOMO_CAPTAIN_HP_BONUS}`;
-  activateCaptainHpBonus(fighter, momo.id);
-  applyTimedStatModifier(
-    fighter,
-    makeTimedStatModifier(captainModifierId(momo.id), 'MOMO_CAPTAIN', { atk: MOMO_CAPTAIN_ATTACK_MULTIPLIER }, momo.id),
-  );
+  const statusRestored = !hasStatusFrom(fighter, 'MOMO_CAPTAIN', momo.id);
+  if (statusRestored) {
+    applyStatus(fighter, { identityId: 'MOMO_CAPTAIN', effectName: '全员上舰', attribution: { effectSourceId: momo.id, applierId: momo.id, applierName: momo.name } });
+  }
+  const hpBonusActivated = activateCaptainHpBonus(fighter, momo.id);
   runtime.syncHpPct(fighter);
-  return wasNewMember;
+  return { fighter, newRelationship: wasNewMember, statusRestored, hpBonusActivated };
 }
 
 export function activeMomoCaptains(runtime: MomoRuntime, momo: Fighter, includeSelf = true): Fighter[] {
   return runtime.fighters.filter((fighter) =>
     (includeSelf || fighter.id !== momo.id) &&
     runtime.isActiveCombatant(fighter) &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING') &&
+    !hasIdentity(fighter, 'SYNERGY_SLACKING') &&
     hasStatusFrom(fighter, 'MOMO_CAPTAIN', momo.id),
   );
 }
@@ -213,17 +204,24 @@ export function syncMomoCaptains(runtime: MomoRuntime, momo: Fighter, announce =
       runtime.syncHpPct(fighter);
     } else if (
       expectedIds.has(fighter.id) &&
-      fighter.status.some((status) => status.type === 'SYNERGY_SLACKING')
+      hasIdentity(fighter, 'SYNERGY_SLACKING')
     ) {
       suspendMomoCaptainFrom(runtime, fighter, momo);
     }
   });
   const expected = expectedMembers.filter((fighter) =>
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    !hasIdentity(fighter, 'SYNERGY_SLACKING'),
   );
-  const added = expected.filter((fighter) => grantMomoCaptainTo(runtime, momo, fighter));
+  const grants = expected.map((fighter) => grantMomoCaptainTo(runtime, momo, fighter));
+  const added = grants.filter((grant) => grant.newRelationship).map((grant) => grant.fighter);
+  const restored = grants.filter((grant) =>
+    !grant.newRelationship && (grant.statusRestored || grant.hpBonusActivated),
+  );
   if (announce && added.length > 0) {
     runtime.log('buff', `⚓ 【全员上舰】${momo.name}：“坏了我自己给自己上舰了。”${added.map((fighter) => fighter.name).join('、')} 成为舰长，攻击提高且生命 +${MOMO_CAPTAIN_HP_BONUS}！`);
+  }
+  if (restored.length > 0) {
+    runtime.log('buff', `⚓ 【重新上舰】${restored.map((grant) => grant.fighter.name).join('、')} 的舰长状态曾被移除，现有队伍关系将其恢复${restored.some((grant) => grant.hpBonusActivated) ? `，并重新激活生命 +${MOMO_CAPTAIN_HP_BONUS}` : '；现有生命加成没有重复计算'}。`);
   }
   return expected;
 }
@@ -362,15 +360,14 @@ export type MomoCrowdJoyGain = {
 };
 
 export function addMomoCrowdJoyToCaptain(momo: Fighter, captain: Fighter, amount: number): MomoCrowdJoyGain {
-  let status = captain.status.find((entry) => entry.type === 'MOMO_CROWD_JOY' && entry.sourceId === momo.id);
-  if (!status) {
-    status = createLifecycleStatus('MOMO_CROWD_JOY', 999, momo.id, { stacks: 0 });
-    captain.status.push(status);
-  }
-  const before = Math.max(0, Math.min(MOMO_JOY_MAX, status.stacks ?? 0));
-  const after = Math.min(MOMO_JOY_MAX, before + Math.max(0, Math.floor(amount)));
-  status.stacks = after;
-  status.displayDesc = `众宾欢也 ${after}/${MOMO_JOY_MAX} 层：攻击吸血 ${after}%`;
+  const existing = queryMechanic(captain, 'MOMO_CROWD_JOY', { effectSourceIds: [momo.id] }).entries[0];
+  const before = Math.max(0, Math.min(MOMO_JOY_MAX, existing?.potency ?? 0));
+  const status = applyStatus(captain, {
+    identityId: 'MOMO_CROWD_JOY',
+    potency: Math.max(0, Math.floor(amount)),
+    attribution: { effectSourceId: momo.id, applierId: momo.id, applierName: momo.name },
+  }).primary;
+  const after = Math.max(0, Math.min(MOMO_JOY_MAX, status.potency ?? 0));
   return { captain, before, after, gained: after - before };
 }
 
@@ -380,13 +377,11 @@ export function addMomoCrowdJoy(runtime: MomoRuntime, momo: Fighter, amount: num
 }
 
 export function decayMomoCrowdJoy(runtime: MomoRuntime, actor: Fighter): void {
-  const entries = actor.status.filter((status) => status.type === 'MOMO_CROWD_JOY' && (status.stacks ?? 0) > 0);
+  const entries = queryMechanic(actor, 'MOMO_CROWD_JOY').entries.filter((status) => (status.potency ?? 0) > 0);
   entries.forEach((status) => {
-    const before = Math.max(0, status.stacks ?? 0);
+    const before = Math.max(0, status.potency ?? 0);
     const next = Math.max(0, before - 10);
-    status.stacks = next;
-    status.displayDesc = `众宾欢也 ${next}/${MOMO_JOY_MAX} 层：攻击吸血 ${next}%`;
-    if (next <= 0) actor.status = actor.status.filter((entry) => entry !== status);
+    consumeStatusValue(actor, status, 'potency', 10);
     runtime.log('info', `🎉 【众宾欢也】${actor.name} 完成本次行动，层数 ${before} -> ${next}。`);
   });
 }
@@ -400,12 +395,13 @@ export function applyMomoCaptainDamageRewards(
   if (!attacker || actualDamage <= 0 || !runtime.isActiveCombatant(attacker)) return [];
   if (!['skill', 'counter', 'reflect'].includes(source)) return [];
   const rewards: MomoDamageReward[] = [];
-  const captainStatuses = attacker.status.filter((status) => status.type === 'MOMO_CAPTAIN' && status.sourceId);
+  const captainStatuses = queryMechanic(attacker, 'MOMO_CAPTAIN').entries;
   captainStatuses.forEach((captainStatus) => {
-    const momo = runtime.fighters.find((fighter) => fighter.id === captainStatus.sourceId && fighter.isMomo && runtime.isActiveCombatant(fighter));
+    const sourceId = captainStatus.attribution.effectSourceId;
+    const momo = runtime.fighters.find((fighter) => fighter.id === sourceId && fighter.isMomo && runtime.isActiveCombatant(fighter));
     if (!momo) return;
-    const joy = attacker.status.find((status) => status.type === 'MOMO_CROWD_JOY' && status.sourceId === momo.id);
-    const joyStacks = Math.max(0, Math.min(MOMO_JOY_MAX, joy?.stacks ?? 0));
+    const joy = queryMechanic(attacker, 'MOMO_CROWD_JOY', { effectSourceIds: [momo.id] }).entries[0];
+    const joyStacks = Math.max(0, Math.min(MOMO_JOY_MAX, joy?.potency ?? 0));
     const joyHealed = joyStacks > 0
       ? healFighter(attacker, Math.floor(actualDamage * joyStacks / 100), runtime.log)
       : 0;
@@ -429,7 +425,7 @@ function rebuildMomoPhaseTwoStats(momo: Fighter): void {
 
 function rebuildMomoPhaseThreeStats(momo: Fighter): void {
   momo.maxHp = Math.max(4500, Math.min(5100, Math.floor(momo.maxHp * 1.22)));
-  momo.currentHp = Math.max(momo.currentHp, Math.floor(momo.maxHp * 0.78));
+  momo.currentHp = Math.min(momo.maxHp, Math.max(momo.currentHp, Math.floor(momo.maxHp * 0.78)));
   momo.atk = Math.max(285, Math.floor(momo.atk * 1.55));
   momo.def = Math.max(195, Math.floor(momo.def * 1.42));
   momo.res = Math.max(205, Math.floor(momo.res * 1.42));
@@ -440,25 +436,18 @@ function rebuildMomoPhaseThreeStats(momo: Fighter): void {
 }
 
 export function applyMomoPhaseTwoStats(momo: Fighter): void {
-  const state = ensureMomoState(momo);
-  state.phase = 2;
   rebuildMomoPhaseTwoStats(momo);
 }
 
 export function ensureMomoAwakenedSword(runtime: MomoRuntime, momo: Fighter, announceWay = true): boolean {
   const hasAwakened = hasStatusFrom(momo, 'MOMO_AWAKENED_SWORD', momo.id);
   if (hasAwakened) return false;
-  momo.status = momo.status.filter((status) => !(
-    status.sourceId === momo.id &&
-    (status.type === 'MOMO_VILLAGE_SWORD' || status.type === 'MOMO_AWAKENED_SWORD')
-  ));
-  removeTimedStatModifier(momo, `${VILLAGE_SWORD_MODIFIER_PREFIX}:${momo.id}`);
-  removeTimedStatModifier(momo, `${AWAKENED_SWORD_MODIFIER_PREFIX}:${momo.id}`);
-  grantStatus(momo, 'MOMO_AWAKENED_SWORD', 999, momo.id);
-  applyTimedStatModifier(
-    momo,
-    makeTimedStatModifier(`${AWAKENED_SWORD_MODIFIER_PREFIX}:${momo.id}`, 'MOMO_AWAKENED_SWORD', { atk: 1.35 }, momo.id),
-  );
+  removeEffects(momo, {
+    identityIds: ['MOMO_VILLAGE_SWORD', 'MOMO_AWAKENED_SWORD'],
+    effectSourceIds: [momo.id],
+    reason: 'replaced',
+  });
+  applyStatus(momo, { identityId: 'MOMO_AWAKENED_SWORD', attribution: { effectSourceId: momo.id } });
   if (announceWay) {
     runtime.log('buff', `⚔️ 【way？！】${momo.name} 手中没有醒剑，三阶段权能直接生成【醒剑】，攻击大幅提高！`);
   }
@@ -473,11 +462,7 @@ export function grantMomoSword(runtime: MomoRuntime, momo: Fighter): 'village' |
     ensureMomoAwakenedSword(runtime, momo, false);
     return 'awakened';
   }
-  grantStatus(momo, 'MOMO_VILLAGE_SWORD', 999, momo.id);
-  applyTimedStatModifier(
-    momo,
-    makeTimedStatModifier(`${VILLAGE_SWORD_MODIFIER_PREFIX}:${momo.id}`, 'MOMO_VILLAGE_SWORD', { atk: 1.1 }, momo.id),
-  );
+  applyStatus(momo, { identityId: 'MOMO_VILLAGE_SWORD', attribution: { effectSourceId: momo.id } });
   runtime.log('buff', `🗡️ 【SWORD VENT】无双龙为 ${momo.name} 降下【村好剑】，攻击小幅提高。`);
   return 'village';
 }
@@ -485,17 +470,22 @@ export function grantMomoSword(runtime: MomoRuntime, momo: Fighter): 'village' |
 export function enterMomoPhaseThree(runtime: MomoRuntime, momo: Fighter, reason: string): boolean {
   const state = ensureMomoState(momo);
   if (!momo.isMomo || state.phase >= 3 || !runtime.isActiveCombatant(momo)) return false;
-  state.phase = 3;
-  if (!state.waterDaughter) {
-    const job = runtime.jobs.MOMO_SAI_Q_RIDER;
-    momo.job = 'MOMO_SAI_Q_RIDER';
-    if (job) momo.jobData = cloneJobDefinition(job);
-  }
-  withMomoCaptainHpBonusesSuspended(momo, () =>
-    withTimedStatModifiersSuspended(momo, () => rebuildMomoPhaseThreeStats(momo)),
-  );
-  runtime.syncHpPct(momo);
-  runtime.log('transform', `🦇 【塞Q来打！】${momo.name} ${reason}，完成三阶段变身；骑士踢计数 ${state.riderKickCount}/${MOMO_RIDER_KICKS_TO_PHASE_THREE}！`);
+  const changed = commitFormTransition({
+    fighter: momo,
+    log: runtime.log,
+    message: () => `🦇 【塞Q来打！】${momo.name} ${reason}，完成三阶段变身；骑士踢计数 ${state.riderKickCount}/${MOMO_RIDER_KICKS_TO_PHASE_THREE}！`,
+    mutate: () => {
+      state.phase = 3;
+      if (!state.waterDaughter) {
+        const job = runtime.jobs.MOMO_SAI_Q_RIDER;
+        momo.job = 'MOMO_SAI_Q_RIDER';
+        if (job) momo.jobData = cloneJobDefinition(job);
+      }
+      withMomoCaptainHpBonusesSuspended(momo, () => rebuildMomoPhaseThreeStats(momo));
+      runtime.syncHpPct(momo);
+    },
+  });
+  if (!changed) return false;
   ensureMomoAwakenedSword(runtime, momo);
 
   const alternateDragon = runtime.fighters.find((fighter) =>
@@ -534,20 +524,12 @@ function oldestOwlFood(runtime: MomoRuntime): Fighter | undefined {
 }
 
 function addThreePoisonStacks(momo: Fighter): void {
-  let poison = momo.status.find((status) => status.type === 'POISON');
-  if (!poison) {
-    poison = createLifecycleStatus('POISON', 3, momo.id, {
-      applierId: momo.id,
-      applierName: momo.name,
-      stacks: 3,
-    });
-    momo.status.push(poison);
-  } else {
-    refreshLifecycleStatus(poison, 3);
-    poison.stacks = Math.min(3, Math.max(1, poison.stacks ?? 1) + 3);
-    poison.applierId = momo.id;
-    poison.applierName = momo.name;
-  }
+  applyStatus(momo, {
+    identityId: 'POISON',
+    potency: 3,
+    remainingTurns: 3,
+    attribution: { effectSourceId: momo.id, applierId: momo.id, applierName: momo.name },
+  });
 }
 
 function consumeToxicMeal(runtime: MomoRuntime, momo: Fighter, food: Fighter | undefined, reason: string): void {
@@ -584,8 +566,8 @@ export function tryMomoStealYuzuMeal(runtime: MomoRuntime, yuzu: Fighter): Fight
   );
   const momo = candidates[Math.floor(Math.random() * candidates.length)];
   if (!momo) return undefined;
-  const momoPower = Math.max(1, momo.wis + momo.spd);
-  const yuzuPower = Math.max(1, yuzu.wis + yuzu.spd);
+  const momoPower = Math.max(1, getEffectiveCombatStat(momo, 'wis') + getEffectiveCombatStat(momo, 'spd'));
+  const yuzuPower = Math.max(1, getEffectiveCombatStat(yuzu, 'wis') + getEffectiveCombatStat(yuzu, 'spd'));
   const winChance = Math.max(0.3, Math.min(0.7, momoPower / (momoPower + yuzuPower)));
   if (Math.random() >= winChance) {
     runtime.log('info', `🥄 【拼好饭争夺】${momo.name} 冲来和 ${yuzu.name} 拼点失败，拼好饭仍归柚子。`);
@@ -608,10 +590,10 @@ export function processMomoActorTurnEnd(runtime: MomoRuntime, actor: Fighter, pe
 export function cleanseMomoCaptains(runtime: MomoRuntime, momo: Fighter): number {
   let removed = 0;
   activeMomoCaptains(runtime, momo, true).forEach((captain) => {
-    const before = captain.status.length;
-    captain.status = captain.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
-    removed += before - captain.status.length;
-    cleanupOrphanedTimedStatModifiers(captain);
+    removed += runtime.dispelStatusEffects(captain, {
+      strength: 'normal',
+      direction: 'negative',
+    }).removed.length;
   });
   return removed;
 }
@@ -627,29 +609,40 @@ export function reviveMomoAsWaterDaughter(runtime: MomoRuntime, momo: Fighter): 
   if (!waterAnchor || !daughterJob) return false;
 
   clearMomoTeam(runtime, momo);
-  state.waterDaughter = true;
-  state.teamMode = 'water';
-  momo.teamId = 'WATER_TEAM';
-  momo.job = 'MOMO_WATER_DAUGHTER';
-  momo.jobData = cloneJobDefinition(daughterJob);
-  momo.isDead = false;
-  momo.isDeadAnnounced = false;
-  momo.defeatHooksResolved = false;
-  momo.status = [];
-  cleanupOrphanedTimedStatModifiers(momo);
-  withTimedStatModifiersSuspended(momo, () => {
-    momo.maxHp = Math.max(3600, Math.floor(momo.maxHp * 1.25));
-    momo.currentHp = momo.maxHp;
-    momo.atk = Math.max(230, Math.floor(momo.atk * 1.25));
-    momo.def = Math.max(170, Math.floor(momo.def * 1.25));
-    momo.res = Math.max(180, Math.floor(momo.res * 1.25));
-    momo.spd = Math.max(135, Math.floor(momo.spd * 1.18));
-    momo.agl = Math.max(120, Math.floor(momo.agl * 1.18));
-    momo.mag = Math.max(235, Math.floor(momo.mag * 1.25));
-    momo.wis = Math.max(245, Math.floor(momo.wis * 1.25));
+  const changed = commitFormTransition({
+    fighter: momo,
+    kind: 'form_shift',
+    cause: 'revival',
+    log: runtime.log,
+    message: `🌊 【水人的大女儿】${momo.name} 刚被判定退场，就被 ${waterAnchor.name} 从水里捞起，满血加入水人阵营！`,
+    mutate: () => {
+      state.waterDaughter = true;
+      state.teamMode = 'water';
+      momo.teamId = waterAnchor.teamId ?? 'WATER_TEAM';
+      momo.job = 'MOMO_WATER_DAUGHTER';
+      momo.jobData = cloneJobDefinition(daughterJob);
+      momo.isDead = false;
+      momo.isDeadAnnounced = false;
+      momo.defeatHooksResolved = false;
+      momo.maxHp = Math.max(3600, Math.floor(momo.maxHp * 1.25));
+      momo.currentHp = momo.maxHp;
+      momo.atk = Math.max(230, Math.floor(momo.atk * 1.25));
+      momo.def = Math.max(170, Math.floor(momo.def * 1.25));
+      momo.res = Math.max(180, Math.floor(momo.res * 1.25));
+      momo.spd = Math.max(135, Math.floor(momo.spd * 1.18));
+      momo.agl = Math.max(120, Math.floor(momo.agl * 1.18));
+      momo.mag = Math.max(235, Math.floor(momo.mag * 1.25));
+      momo.wis = Math.max(245, Math.floor(momo.wis * 1.25));
+      runtime.syncHpPct(momo);
+    },
   });
-  runtime.syncHpPct(momo);
-  runtime.log('transform', `🌊 【水人的大女儿】${momo.name} 刚被判定退场，就被 ${waterAnchor.name} 从水里捞起，满血加入水人阵营！`);
+  if (!changed) return false;
+  runtime.dispelStatusEffects(momo, {
+    strength: 'absolute',
+    direction: 'all',
+    includeNeutral: true,
+    includeIndependent: true,
+  });
   syncMomoCaptains(runtime, momo, true);
   if (state.phase >= 3) ensureMomoAwakenedSword(runtime, momo);
   return true;

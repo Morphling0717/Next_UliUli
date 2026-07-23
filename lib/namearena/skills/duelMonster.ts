@@ -1,14 +1,11 @@
 import type { DamageApplicationOptions, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, isActiveCombatant, setCurrentHp } from '../combatState';
-import {
-  consumeSpellBlock,
-  formatSpellBlock,
-  grantStatus,
-} from '../defenseStatus';
+import { applyPermanentStatBuff, healFighter, isActiveCombatant, resolveHealing } from '../combatState';
+import { consumeSpellBlock, formatSpellBlock } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
-import { applyPermanentStatBuff } from '../statModifiers';
+import { applyStatus, hasIdentity } from '../statusSystem';
+import { isDamageRedirected } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -30,8 +27,12 @@ function consumeHeadSpellBlock(
   const spellBlock = consumeSpellBlock(ctx.target);
   if (!spellBlock) return false;
 
-  const healed = healFighter(ctx.target, Math.floor(ctx.target.maxHp * 0.15), ctx.log);
-  const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
+  const healing = resolveHealing(ctx.target, Math.floor(ctx.target.maxHp * 0.15), {}, ctx.log);
+  const healText = healing.actual > 0
+    ? `，并恢复了 ${healing.actual} 点生命`
+    : healing.outcome === 'blocked'
+      ? '，但附带治疗被完全阻止'
+      : '，但生命已满，治疗溢出';
   ctx.log('info', `🐉 第 ${headIndex} 颗龙首撞上 ${ctx.target.name} 的防护，被完全拦截：${formatSpellBlock(spellBlock, ctx.target.name, `${ctx.user.name}的【三重龙首】`, healText)}`);
   return true;
 }
@@ -50,12 +51,12 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     tag: SKILL_TAGS.DEBUFF,
     rate: 0.35,
     mult: 2.4,
-    status: 'STUN',
+    statusApplications: [{ identityId: 'STUN' }],
     text: '🔒 {USER} 展开封印锁链束缚 {TARGET}，造成 {VAL} 点伤害并封锁行动！',
     afterExecute: (ctx, actualDmg) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { atk: 0.85, mag: 0.85 });
-      ctx.log('info', `🔒 ${ctx.target.name} 被封印锁链压制，攻击与魔力下降！`);
+      ctx.log('info', `🔒 【封印锁链】${ctx.target.name} 的面板被永久压制：攻击与魔力各降低 15%！`);
     },
   },
   exodia_obliterate: {
@@ -74,14 +75,15 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
 
       ctx.user.hasUsedExodiaObliterate = true;
       const enemies = activeEnemies(ctx);
-      const baseDmg = Math.floor(ctx.user.mag * 4.2 + ctx.user.atk * 2.2);
+      const baseDmg = Math.floor(ctx.getEffectiveStat(ctx.user, 'mag') * 4.2 + ctx.getEffectiveStat(ctx.user, 'atk') * 2.2);
+      ctx.setVisualTargets(enemies);
       ctx.log('crit', `🧙‍♂️ 【Exodia Obliterate】${ctx.user.name} 释放被封印者的怒火，横扫 ${enemies.length} 名敌人！`);
       for (const enemy of enemies) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || hasIdentity(enemy, 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: 'Exodia Obliterate' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
+        if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🧙‍♂️ 黑暗大法师的怒火命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -98,7 +100,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         }
       }
       if (isActiveCombatant(ctx.user)) {
-        grantStatus(ctx.user, 'SPELL_BLOCK', 2, 'exodia_obliterate_guard');
+        applyStatus(ctx.user, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'exodia_obliterate_guard' } });
       }
       return true;
     },
@@ -123,12 +125,22 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       const splashTargets = activeEnemies(ctx)
         .filter((enemy) => enemy.id !== ctx.target.id)
         .slice(0, 2);
+      if (splashTargets.length > 0) {
+        ctx.log('skill', `🌪️ 【白龙扫射余波】${ctx.user.name} 的龙息继续扫向 ${splashTargets.map((enemy) => enemy.name).join('、')}！`, {
+          targetIds: splashTargets.map((enemy) => enemy.id),
+          visualCue: {
+            kind: 'combat_fx',
+            sourceId: ctx.user.id,
+            targetIds: splashTargets.map((enemy) => enemy.id),
+          },
+        });
+      }
       for (const enemy of splashTargets) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || hasIdentity(enemy, 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '白龙扫射余波' };
         const actualDmg = ctx.applyDamage(enemy, splashDmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
+        if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🌪️ 白龙扫射的余波命中 ${enemy.name}，实际造成 ${actualDmg} 点溅射伤害！`);
         } else {
@@ -146,12 +158,12 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     tag: SKILL_TAGS.DEBUFF,
     rate: 0.3,
     mult: 1.8,
-    status: 'STUN',
+    statusApplications: [{ identityId: 'STUN' }],
     text: '🐉 {USER} 发出震天龙吼，压制 {TARGET}，造成 {VAL} 点伤害并震慑目标！',
     afterExecute: (ctx, actualDmg) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { res: 0.9 });
-      ctx.log('info', `🐉 ${ctx.target.name} 被白龙威压震慑，魔抗下降！`);
+      ctx.log('info', `🐉 【白龙威压】${ctx.target.name} 的面板被永久震慑：魔抗降低 10%！`);
     },
   },
 
@@ -166,14 +178,15 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       const enemies = activeEnemies(ctx);
       if (enemies.length === 0) return true;
       const split = Math.max(0.42, 1 - enemies.length * 0.08);
-      const baseDmg = Math.floor((ctx.user.mag * 3.6 + ctx.user.atk * 2.0) * split);
+      const baseDmg = Math.floor((ctx.getEffectiveStat(ctx.user, 'mag') * 3.6 + ctx.getEffectiveStat(ctx.user, 'atk') * 2.0) * split);
+      ctx.setVisualTargets(enemies);
       ctx.log('crit', `🐉 【究极爆裂疾风弹】${ctx.user.name} 三重龙息横扫 ${enemies.length} 名敌人！（目标越多单体威力越分散）`);
       for (const enemy of enemies) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || enemy.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || hasIdentity(enemy, 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '究极爆裂疾风弹' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
+        if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🐉 究极龙息命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else {
@@ -188,7 +201,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       ctx.user.blueEyesUltimateStrain = (ctx.user.blueEyesUltimateStrain ?? 0) + 1;
       if ((ctx.user.blueEyesUltimateStrain ?? 0) >= 2) {
         applyPermanentStatBuff(ctx.user, { def: 0.88, res: 0.88 });
-        ctx.log('info', `🧬 【融合不稳定】${ctx.user.name} 的融合负荷加重，防御与魔抗下降！`);
+        ctx.log('info', `🧬 【融合不稳定】${ctx.user.name} 的融合负荷加重，面板防御与魔抗各永久降低 12%！`);
       }
       return true;
     },
@@ -206,16 +219,18 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       for (let i = 1; i <= 3; i += 1) {
         if (!isActiveCombatant(ctx.user) || !isActiveCombatant(ctx.target)) break;
         if (consumeHeadSpellBlock(ctx, i)) continue;
-        const dmg = Math.floor(ctx.user.atk * 1.55 + ctx.user.mag * 0.7);
+        const dmg = Math.floor(ctx.getEffectiveStat(ctx.user, 'atk') * 1.55 + ctx.getEffectiveStat(ctx.user, 'mag') * 0.7);
         const damageOptions: DamageApplicationOptions = { actionName: '三重龙首' };
         const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
+        if (isDamageRedirected(damageOptions)) {
           const redirectText = damageOptions.redirectedByJoker
             ? `被 ${ctx.target.name} 用随机恶作剧转移`
             : damageOptions.redirectedByOriginiumCore
               ? `被 ${ctx.target.name} 转入源石网络`
               : damageOptions.redirectedByOwlEmperor
                 ? `被 ${ctx.target.name} 的【帝王之征】接走`
+                : damageOptions.redirectedByYuzu
+                  ? `被 ${ctx.target.name} 通过【镜界分摊】交给队友`
                 : `被 ${ctx.target.name} 通过【|OMO】均摊给舰长`;
           ctx.log('info', `🐉 第 ${i} 颗龙首的攻击${redirectText}，原目标没有受伤；转移伤害已单独结算！`);
           continue;
@@ -233,9 +248,25 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       ctx.user.blueEyesUltimateStrain = (ctx.user.blueEyesUltimateStrain ?? 0) + 1;
       if (total > 0 && (ctx.user.blueEyesUltimateStrain ?? 0) >= 3) {
         const recoil = Math.floor(ctx.user.maxHp * 0.06);
-        const beforeRecoil = ctx.user.currentHp;
-        setCurrentHp(ctx.user, Math.max(1, ctx.user.currentHp - recoil));
-        const actualRecoil = beforeRecoil - ctx.user.currentHp;
+        const recoilOptions: DamageApplicationOptions = {
+          actionName: '融合不稳定',
+          sourceKind: 'self_cost',
+          respectDefenses: false,
+          bypassShields: true,
+          creditAttacker: false,
+          suppressStatusAftermath: true,
+          suppressOwlCooperation: true,
+          bypassOwlOutgoingModifier: true,
+          bypassOwlIncomingModifier: true,
+        };
+        const actualRecoil = ctx.applyDamage(
+          ctx.user,
+          Math.min(recoil, Math.max(0, ctx.user.currentHp - 1)),
+          'self_cost',
+          true,
+          ctx.user,
+          recoilOptions,
+        );
         ctx.log('info', actualRecoil > 0
           ? `🧬 【融合不稳定】${ctx.user.name} 承受融合反噬，实际损失 ${actualRecoil} 点生命！`
           : `🧬 【融合不稳定】${ctx.user.name} 已被压在 1 点生命，融合反噬没有继续扣除生命！`);
@@ -251,7 +282,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     rate: 0.45,
     mult: 3.9,
     ignoreDef: true,
-    status: 'BURN',
+    statusApplications: [{ identityId: 'BURN' }],
     text: '☀️ {USER} 张开黄金羽翼，太阳神烈焰灼烧 {TARGET}，造成 {VAL} 点魔法伤害并灼烧！',
     afterExecute: (ctx, dmg) => {
       if (!isActiveCombatant(ctx.user) || dmg <= 0) return;
@@ -267,12 +298,12 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     rate: 0.35,
     mult: 2.6,
     ignoreDef: true,
-    status: 'STUN',
+    statusApplications: [{ identityId: 'STUN' }],
     text: '☀️ {USER} 释放神之威压，压制 {TARGET}，造成 {VAL} 点伤害并震慑！',
     afterExecute: (ctx, actualDmg) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { atk: 0.82, mag: 0.82, res: 0.9 });
-      ctx.log('info', `☀️ ${ctx.target.name} 被太阳神威压削弱，攻击、魔力与魔抗下降！`);
+      ctx.log('info', `☀️ 【神威压制】${ctx.target.name} 的面板被永久削弱：攻击与魔力各降低 18%，魔抗降低 10%！`);
     },
   },
 };

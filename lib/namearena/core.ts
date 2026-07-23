@@ -35,4 +35,20 @@ export function generateUUID() {
   });
 }
 
+export function generateUniqueRuntimeId(
+  existingIds: Iterable<string>,
+  generateCandidate: () => string,
+  fallbackPrefix = 'entity',
+): string {
+  const occupied = new Set(existingIds);
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const candidate = generateCandidate();
+    if (candidate && !occupied.has(candidate)) return candidate;
+  }
+
+  let suffix = occupied.size + 1;
+  while (occupied.has(`${fallbackPrefix}-${suffix}`)) suffix += 1;
+  return `${fallbackPrefix}-${suffix}`;
+}
+
 export const namerenaCore = { SeededRNG, stringToSeed, generateUUID };

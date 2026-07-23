@@ -3,6 +3,7 @@ import {
   GACHA_SUMMON_LIFESTEAL_STATUS,
   isLuckEmperor,
 } from '../gachaMechanics';
+import { hasIdentity } from '../statusSystem';
 
 export const gachaHook: CharacterHook = {
   id: 'gacha',
@@ -25,7 +26,7 @@ export const gachaHook: CharacterHook = {
     if (ordinarySummonCount >= 2 && Math.random() < 0.4) return 'destiny_draw';
     if (actor.hpPct <= 0.45 && Math.random() < 0.6) return 'destiny_draw';
 
-    const hasSummonLifesteal = actor.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS);
+    const hasSummonLifesteal = hasIdentity(actor, GACHA_SUMMON_LIFESTEAL_STATUS);
     if (ownSummons.length > 0 && !hasSummonLifesteal && Math.random() < 0.46) return 'destiny_draw';
 
     return null;

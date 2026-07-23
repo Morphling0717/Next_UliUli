@@ -1,10 +1,11 @@
-import { COMMON_NEGATIVE_STATUS_TYPES, isStatusType } from '../statusRules';
+import { getStatusIdentityIdsByTag } from '../statusRegistry';
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
-import { grantStatus } from '../defenseStatus';
-import { isSelectableTargetFor } from '../targeting';
 
-type GamerRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant' | 'jobs' | 'log'>;
+import { isSelectableTargetFor } from '../targeting';
+import { applyStatus, hasIdentity } from '../statusSystem';
+
+type GamerRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant' | 'jobs' | 'log' | 'dispelStatusEffects'>;
 
 const MAX_APM = 12;
 const WORLD_STAGE_THRESHOLD = 11;
@@ -33,20 +34,16 @@ function isOriginalGamer(actor: Fighter): boolean {
   return Boolean(actor.isGamer && !actor.isSon && (actor.job === 'HIGH_END_GAMER' || actor.job === 'ALL_PLATFORM_CHAMPION'));
 }
 
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(fighter, type, duration, sourceId);
-}
-
 function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((status) => status.type === type);
+  return hasIdentity(fighter, type);
 }
 
 function enterWorldStage(actor: Fighter, runtime: Pick<GamerRuntime, 'log'>, reason: string): void {
   if (actor.job !== 'ALL_PLATFORM_CHAMPION' || actor.hasUsedGamerWorldStage) return;
   actor.hasUsedGamerWorldStage = true;
   actor.gamerBoostReady = true;
-  refreshStatus(actor, 'GAMER_WORLD_STAGE', WORLD_STAGE_DURATION);
-  refreshStatus(actor, 'BKB', 1, 'gamer_world_stage');
+  applyStatus(actor, { identityId: 'GAMER_WORLD_STAGE', remainingTurns: WORLD_STAGE_DURATION });
+  applyStatus(actor, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'gamer_world_stage' } });
   runtime.log('crit', `🏆 【世界赛舞台】${actor.name} APM 拉到 ${actor.apm ?? 0}/${MAX_APM}，${reason}，所有冠军技能短暂进入强化版！`);
 }
 
@@ -77,7 +74,7 @@ function getAllies(actor: Fighter, runtime: Pick<GamerRuntime, 'fighters' | 'get
 }
 
 function hasCommonNegativeStatus(fighter: Fighter): boolean {
-  return fighter.status.some((status) => isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
+  return getStatusIdentityIdsByTag('common_negative').some((identityId) => hasIdentity(fighter, identityId));
 }
 
 function effectiveCost(actor: Fighter, skillId: string): number {
@@ -220,12 +217,12 @@ export const gamerHook: CharacterHook = {
       fighter.gamerInstantActionQueued = true;
       fighter.hasUsedGamerTransformAction = true;
       fighter.hasUsedGamerContinue = false;
-
-      fighter.status = fighter.status.filter((status) => !isStatusType(status.type, COMMON_NEGATIVE_STATUS_TYPES));
-      refreshStatus(fighter, 'BKB', 1, 'gamer_clutch_focus');
-      refreshStatus(fighter, 'REGEN', 2);
-      refreshStatus(fighter, 'SPELL_BLOCK', 1, 'gamer_clutch_focus');
-      if (apmBeforeTransform >= 5) refreshStatus(fighter, 'AIM', 2);
+      applyStatus(fighter, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'gamer_clutch_focus' } });
+      applyStatus(fighter, { identityId: 'REGEN', remainingTurns: 2 });
+      applyStatus(fighter, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'gamer_clutch_focus' } });
+      if (apmBeforeTransform >= 5) applyStatus(fighter, { identityId: 'AIM', charges: 2 });
+    }, () => {
+      runtime.dispelStatusEffects(fighter, { strength: 'strong', direction: 'negative' });
       if ((fighter.apm ?? 0) >= WORLD_STAGE_THRESHOLD) {
         enterWorldStage(fighter, runtime, '半血变身时已经完成手感预热');
       }

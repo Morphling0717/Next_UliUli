@@ -3,12 +3,13 @@ import type {
   BattleLogMetadata,
   DamageApplicationOptions,
   DefeatOptions,
+  DispelOptions,
+  DispelResolution,
   Fighter,
   SkillDefinition,
-  StatusApplicationOptions,
-  StatusEffectsMap,
+  StatusApplication,
 } from '../types';
-import type { CharacterHookRuntime } from '../characterHooks';
+import type { CharacterHookRuntime, ReactionActionDescriptor } from '../characterHooks';
 import type { DamageResult } from '../damageResolution';
 
 export interface ActionResolutionRuntime {
@@ -16,7 +17,6 @@ export interface ActionResolutionRuntime {
   skills: Record<string, SkillDefinition>;
   skillTags: Record<string, string>;
   data: BattleEngineData;
-  statusEffects: StatusEffectsMap;
   turnCount: number;
   largeRound: number;
   getTeamId: (fighter: Fighter) => string;
@@ -32,7 +32,8 @@ export interface ActionResolutionRuntime {
     options?: DamageApplicationOptions,
   ) => number;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
-  applyStatus: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
+  applyStatus: (target: Fighter, application: StatusApplication) => boolean;
+  dispelStatusEffects: (target: Fighter, options: DispelOptions) => DispelResolution;
   calculateDamage: (
     user: Fighter,
     target: Fighter,
@@ -47,6 +48,11 @@ export interface ActionResolutionRuntime {
     user: Fighter,
     forcedTarget: Fighter | null,
     triggerDepth: number,
+  ) => void;
+  runReactionAction: (
+    actor: Fighter,
+    descriptor: ReactionActionDescriptor,
+    callback: () => void,
   ) => void;
   executeSummonSkill: (skill: SkillDefinition, user: Fighter, userTeamId: string) => void;
   spreadDivaSupport: (skill: SkillDefinition, user: Fighter, userTeamId: string) => void;

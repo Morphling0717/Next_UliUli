@@ -1,4 +1,10 @@
-import type { SkillTag, StatusEffectInfo } from '../types';
+import type { SkillTag } from '../types';
+
+interface StatusIdentityPresentationSeed {
+  name: string;
+  icon: string;
+  desc: string;
+}
 
 // ---------------------------------------------------------------------------
 // Skill tag constants
@@ -15,16 +21,20 @@ export const SKILL_TAGS = {
 // ---------------------------------------------------------------------------
 // Status effect display table
 // ---------------------------------------------------------------------------
-export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
+/**
+ * Identity copy used to build the single status catalog in statusRegistry.
+ * Combat, UI and AI code must consume the registry rather than this seed map.
+ */
+export const STATUS_IDENTITY_PRESENTATION: Record<string, StatusIdentityPresentationSeed> = {
   STUN:   { name: '眩晕', icon: '💫', desc: '无法行动' },
   FREEZE: { name: '冰冻', icon: '❄️', desc: '无法行动，物理防御归零' },
-  BURN:   { name: '灼烧', icon: '🔥', desc: '自身行动开始损失 5% 最大生命；再次点燃会爆燃 3% 并刷新持续时间' },
+  BURN:   { name: '灼烧', icon: '🔥', desc: '每个大回合结束时造成强度×6的伤害并消耗1次，可被屏障吸收' },
   POISON: { name: '中毒', icon: '🤢', desc: '1-3 层；自身行动开始按层数损失 4%/5%/6% 最大生命' },
   BLIND:  { name: '致盲', icon: '🕶️', desc: '命中率降低' },
   INVUL:  { name: '无敌', icon: '🌟', desc: '免疫伤害' },
   COUNTER:{ name: '反击', icon: '💢', desc: '受到物理攻击反弹' },
   REGEN:  { name: '再生', icon: '🌿', desc: '恢复生命' },
-  RAGE:   { name: '狂暴', icon: '😡', desc: '攻升防降' },
+  RAGE:   { name: '狂暴', icon: '😡', desc: '标准物理与特殊攻击输出提高50%，不会降低防御' },
   SILENCE:{ name: '沉默', icon: '😶', desc: '无法使用技能' },
   AIM:    { name: '锁头', icon: '🎯', desc: '下一次攻击必暴击且必中' },
   CONFUSED: { name: '混乱', icon: '🌀', desc: '只能进行普通攻击，并会随机攻击场上其他可选单位' },
@@ -77,9 +87,20 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   DIVA_HEADPHONE_GUARD: { name: '耳机隔音', icon: '🎧', desc: '隔绝噪音与干扰，魔抗大幅提升' },
   DIVA_FINAL_CHORUS: { name: '燃曲压轴', icon: '🔥', desc: '歌姬压轴演出，全属性短暂提升' },
   BABY_LOVE_BOTTLE: { name: '爱心奶瓶', icon: '🍼', desc: '丝瓜 baby 递上的专属支援，全属性提升' },
+  BABY_MAGIC_BATTERY: { name: '魔力电池', icon: '🔋', desc: '魔力暂时翻倍' },
+  BABY_WHETSTONE: { name: '磨刀石', icon: '🔪', desc: '攻击暂时翻倍' },
+  BABY_GUARDIAN_FAIRY: { name: '守护精灵', icon: '🧚', desc: '敏捷暂时翻倍' },
+  BABY_CHEER: { name: '爱的鼓励', icon: '💕', desc: '攻击与魔力暂时提高 50%' },
+  BABY_SPEED: { name: '极速挂载', icon: '⚡', desc: '速度与敏捷暂时翻倍' },
   BABY_WEAKNESS_MARK: { name: '弱点标记', icon: '👀', desc: '被指出破绽，防御与魔抗下降' },
-  Q_BUNNY_IDOL_AGL: { name: '爱豆闪避加成', icon: '✨', desc: '偶像打歌加护：闪避提升20%' },
+  Q_BUNNY_IDOL_AGL: { name: '爱豆灵巧加成', icon: '✨', desc: '偶像打歌加护：命中与闪避公式读取的敏捷提高20%' },
   TEMP_STAT_BUFF: { name: '限时强化', icon: '⬆️', desc: '限时属性强化，结束后属性会恢复' },
+  DIVA_CHEER: { name: '大声应援', icon: '📢', desc: '攻击暂时提高 20%' },
+  DIVA_RHYTHM: { name: '节奏加速', icon: '🎶', desc: '速度暂时提高 50%' },
+  DIVA_FAN_GUARD: { name: '粉丝护卫队', icon: '🛡️', desc: '防御暂时提高 50%' },
+  DIVA_STAGE_SMOKE: { name: '舞台烟雾', icon: '✨', desc: '敏捷暂时提高 50%' },
+  GAMER_RUSH_B: { name: 'Rush B', icon: '🏃', desc: '速度翻倍且攻击提高 50%' },
+  GAMER_WARCRY: { name: '战吼', icon: '📣', desc: '防御与魔抗暂时翻倍' },
   GAMER_WORLD_STAGE: { name: '世界赛模式', icon: '🏆', desc: 'APM 爆表后进入高压竞技状态，解锁终局连段' },
   GAMER_PARRY_GUARD: { name: '弹反抗性', icon: '🛡️', desc: '完美弹反带来的限时防御与魔抗强化' },
   GAMER_ROUTE_BOOST: { name: '速通身位', icon: '🏃', desc: '路线优化带来的限时速度与闪避强化' },
@@ -88,7 +109,7 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   LIQUID_BODY: { name: '水之幻影', icon: '💧', desc: '物理伤害强制减半，免疫暴击与物理截停' },
   WATER_PRISON: { name: '深渊水牢', icon: '🌊', desc: '丧失闪避与转移能力，持续窒息溺水' },
   ETHEREAL: { name: '虚无', icon: '👻', desc: '免疫物理，受到魔法伤害翻倍，无法进行物理攻击' },
-  SPELL_BLOCK: { name: '法术抵挡', icon: '🔵', desc: '抵挡下一次技能伤害或控制' },
+  SPELL_BLOCK: { name: '法术抵挡', icon: '🔵', desc: '抵挡下一次技能伤害或控制，并恢复 15% 最大生命' },
   NO_HEAL: { name: '禁疗', icon: '🥀', desc: '无法恢复生命值' },
   GACHA_SUMMON_LIFESTEAL: { name: '吸血牌', icon: '🧛', desc: '召唤物造成的部分伤害会转化为牢鳄的治疗' },
   GACHA_TING_LUCK_COOLDOWN: { name: '宿敌受击记忆', icon: '🩸', desc: '本次自身行动周期已经从小汀追击中获得过欧气' },
@@ -107,9 +128,9 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   STYLE_EMPEROR: { name: '帝皇铠甲', icon: '👑', desc: '融合所有女人风格' },
   RABBIT_CALC_HASTE: { name: '计算超频', icon: '⚡', desc: '计算器盲按带来的临时出手加速' },
   RABBIT_ZERO_HASTE: { name: '归零超频', icon: '🧮', desc: '归零后短暂吸收算力，提高出手频率' },
+  RABBIT_CARROT: { name: '狂啃胡萝卜', icon: '🥬', desc: '持续恢复生命，速度与敏捷提高 30%' },
 
   WT_SUPPRESS:  { name: '火力压制', icon: '🚧', desc: '被机炮弹雨压制，无法行动，闪避归零' },
-  WT_AIRBORNE:  { name: '击飞', icon: '🚀', desc: '旧版击飞标记；会自动转换为统一击飞' },
   AIRBORNE: { name: '击飞', icon: '🚀', desc: '跳过下一次行动，落地时损失 3% 最大生命' },
   WT_REPAIRING: { name: '抢修中', icon: '🔧', desc: '无法行动；每次自身行动恢复20%最大生命，受到非持续伤害提高30%' },
   WT_ERA:       { name: '爆反装甲', icon: '🧱', desc: '披挂爆炸反应装甲，获得高额减伤' },
@@ -117,6 +138,9 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   WT_BREECH_DAMAGED: { name: '炮闩损坏', icon: '🔩', desc: '主武器受损，造成伤害下降' },
   WT_TRACK_DAMAGED:  { name: '履带断裂', icon: '🛞', desc: '机动受损，闪避归零' },
   WT_AMMO_EXPOSED:   { name: '弹药架暴露', icon: '💥', desc: '被命中模块弱点，低血时容易殉爆' },
+  WT_ORIGINIUM_BREECH_DAMAGED: { name: '晶格破损', icon: '🔹', desc: '源石晶格受损，结构输出下降' },
+  WT_ORIGINIUM_TRACK_DAMAGED: { name: '结晶锚点断裂', icon: '◆', desc: '固定锚点断裂，闪避归零' },
+  WT_ORIGINIUM_AMMO_EXPOSED: { name: '源石核心暴露', icon: '💠', desc: '外层晶格破损，低生命时容易发生核心崩解' },
   WT_RADIO_MORALE: { name: 'D点火力动员', icon: '📻', desc: '无线电动员使物理火力短暂提升' },
   SYNERGY_SLACKING: { name: '场外OB', icon: '⛺', desc: '手牵手摸鱼中，绝对无敌且无法行动' },
   WEAK: { name: '虚弱', icon: '📉', desc: '攻击力大幅下降' },
@@ -124,10 +148,10 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   EMOTE_FAMILIAR: { name: '脸熟', icon: '👁️', desc: '被表情提前盯上，表情死亡认主时会优先选择此目标' },
   EMOTE_OWNER_BONUS: { name: '认主补偿', icon: '📜', desc: '表情死亡认主带来的本次击杀者十分之一临时补偿；认主结算时移除' },
   EMOTE_ULT_COOLDOWN: { name: '万主归一冷却', icon: '🔁', desc: '表情刚刚发动万主归一，短时间内无法再次释放' },
-  BLEED: { name: '流血', icon: '🩸', desc: '自身行动开始损失 4% 最大生命，受到的治疗、再生与吸血降低 25%' },
+  BLEED: { name: '流血', icon: '🩸', desc: '主动攻击出手前造成强度×6的伤害并消耗1次，伤害绕过屏障' },
+  STAGGERED: { name: '踉跄', icon: '💥', desc: '闪避、反击与拦截失效，受到的非持续直接伤害提高25%' },
+  MENTAL_BREAKDOWN: { name: '精神崩溃', icon: '🫥', desc: '下一次有效行动只能进行不会暴击的普通攻击' },
   ORIGINIUM_DISEASE: { name: '矿石病', icon: '🦠', desc: '源石侵蚀层数；层数越高越危险，80 层死亡' },
-  PURUISAISHI_SHIELD: { name: '源石映像护盾', icon: '🜲', desc: '普瑞赛斯二阶段护盾；场上有源石结晶时不会低于 1' },
-  YUZU_BARRIER: { name: '镜界护盾', icon: '🛡️', desc: '柚子施加的数值护盾，会先于生命承受伤害' },
   YUZU_TAUNT: { name: '满级嘲讽', icon: '🪞', desc: '柚子抽到盾牌后吸引敌方火力' },
   YUZU_MARKED: { name: '镜界标记', icon: '🎯', desc: '柚子三阶段定制目标，承受柚子更高伤害' },
   YUZU_EVADE_DOWN: { name: '闪避破坏', icon: '🪞', desc: '敏捷按 55% 计算' },
@@ -155,6 +179,61 @@ export const STATUS_EFFECTS: Record<string, StatusEffectInfo> = {
   MOMO_MIC_DEF_DOWN: { name: '麦霸破防', icon: '🎙️', desc: '忘关麦造成精神冲击，防御暂时下降' },
   MOMO_VILLAGE_SWORD: { name: '村好剑', icon: '🗡️', desc: '无双龙武器降临赋予的低额攻击强化；共鸣后会被醒剑替换' },
   MOMO_AWAKENED_SWORD: { name: '醒剑', icon: '⚔️', desc: '与无双龙共鸣后的高额攻击强化，不与村好剑叠加' },
+
+  // Unified mechanics that may be applied directly by future characters.
+  RUPTURE: { name: '破裂', icon: '◆', desc: '受到造成生命伤害的直接攻击后追加伤害并消耗1次' },
+  TREMOR: { name: '震颤', icon: '🟨', desc: '被震颤爆发时将强度加入失衡值并消耗1次' },
+  SINKING: { name: '沉沦', icon: '🌊', desc: '受到造成生命伤害的直接攻击后降低士气并消耗1次' },
+  POISE: { name: '呼吸', icon: '🫁', desc: '提高暴击率，真正暴击时消耗1次' },
+  CHARGE: { name: '充能', icon: '⚡', desc: '技能资源，每次自身行动机会结束后减少1点' },
+  VULNERABILITY: { name: '易损', icon: '🩹', desc: '受到的非持续直接伤害提高' },
+  PROTECTION: { name: '防护', icon: '🛡️', desc: '受到的非持续直接伤害降低' },
+  PARALYSIS: { name: '麻痹', icon: '⚡', desc: '下一次攻击使用最低伤害且不能暴击' },
+  HASTE: { name: '迅捷', icon: '💨', desc: '行动调度速度提高' },
+  BIND: { name: '束缚', icon: '⛓️', desc: '行动调度速度降低' },
+  AGGRO: { name: '仇恨值', icon: '🎯', desc: '被敌方选为目标的权重提高' },
+  OUTPUT_UP: { name: '威势', icon: '⬆️', desc: '适用攻击的输出提高' },
+  OUTPUT_DOWN: { name: '衰弱', icon: '⬇️', desc: '适用攻击的输出降低' },
+  ATK_UP: { name: '强攻', icon: '⚔️', desc: '有效攻击提高' },
+  ATK_DOWN: { name: '怯攻', icon: '📉', desc: '有效攻击降低' },
+  MAG_UP: { name: '盈魔', icon: '🔮', desc: '有效魔力提高' },
+  MAG_DOWN: { name: '枯魔', icon: '🌑', desc: '有效魔力降低' },
+  WIS_UP: { name: '明识', icon: '🧠', desc: '有效智力提高' },
+  WIS_DOWN: { name: '迷惘', icon: '🌫️', desc: '有效智力降低' },
+  SPD_UP: { name: '疾行', icon: '🏃', desc: '有效速度提高' },
+  SPD_DOWN: { name: '迟行', icon: '🐌', desc: '有效速度降低' },
+  AGL_UP: { name: '灵巧', icon: '🪽', desc: '有效敏捷提高' },
+  AGL_DOWN: { name: '滞身', icon: '🪨', desc: '有效敏捷降低' },
+  DEF_RES_UP: { name: '坚固', icon: '🛡️', desc: '有效防御与魔抗提高' },
+  DEF_RES_DOWN: { name: '破防', icon: '💢', desc: '有效防御与魔抗降低' },
+  DEF_UP: { name: '甲胄', icon: '🪖', desc: '有效物理防御提高' },
+  DEF_DOWN: { name: '裂甲', icon: '🪓', desc: '有效物理防御降低' },
+  RES_UP: { name: '灵障', icon: '🔷', desc: '有效魔法抗性提高' },
+  RES_DOWN: { name: '蚀障', icon: '🔻', desc: '有效魔法抗性降低' },
+  ACCURACY_UP: { name: '洞察', icon: '👁️', desc: '攻击命中率提高' },
+  ACCURACY_DOWN: { name: '偏离', icon: '🕶️', desc: '攻击命中率降低' },
+  ACCURACY_AGL_UP: { name: '命中灵巧', icon: '◉', desc: '命中公式读取的敏捷提高' },
+  EVASION_UP: { name: '残影', icon: '👤', desc: '有效闪避能力提高' },
+  EVASION_DOWN: { name: '失位', icon: '🧭', desc: '有效闪避能力降低' },
+  VITALITY: { name: '生机', icon: '🌱', desc: '受到的治疗、再生与合法吸血提高' },
+  EXHAUSTION: { name: '枯竭', icon: '🥀', desc: '受到的治疗、再生与合法吸血降低' },
+  BARRIER: { name: '屏障', icon: '🔵', desc: '先于生命承受允许被屏障吸收的伤害' },
+  CRIT_DAMAGE_UP: { name: '锐意', icon: '✦', desc: '暴击额外伤害提高' },
+  CRIT_DAMAGE_DOWN: { name: '钝化', icon: '◇', desc: '受到的暴击额外伤害降低' },
+  CRIT_RATE_UP: { name: '会心', icon: '✧', desc: '暴击率提高' },
+  ATK_FLAT_UP: { name: '攻击增量', icon: '⚔️', desc: '有效攻击增加固定数值' },
+  DEF_FLAT_UP: { name: '防御增量', icon: '🛡️', desc: '有效防御增加固定数值' },
+  SPD_FLAT_UP: { name: '速度增量', icon: '🏃', desc: '有效速度增加固定数值' },
+  AGL_FLAT_UP: { name: '敏捷增量', icon: '🪽', desc: '有效敏捷增加固定数值' },
+  MAG_FLAT_UP: { name: '魔力增量', icon: '✨', desc: '有效魔力增加固定数值' },
+  RES_FLAT_UP: { name: '魔抗增量', icon: '🔷', desc: '有效魔抗增加固定数值' },
+  WIS_FLAT_UP: { name: '智力增量', icon: '🧠', desc: '有效智力增加固定数值' },
+  DRAIN: { name: '汲取', icon: '🦹', desc: '直接攻击造成生命伤害时按比例治疗' },
+  OPENING: { name: '破绽', icon: '🎯', desc: '攻击该单位时的暴击率提高' },
+  SURE_HIT_TAKEN: { name: '战术锁定', icon: '◎', desc: '攻击该单位时必定命中' },
+
+  RABBIT_CHARM_COUNTER: { name: '魅惑反击', icon: '💕', desc: '性感女人与帝皇铠甲的常驻魅惑反击' },
+  RABBIT_STYLE_RAGE: { name: '狂暴', icon: '😡', desc: '暴躁女人形态持续维持的狂暴输出' },
 };
 
 export const COLORS: string[] = [

@@ -1,9 +1,24 @@
 import type {
   BattleFormIdentity,
+  BattleLogMetadata,
   Fighter,
+  FormTransitionCause,
   SkillDefinition,
   SkillPresentation,
 } from './types';
+
+export type FormTransitionKind = 'transformation' | 'form_shift';
+
+export type FormTransitionCommit = {
+  fighter: Fighter;
+  message: string | (() => string);
+  mutate: () => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
+  logType?: string;
+  kind?: FormTransitionKind;
+  cause?: FormTransitionCause;
+  force?: boolean;
+};
 
 const CINEMATIC_ADVANCED_SUMMONS = new Set([
   '青眼白龙',
@@ -32,6 +47,44 @@ export function readBattleFormIdentity(fighter: Fighter): BattleFormIdentity {
 
 export function battleFormChanged(before: BattleFormIdentity, after: BattleFormIdentity): boolean {
   return before.jobKey !== after.jobKey || before.phase !== after.phase;
+}
+
+/**
+ * Commits every form mutation before publishing the one authoritative visual event.
+ * Side effects that happen after the transformation narration should remain outside
+ * this function so they cannot accidentally inherit the form cue.
+ */
+export function commitFormTransition({
+  fighter,
+  message,
+  mutate,
+  log,
+  logType = 'transform',
+  kind,
+  cause,
+  force = false,
+}: FormTransitionCommit): boolean {
+  const from = readBattleFormIdentity(fighter);
+  mutate();
+  const to = readBattleFormIdentity(fighter);
+  if (!force && !battleFormChanged(from, to)) return false;
+
+  const resolvedKind: FormTransitionKind = kind ?? (to.phase > from.phase ? 'transformation' : 'form_shift');
+  const resolvedCause: FormTransitionCause = cause ?? (resolvedKind === 'transformation' ? 'phase_advance' : 'form_change');
+  log(logType, typeof message === 'function' ? message() : message, {
+    actorId: fighter.id,
+    actorName: fighter.name,
+    targetIds: [fighter.id],
+    visualCue: {
+      kind: resolvedKind,
+      fighterId: fighter.id,
+      fighterName: fighter.name,
+      from,
+      to,
+      cause: resolvedCause,
+    },
+  });
+  return true;
 }
 
 export function isCinematicAdvancedSummon(fighter: Fighter): boolean {

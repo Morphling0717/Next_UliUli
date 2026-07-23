@@ -1,6 +1,8 @@
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 import { isSelectableTargetFor } from '../targeting';
+import { hasIdentity } from '../statusSystem';
+import { getEffectiveCombatStat } from '../statusMechanics';
 
 type TeamRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant'>;
 
@@ -41,24 +43,28 @@ function getEnemies(actor: Fighter, runtime: TeamRuntime): Fighter[] {
 }
 
 function hasCleansableStatus(fighter: Fighter): boolean {
-  return fighter.status.some((status) => CLEANSABLE_STATUS_TYPES.has(status.type));
+  return [...CLEANSABLE_STATUS_TYPES].some((identityId) => hasIdentity(fighter, identityId));
 }
 
 export function selectBabySupportSkill(actor: Fighter, runtime: TeamRuntime): string {
   const claire = findTeamClaire(actor, runtime);
   const supportTarget = claire ?? actor;
   const enemies = getEnemies(actor, runtime);
-  const canHealSupportTarget = !supportTarget.status.some((status) => status.type === 'NO_HEAL');
+  const canHealSupportTarget = !hasIdentity(supportTarget, 'NO_HEAL');
 
   if (hasCleansableStatus(supportTarget)) return 'baby_bandaid';
   if (supportTarget.hpPct < 0.45 && canHealSupportTarget) return 'baby_feed';
-  if (supportTarget.hpPct < 0.65 && !supportTarget.status.some((status) => status.type === 'INVUL')) return 'baby_shield';
+  if (supportTarget.hpPct < 0.65 && !hasIdentity(supportTarget, 'INVUL')) return 'baby_shield';
   if (supportTarget.hpPct < 0.75 && canHealSupportTarget && Math.random() < 0.45) return 'baby_feed';
 
-  const freshEnemy = enemies.find((enemy) => !enemy.status.some((status) => status.type === 'WEAK'));
+  const freshEnemy = enemies.find((enemy) => !hasIdentity(enemy, 'WEAK'));
   if (freshEnemy && Math.random() < 0.35) return 'baby_scan';
   if (enemies.length >= 2 && Math.random() < 0.35) return 'baby_satellite';
-  if (claire && claire.spd < actor.spd * 1.5 && Math.random() < 0.25) return 'baby_speed';
+  if (
+    claire &&
+    getEffectiveCombatStat(claire, 'spd') < getEffectiveCombatStat(actor, 'spd') * 1.5 &&
+    Math.random() < 0.25
+  ) return 'baby_speed';
   if (claire && Math.random() < 0.25) return 'baby_cheer';
   if (enemies.length > 0 && Math.random() < 0.25) return 'baby_poison';
   return Math.random() < 0.55 ? 'baby_satellite' : 'baby_laser';

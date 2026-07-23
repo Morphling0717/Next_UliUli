@@ -1,7 +1,11 @@
 import {
   addOriginiumInfection,
   clearAllOriginiumAndRetreat,
+  getOriginiumInfectionStacks,
+  getPuruisaishiBarrierTotal,
   processPuruisaishiRoundEnd,
+  PURUISAISHI_BARRIER_IDENTITY,
+  PURUISAISHI_BARRIER_SOURCE,
   spawnPuruisaishiEvent,
 } from '../../../lib/namearena/puruisaishiMechanics';
 import { consumeCompletedLargeRound, noteLargeRoundActor } from '../../../lib/namearena/battleState';
@@ -9,7 +13,9 @@ import { getTargetSelectionWeight } from '../../../lib/namearena/targeting';
 import { tryAdvanceYuzuPhaseByHp } from '../../../lib/namearena/yuzuMechanics';
 import { activateGachaSummonLifesteal } from '../../../lib/namearena/gachaMechanics';
 import type { DamageApplicationOptions } from '../../../lib/namearena/types';
+import { grantBarrier, removeEffects } from '../../../lib/namearena/statusSystem';
 import {
+  applyTestStatus,
   assert,
   localProject,
   makeFighter,
@@ -23,6 +29,22 @@ function completeOriginiumBigRound(engine: ReturnType<typeof makeDeathEngine>['e
     .forEach((fighter) => noteLargeRoundActor(engine.battleState, engine.fighters, fighter));
   processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
   consumeCompletedLargeRound(engine.battleState, engine.fighters);
+}
+
+function setPuruisaishiBarrier(fighter: ReturnType<typeof makeFighter>, value: number): void {
+  grantBarrier(fighter, value, {
+    identityId: PURUISAISHI_BARRIER_IDENTITY,
+    sourceId: PURUISAISHI_BARRIER_SOURCE,
+    displayName: '普瑞赛斯护盾',
+    tickMode: 'permanent',
+    dispelTier: 'none',
+    stackMode: 'overwrite',
+    attribution: {
+      effectSourceId: PURUISAISHI_BARRIER_SOURCE,
+      applierId: fighter.id,
+      applierName: fighter.name,
+    },
+  });
 }
 
 export function runPuruisaishiCases(): string[] {
@@ -65,7 +87,7 @@ export function runPuruisaishiCases(): string[] {
 
     caster.mag = 500;
     caster.atk = 300;
-    caster.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(caster, { identityId: 'AIM', charges: 1 });
     engine.executeSkillAction('exodia_obliterate', caster, normalTarget);
 
     assert(normalTarget.currentHp < targetHpBefore, 'AoE skill should still hit normal selectable enemies');
@@ -74,6 +96,37 @@ export function runPuruisaishiCases(): string[] {
     assert(!logs.some((entry) => entry.text.includes('怒火命中 普瑞赛斯')), 'AoE logs should not claim a hit on phase-1 Puruisaishi');
     assert(!logs.some((entry) => entry.text.includes('怒火命中 阿喃那')), 'AoE logs should not claim a hit on protected Ananna');
     cases.push('Phase-1 Puruisaishi and protected Ananna ignore hostile AoE');
+  }
+
+  {
+    const { engine, logs } = makeDeathEngine([
+      makeFighter('兔卷卷@A'),
+      makeFighter('源石死亡文案旁观者@B'),
+      makeFighter('源石死亡文案旁观者@C'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    engine.turnCount = 50;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const rabbit = engine.fighters[0];
+    const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
+    const core = engine.fighters.find((fighter) => fighter.isOriginiumCore);
+    assert(crystal, 'Megaphone NPC wording test requires an Originium Crystal');
+    assert(core, 'Megaphone NPC wording test requires Ananna before isolating a direct crystal hit');
+    localProject.setCurrentHp(core, 0);
+    core.isDead = true;
+    core.isDeadAnnounced = true;
+    rabbit.mag = 1000;
+    crystal.maxHp = 1;
+    localProject.setCurrentHp(crystal, 1);
+
+    engine.executeSkillAction('v_rabbit_megaphone', rabbit, crystal);
+
+    const crystalDefeatLog = logs.find((entry) => entry.type === 'death' && entry.text.includes(crystal.name));
+    assert(crystalDefeatLog?.text.includes('源石结构') && crystalDefeatLog.text.includes('震碎'), 'Originium Crystal megaphone defeat should describe a shattered crystal structure');
+    assert(!crystalDefeatLog?.text.includes('大脑宕机'), 'Originium Crystal megaphone defeat must not use a biological death description');
+    cases.push('Rabbit Megaphone uses non-biological defeat wording for Originium NPCs');
   }
 
   {
@@ -105,7 +158,7 @@ export function runPuruisaishiCases(): string[] {
   }
 
   {
-    const { engine } = makeDeathEngine([
+    const { engine, logs } = makeDeathEngine([
       makeFighter('鸮@A'),
       makeFighter('源石倍率旁观者B@B'),
       makeFighter('源石倍率旁观者C@C'),
@@ -121,6 +174,7 @@ export function runPuruisaishiCases(): string[] {
     engine.applyDamage(core, 100, 'skill', true, owl, damageOptions);
 
     assert(damageOptions.redirectedOriginiumDamage === 135, `Owl's 1.35 outgoing multiplier must apply once through Ananna, got ${damageOptions.redirectedOriginiumDamage}`);
+    assert(logs.some((entry) => entry.text.includes('【胜兵】') && entry.text.includes('100') && entry.text.includes('135')), 'Owl outgoing multiplier should be visible before the redirected damage result');
     cases.push('Owl outgoing multiplier applies once through Ananna network');
   }
 
@@ -208,13 +262,13 @@ export function runPuruisaishiCases(): string[] {
     crystal.untargetableUntilTurn = 0;
     attacker.mag = 800;
     attacker.agl = 10000;
-    attacker.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(attacker, { identityId: 'AIM', charges: 1 });
     const coreStatsBefore = { atk: core.atk, mag: core.mag, res: core.res };
 
     engine.executeSkillAction('exodia_seal_chains', attacker, core);
 
     assert(core.atk === coreStatsBefore.atk && core.mag === coreStatsBefore.mag && core.res === coreStatsBefore.res, 'Ananna redirect should block target-only after-effects from mutating the core');
-    assert(!core.status.some((status) => status.type === 'STUN'), 'Ananna redirect should block target-only control from landing on the core');
+    assert(!core.statuses.some((status) => status.identityId === 'STUN'), 'Ananna redirect should block target-only control from landing on the core');
     cases.push('Ananna redirect blocks target-only skill after-effects');
   }
 
@@ -236,7 +290,7 @@ export function runPuruisaishiCases(): string[] {
     crystal.untargetableUntilTurn = 0;
     attacker.mag = 500;
     attacker.agl = 10000;
-    attacker.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(attacker, { identityId: 'AIM', charges: 1 });
     bystander.maxHp = 10000;
     localProject.setCurrentHp(bystander, 10000);
     const hpBefore = bystander.currentHp;
@@ -266,9 +320,71 @@ export function runPuruisaishiCases(): string[] {
       engine.applyDamage(crystal, 10, 'skill', false, attacker, { actionName: '攻击结晶' });
     });
 
-    assert((attacker.originiumInfectionStacks ?? 0) === 3, `Attacking a crystal should infect the attacker for 3 stacks in forced roll, got ${attacker.originiumInfectionStacks ?? 0}`);
-    assert(attacker.status.some((status) => status.type === 'ORIGINIUM_DISEASE'), 'Originium disease should use a visible status entry');
+    assert(getOriginiumInfectionStacks(attacker) === 3, `Attacking a crystal should infect the attacker for 3 stacks in forced roll, got ${getOriginiumInfectionStacks(attacker)}`);
+    assert(attacker.statuses.some((status) => status.identityId === 'ORIGINIUM_DISEASE'), 'Originium disease should use a visible status entry');
     cases.push('Attacking originium crystal can infect attacker');
+  }
+
+  {
+    const { engine, logs } = makeDeathEngine([
+      makeFighter('屑@A'),
+      makeFighter('结晶转移攻击者@B'),
+      makeFighter('结晶转移旁观者@C'),
+    ]);
+    const joker = engine.fighters[0];
+    const attacker = engine.fighters[1];
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'Originium transfer ordering test requires GOD_OF_TROLLS');
+    joker.job = 'GOD_OF_TROLLS';
+    joker.jobData = { ...godOfTrolls, skills: [...godOfTrolls.skills] };
+    joker.transformed = true;
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
+    assert(crystal, 'Originium transfer ordering test requires a crystal');
+    crystal.untargetableUntilTurn = 0;
+    const candidates = engine.getSelectableTargets(joker);
+    const crystalIndex = candidates.findIndex((fighter) => fighter.id === crystal.id);
+    assert(crystalIndex >= 0, 'Originium crystal should be selectable as Joker transfer victim');
+    const crystalRoll = (crystalIndex + 0.25) / candidates.length;
+
+    withRandomSequence([0, crystalRoll, 0], () => {
+      engine.applyDamage(joker, 100, 'skill', true, attacker, { actionName: '结晶转移时序测试' });
+    });
+
+    const outcomeIndex = logs.findIndex((entry) => entry.text.includes(`转移伤害落在 ${crystal.name}`) && entry.text.includes('实际承受'));
+    const infectionIndex = logs.findIndex((entry) => entry.text.includes('【矿石病】') && entry.text.includes('被随机恶作剧转移'));
+    assert(outcomeIndex >= 0, 'Joker transfer should emit a concrete crystal damage result');
+    assert(infectionIndex > outcomeIndex, 'Originium infection aftermath must follow the concrete Joker transfer result');
+    cases.push('Joker crystal transfer logs damage before infection aftermath');
+  }
+
+  {
+    const infected = makeFighter('绝对驱散矿石病目标@A');
+    infected.maxHp = 1000;
+    infected.atk = 100;
+    infected.def = 100;
+    infected.res = 100;
+    localProject.setCurrentHp(infected, 1000);
+    const { engine } = makeDeathEngine([infected, makeFighter('绝对驱散旁观者@B')]);
+    const target = engine.fighters[0];
+    const baseStats = { maxHp: target.maxHp, atk: target.atk, def: target.def, res: target.res };
+
+    addOriginiumInfection(engine.createPuruisaishiRuntime(), target, 12, '绝对驱散回归测试');
+    assert(getOriginiumInfectionStacks(target) === 12, 'Originium infection should establish its unified stack value before dispel');
+    assert(target.maxHp < baseStats.maxHp && target.atk > baseStats.atk && target.def < baseStats.def && target.res > baseStats.res, 'Originium infection should project every declared stat shape from its canonical potency');
+    engine.dispelStatusEffects(target, {
+      strength: 'absolute',
+      direction: 'negative',
+      includeIndependent: true,
+      identityIds: ['ORIGINIUM_DISEASE'],
+    });
+
+    assert(getOriginiumInfectionStacks(target) === 0, 'Absolute dispel must clear the canonical originium stack value');
+    assert(!target.statuses.some((status) => status.identityId === 'ORIGINIUM_DISEASE'), 'Absolute dispel must remove the visible originium disease status');
+    assert(target.maxHp === baseStats.maxHp && target.atk === baseStats.atk && target.def === baseStats.def && target.res === baseStats.res, 'Absolute dispel must restore all stats changed by originium disease');
+    cases.push('absolute dispel clears originium disease status, stacks, and stat shape together');
   }
 
   {
@@ -303,7 +419,7 @@ export function runPuruisaishiCases(): string[] {
   {
     const waiting = makeFighter('增殖等待反击者@A');
     const acting = makeFighter('增殖普通行动者@B');
-    waiting.status.push({ type: 'WAIT_COUNTER', duration: 3 });
+    applyTestStatus(waiting, { identityId: 'WAIT_COUNTER', charges: 3 });
     const { engine } = makeDeathEngine([waiting, acting]);
     spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
     engine.turnCount = 20;
@@ -316,7 +432,7 @@ export function runPuruisaishiCases(): string[] {
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     assert(engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).length === 1, 'Legacy fallback must not grow a crystal while the formal round still waits for a participant');
 
-    engine.fighters[0].status = engine.fighters[0].status.filter((status) => status.type !== 'WAIT_COUNTER');
+    removeEffects(engine.fighters[0], { identityIds: ['WAIT_COUNTER'], reason: 'scripted' });
     noteLargeRoundActor(engine.battleState, engine.fighters, engine.fighters[0]);
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
@@ -345,6 +461,29 @@ export function runPuruisaishiCases(): string[] {
 
   {
     const { engine, logs } = makeDeathEngine([
+      makeFighter('鸮@A'),
+      makeFighter('矿石病顺序旁观者B@B'),
+      makeFighter('矿石病顺序旁观者C@C'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    const owl = engine.fighters[0];
+    assert(owl.isOwl, 'Originium mitigation ordering test requires Owl');
+    localProject.setCurrentHp(owl, Math.max(1, Math.floor(owl.maxHp * 0.4)));
+    engine.handleTransformations(owl);
+    assert(owl.owlState?.phase === 2, 'Originium mitigation ordering test requires phase-two Owl mitigation');
+    addOriginiumInfection(engine.createPuruisaishiRuntime(), owl, 4, '顺序测试');
+
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+
+    const mitigationIndex = logs.findIndex((entry) => entry.text.includes('【不怕酸】') && entry.text.includes('削减'));
+    const settlementIndex = logs.findIndex((entry) => entry.text.includes('【矿石病侵蚀】') && entry.text.includes(owl.name));
+    assert(mitigationIndex >= 0, 'Originium damage should emit Owl mitigation');
+    assert(settlementIndex > mitigationIndex, 'Originium mitigation must be explained before the aggregate HP settlement');
+    cases.push('Originium damage logs mitigation before aggregate settlement');
+  }
+
+  {
+    const { engine, logs } = makeDeathEngine([
       makeFighter('护盾攻击者@A'),
       makeFighter('感染清理目标@B'),
       makeFighter('旁观者C@C'),
@@ -358,12 +497,12 @@ export function runPuruisaishiCases(): string[] {
     const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
     assert(puruisaishi && crystal, 'Phase-2 shield test should have Puruisaishi and a crystal');
     assert((puruisaishi.puruisaishiPhase ?? 1) === 2, 'Puruisaishi should enter phase 2 at 50 global turns');
-    assert((puruisaishi.puruisaishiShield ?? 0) > 0, 'Puruisaishi phase 2 should grant shield');
+    assert(getPuruisaishiBarrierTotal(puruisaishi) > 0, 'Puruisaishi phase 2 should grant shield');
 
     const hpBefore = puruisaishi.currentHp;
-    engine.applyDamage(puruisaishi, (puruisaishi.puruisaishiShield ?? 0) + 1000, 'skill', true, engine.fighters[0], { actionName: '破盾测试' });
+    engine.applyDamage(puruisaishi, getPuruisaishiBarrierTotal(puruisaishi) + 1000, 'skill', true, engine.fighters[0], { actionName: '破盾测试' });
     assert(puruisaishi.currentHp === hpBefore, 'Puruisaishi shield floor should prevent overflow damage while crystals exist');
-    assert((puruisaishi.puruisaishiShield ?? 0) === 1, `Puruisaishi shield should stay at 1 while crystals exist, got ${puruisaishi.puruisaishiShield ?? 0}`);
+    assert(getPuruisaishiBarrierTotal(puruisaishi) === 1, `Puruisaishi shield should stay at 1 while crystals exist, got ${getPuruisaishiBarrierTotal(puruisaishi)}`);
     const secondHit = engine.applyDamage(puruisaishi, 1000, 'skill', true, engine.fighters[0], { actionName: '护盾地板复测' });
     assert(secondHit === 0, `Puruisaishi shield floor should handle later hits at 1 shield, got ${secondHit} damage`);
     assert(puruisaishi.currentHp === hpBefore, 'Puruisaishi should not lose HP from later hits while crystals sustain the shield floor');
@@ -378,8 +517,8 @@ export function runPuruisaishiCases(): string[] {
     engine.applyDamage(puruisaishi, 1, 'skill', true, engine.fighters[0], { actionName: '最终破盾' });
 
     assert(puruisaishi.isDead, 'Puruisaishi should retreat when phase-2 shield reaches zero without crystals');
-    assert((engine.fighters[1].originiumInfectionStacks ?? 0) === 0, 'Puruisaishi retreat should clear originium disease stacks');
-    assert(!engine.fighters[1].status.some((status) => status.type === 'ORIGINIUM_DISEASE'), 'Puruisaishi retreat should remove disease status');
+    assert(getOriginiumInfectionStacks(engine.fighters[1]) === 0, 'Puruisaishi retreat should clear originium disease stacks');
+    assert(!engine.fighters[1].statuses.some((status) => status.identityId === 'ORIGINIUM_DISEASE'), 'Puruisaishi retreat should remove disease status');
     assert(logs.some((entry) => entry.text.includes('普瑞赛斯退场') && entry.text.includes('清除全场矿石病')), 'Puruisaishi retreat should be logged');
     cases.push('Puruisaishi phase-2 shield floors at 1 and retreat clears disease');
   }
@@ -400,9 +539,9 @@ export function runPuruisaishiCases(): string[] {
       fighter.isDead = true;
       fighter.isDeadAnnounced = true;
     });
-    puruisaishi.puruisaishiShield = 1;
+    setPuruisaishiBarrier(puruisaishi, 1);
     engine.fighters[0].agl = 10000;
-    engine.fighters[0].status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engine.fighters[0], { identityId: 'AIM', charges: 1 });
 
     withRandomSequence([0.99, 0.99], () => {
       engine.executeSkillAction('serious_punch', engine.fighters[0], puruisaishi);
@@ -457,7 +596,7 @@ export function runPuruisaishiCases(): string[] {
 
     assert((puruisaishi.puruisaishiPhase ?? 1) === 2, `Puruisaishi should enter phase 2 even when the exact threshold tick was missed, got ${puruisaishi.puruisaishiPhase ?? 1}`);
     assert(puruisaishi.puruisaishiPhaseTwoStartedTurn === 60, `Puruisaishi late phase start should still be spawn+50, got ${puruisaishi.puruisaishiPhaseTwoStartedTurn}`);
-    const totalStacks = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    const totalStacks = engine.fighters.reduce((sum, fighter) => sum + getOriginiumInfectionStacks(fighter), 0);
     assert(totalStacks === 4, `Puruisaishi late phase processing should preserve the 20-turn pulse schedule, got ${totalStacks} total stacks`);
     cases.push('Puruisaishi late phase check does not delay phase-2 timing');
   }
@@ -476,17 +615,17 @@ export function runPuruisaishiCases(): string[] {
 
     engine.turnCount = 69;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    assert(engine.fighters.every((fighter) => (fighter.originiumInfectionStacks ?? 0) === 0), 'Puruisaishi phase 2 should not add stacks before 20 turns have elapsed');
+    assert(engine.fighters.every((fighter) => getOriginiumInfectionStacks(fighter) === 0), 'Puruisaishi phase 2 should not add stacks before 20 turns have elapsed');
 
     engine.turnCount = 70;
     withRandomSequence([0, 0], () => {
       processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
     });
 
-    const totalStacks = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    const totalStacks = engine.fighters.reduce((sum, fighter) => sum + getOriginiumInfectionStacks(fighter), 0);
     assert(totalStacks === 4, `Puruisaishi should add exactly one phase-2 target package after 20 turns, got total stacks ${totalStacks}`);
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    const totalStacksAfterDuplicateCall = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    const totalStacksAfterDuplicateCall = engine.fighters.reduce((sum, fighter) => sum + getOriginiumInfectionStacks(fighter), 0);
     assert(totalStacksAfterDuplicateCall === 4, 'Puruisaishi phase-2 20-turn pulse should not duplicate in the same turn');
     assert(logs.some((entry) => entry.text.includes('已过去 20 回合')), 'Puruisaishi phase-2 stack log should explain the 20-turn trigger');
     cases.push('Puruisaishi phase-2 stacks once per 20 turns');
@@ -548,7 +687,7 @@ export function runPuruisaishiCases(): string[] {
     localProject.setCurrentHp(crystal, 0);
     engine.handlePrimaryTargetDefeat(attacker, crystal);
 
-    assert((attacker.originiumInfectionStacks ?? 0) === 3, `Destroying a crystal should clear 2 infection stacks, got ${attacker.originiumInfectionStacks ?? 0}`);
+    assert(getOriginiumInfectionStacks(attacker) === 3, `Destroying a crystal should clear 2 infection stacks, got ${getOriginiumInfectionStacks(attacker)}`);
     assert(attacker.currentHp > hpBefore, 'Destroying a crystal should heal its player beneficiary');
     assert(attacker.stats.kills === 0, `Originium NPC death should not count as a player kill, got ${attacker.stats.kills}`);
     assert((attacker.economy ?? 0) === 0 && (attacker.ultPoints ?? 0) === 0 && (attacker.crosshairFocus ?? 0) === 0, 'Originium NPC death should not grant Valorant kill economy, ult charge, or focus');
@@ -592,7 +731,7 @@ export function runPuruisaishiCases(): string[] {
       engine.resolveTarget(engine.fighters[0], null, engine.getSelectableTargets(engine.fighters[0])),
     );
     assert(activeShieldTarget?.target.isPuruisaishi, 'A phase-two response may keep damaging Puruisaishi before her shield reaches its crystal floor');
-    puruisaishi.puruisaishiShield = 1;
+    setPuruisaishiBarrier(puruisaishi, 1);
     assert(getTargetSelectionWeight(targetingRuntime, puruisaishi) === 0.05, 'Players should stop wasting attacks on Puruisaishi once crystals lock her shield at 1');
     const focusedTarget = withRandomSequence([0, 0], () =>
       engine.resolveTarget(engine.fighters[0], null, engine.getSelectableTargets(engine.fighters[0])),
@@ -604,16 +743,18 @@ export function runPuruisaishiCases(): string[] {
 
     engine.turnCount = 51;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    const infectionAfterFirstOverflow = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    const infectionAfterFirstOverflow = engine.fighters.reduce((sum, fighter) => sum + getOriginiumInfectionStacks(fighter), 0);
     engine.turnCount = 52;
     processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
-    const infectionAfterSecondSmallTurn = engine.fighters.reduce((sum, fighter) => sum + (fighter.originiumInfectionStacks ?? 0), 0);
+    const infectionAfterSecondSmallTurn = engine.fighters.reduce((sum, fighter) => sum + getOriginiumInfectionStacks(fighter), 0);
     const overflowLogs = logs.filter((entry) => entry.text.includes('【源石泛滥】'));
     const dotLogs = logs.filter((entry) => entry.text.includes('【矿石病侵蚀】'));
     assert(overflowLogs.length === 1 && overflowLogs[0]?.text.includes('本轮感染：'), 'Crystal overflow should aggregate all stack gains into one readable log');
     assert(infectionAfterSecondSmallTurn === infectionAfterFirstOverflow, 'Crystal overflow must not add infection again on another small action in the same large round');
     assert(dotLogs.length === 2, `Originium damage should aggregate infected targets into one log on each of the two processed turns, got ${dotLogs.length}`);
-    assert(!logs.some((entry) => entry.text.includes('因源石结晶泛滥感染加深')), 'Crystal overflow should not emit one repetitive stack log per target');
+    assert(dotLogs.every((entry) => entry.text.includes('本次全局行动结束结算') && entry.text.includes('来源：普瑞赛斯事件')), 'Originium settlement logs should identify their global-action clock and source');
+    assert(dotLogs.every((entry) => entry.text.includes('实际损失') || entry.text.includes('生命未减少')), 'Originium settlement logs should state the actual HP outcome');
+    assert(!logs.some((entry) => /因\s*源石结晶泛滥\s*感染加深/.test(entry.text)), 'Crystal overflow should not emit one repetitive stack log per target');
 
     engine.fighters.filter((fighter) => fighter.isOriginiumCrystal).forEach((crystal) => {
       localProject.setCurrentHp(crystal, 0);
@@ -635,6 +776,105 @@ export function runPuruisaishiCases(): string[] {
     );
     assert(forcedResult?.target.id === forcedPlayer.id, 'Explicit forced targets must still override the shared event response');
     cases.push('Puruisaishi phase-2 focus shifts dynamically with crystal pressure');
+  }
+
+  {
+    const gacha = makeFighter('牢鳄@A');
+    const ra = makeFighter('翼神龙侵蚀测试体@A');
+    const enemy = makeFighter('神不死鸟侵蚀旁观者@B');
+    const { engine, logs } = makeDeathEngine([gacha, ra, enemy]);
+    const engineGacha = engine.fighters[0];
+    const engineRa = engine.fighters[1];
+    engineRa.isSummon = true;
+    engineRa.isAdvancedSummon = true;
+    engineRa.summonerId = engineGacha.id;
+    engineRa.summonBaseName = '翼神龙';
+    engineRa.maxHp = 1000;
+    localProject.setCurrentHp(engineRa, 20);
+    applyTestStatus(engineRa, { identityId: 'RA_PHOENIX', remainingTurns: 3 });
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '矿石病与神不死鸟顺序测试');
+    addOriginiumInfection(engine.createPuruisaishiRuntime(), engineRa, 79, '顺序测试');
+
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+
+    const infectionIndex = logs.findIndex((entry) => entry.text.includes('【矿石病侵蚀】') && entry.text.includes(engineRa.name));
+    const phoenixIndex = logs.findIndex((entry) => entry.text.includes('【神不死鸟】') && entry.text.includes('致死瞬间'));
+    assert(infectionIndex >= 0 && phoenixIndex > infectionIndex, 'Originium lethal settlement must be logged before Ra Phoenix revival and retaliation');
+    cases.push('Originium lethal settlement precedes Ra Phoenix reaction');
+  }
+
+  {
+    const ting = makeFighter('小汀@A');
+    const observer = makeFighter('矿石病锁血旁观者@B');
+    const grudgeJob = localProject.jobs.GRUDGE_SUICIDER;
+    assert(grudgeJob, 'Originium lockblood test requires the transformed Ting job');
+    ting.job = 'GRUDGE_SUICIDER';
+    ting.jobData = JSON.parse(JSON.stringify(grudgeJob)) as typeof grudgeJob;
+    ting.transformed = true;
+    ting.hasTriggeredTingDefiance = true;
+    localProject.setCurrentHp(ting, 1);
+    applyTestStatus(ting, { identityId: 'TING_DEFIANCE', remainingTurns: 3 });
+    const { engine, logs } = makeDeathEngine([ting, observer]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '矿石病锁血净伤害测试');
+    addOriginiumInfection(engine.createPuruisaishiRuntime(), engine.fighters[0], 4, '锁血测试');
+
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+
+    const settlementIndex = logs.findIndex((entry) => entry.text.includes('【矿石病侵蚀】') && entry.text.includes(engine.fighters[0].name));
+    const defianceIndex = logs.findIndex((entry) => entry.text.includes('【不甘倒下】') && entry.text.includes('压回 1 点生命'));
+    assert(engine.fighters[0].currentHp === 1, 'Ting defiance should preserve 1 HP against originium damage');
+    assert(settlementIndex >= 0 && logs[settlementIndex]?.text.includes('生命未减少'), 'Originium settlement should report zero net HP loss while Ting is locked at 1 HP');
+    assert(!logs[settlementIndex]?.text.includes('实际损失 1 点'), 'Originium settlement must not expose transient zero-HP damage as actual loss');
+    assert(defianceIndex > settlementIndex, 'Originium settlement should precede its deferred Ting death-save consequence');
+    cases.push('Originium settlement reports Ting defiance net HP loss');
+  }
+
+  {
+    const { engine, logs } = makeDeathEngine([
+      makeFighter('NPC击飞来源@A'),
+      makeFighter('NPC击飞旁观者@B'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const crystal = engine.fighters.find((fighter) => fighter.isOriginiumCrystal);
+    assert(crystal, 'Static-NPC status clock test requires an originium crystal');
+    const hpBefore = crystal.currentHp;
+
+    assert(engine.applyStatus(crystal, { identityId: 'AIRBORNE', remainingTurns: 1, attribution: { applierId: engine.fighters[0].id, applierName: engine.fighters[0].name } }), 'Airborne should apply to a static event NPC');
+    const airborne = crystal.statuses.find((status) => status.identityId === 'AIRBORNE');
+    assert(airborne?.tickMode === 'global_action' && airborne.expiresOn === 'global_action_end', 'A self-opportunity status on a non-acting NPC must use the global-action fallback clock');
+    engine.advanceGlobalTimedStatuses();
+    assert(crystal.statuses.some((status) => status.identityId === 'AIRBORNE'), 'A newly applied NPC airborne status must not expire in the same global action');
+    engine.turnCount = 21;
+    engine.advanceGlobalTimedStatuses();
+
+    assert(!crystal.statuses.some((status) => status.identityId === 'AIRBORNE'), 'Static-NPC airborne must not remain stuck forever');
+    assert(crystal.currentHp < hpBefore, 'Static-NPC airborne should settle its landing damage once on the next global action');
+    assert(logs.some((entry) => entry.text.includes('【击飞坠地】') && entry.text.includes(crystal.name)), 'Static-NPC airborne should keep an explicit landing result');
+    cases.push('Non-acting NPC controls use a global-action fallback and airborne lands once');
+  }
+
+  {
+    const { engine, logs } = makeDeathEngine([
+      makeFighter('护盾下限攻击者@A'),
+      makeFighter('护盾下限旁观者@B'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '测试强制出场');
+    engine.turnCount = 20;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    engine.turnCount = 50;
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+    const puruisaishi = engine.fighters.find((fighter) => fighter.isPuruisaishi);
+    assert(puruisaishi && engine.fighters.some((fighter) => fighter.isOriginiumCrystal && engine.isActiveCombatant(fighter)), 'Shield-floor test requires phase-2 Puruisaishi and an active crystal');
+    setPuruisaishiBarrier(puruisaishi, 1);
+
+    engine.applyDamage(puruisaishi, 300, 'skill', true, engine.fighters[0], { actionName: '护盾下限测试' });
+
+    assert(getPuruisaishiBarrierTotal(puruisaishi) === 1, 'Active crystals should still maintain Puruisaishi shield at one');
+    assert(logs.some((entry) => entry.text.includes('维系在最后 1 点') && entry.text.includes('导走全部 300 点冲击')), 'Shield-floor log should explain where the entire hit went');
+    assert(!logs.some((entry) => entry.text.includes('护盾吸收 0 点伤害')), 'Shield-floor log must never claim that zero shield absorption was the result');
+    cases.push('Puruisaishi shield floor reports crystal diversion without zero-absorb text');
   }
 
   return cases;

@@ -1,4 +1,20 @@
 import type { Fighter, SkillDefinition } from './types';
+import {
+  consumeCriticalDamageStatuses,
+  consumeParalysis,
+  consumePoiseOnCritical,
+  getCriticalDamagePointModifier,
+  getCritRateBonus,
+  getEffectiveCombatStat,
+  getMoraleCritModifier,
+  getOpeningCritBonus,
+  getOutgoingDirectStatusMultiplier,
+  getPoiseCritBonus,
+  hasMentalBreakdown,
+  isParalyzedForAttack,
+} from './statusMechanics';
+import { getStatusIdentityIdsByTag } from './statusRegistry';
+import { findIdentity, hasIdentity, hasMechanic } from './statusSystem';
 
 export interface DamageResolutionRuntime {
   skillTags: Record<string, string>;
@@ -35,41 +51,39 @@ export function calculateDamage(
   let dmg = 0;
   let logType = usedSkillId ? 'skill' : 'attack';
   const usesCustomFormula = !!skill.damageFormula || !!skill.noDamage;
-  const sexyTrueDamage = user.status.some((status) => status.type === 'STYLE_SEXY' || status.type === 'STYLE_EMPEROR');
+  const sexyTrueDamage = hasIdentity(user, 'STYLE_SEXY') || hasIdentity(user, 'STYLE_EMPEROR');
   const ignoreDefOverride = !!skill.ignoreDef || sexyTrueDamage;
-  let weakOutputMultiplier = user.status.some((status) => status.type === 'WEAK') ? 0.5 : 1;
-  if (user.status.some((status) => status.type === 'YUZU_ATK_DOWN')) weakOutputMultiplier *= 0.78;
-  if (user.status.some((status) => status.type === 'WT_BREECH_DAMAGED')) weakOutputMultiplier *= 0.62;
+  const effectiveAtk = getEffectiveCombatStat(user, 'atk', 'standard');
+  const effectiveMag = getEffectiveCombatStat(user, 'mag', 'standard');
+  const paralyzed = isParalyzedForAttack(user);
+  const rollDamageMultiplier = () => paralyzed ? 1 : 1 + Math.random() * 0.2;
 
   if (skill.noDamage) {
     dmg = 0;
   } else if (skill.damageFormula) {
-    dmg = Math.max(0, Math.floor(skill.damageFormula(user, target, runtime.fighters)));
+    dmg = Math.max(0, Math.floor(skill.damageFormula(
+      user,
+      target,
+      runtime.fighters,
+      (fighter, key) => getEffectiveCombatStat(fighter, key, 'custom'),
+    )));
   } else if (skill.tag === runtime.skillTags.PHYS || skill.tag === runtime.skillTags.SPECIAL) {
-    const atk = user.atk *
-      weakOutputMultiplier *
-      (user.status.some((status) => status.type === 'RAGE') ? 1.5 : 1) *
-      (user.status.some((status) => status.type === 'WT_RADIO_MORALE') ? 1.3 : 1) *
-      (user.hasSpinalSword ? 2.5 : 1);
-    let def = (target.status.some((status) => status.type === 'FREEZE') || ignoreDefOverride || sexyTrueDamage)
+    const standardFormulaOutput = getOutgoingDirectStatusMultiplier(user, 'standard', 'physical', 'standard_formula');
+    const atk = effectiveAtk * standardFormulaOutput * (user.hasSpinalSword ? 2.5 : 1);
+    let def = (hasMechanic(target, 'FREEZE') || ignoreDefOverride || sexyTrueDamage)
       ? 0
-      : (user.jobData?.name === '欧皇' ? Math.floor(target.def * 0.5) : target.def);
-    if (target.status.some((status) => status.type === 'VALO_CYPHER_REVEALED')) def = Math.floor(def * 0.68);
-    if (target.status.some((status) => status.type === 'BABY_WEAKNESS_MARK')) def = Math.floor(def * 0.62);
-    if (target.status.some((status) => status.type === 'VALO_VIPER_DECAY')) def = Math.floor(def * 0.5);
-    if (target.status.some((status) => status.type === 'YUZU_DEF_DOWN')) def = Math.floor(def * 0.7);
-    if (target.status.some((status) => status.type === 'WT_ERA')) def = Math.floor(def * 2.0);
-    dmg = Math.max(1, Math.floor((atk * (1 + Math.random() * 0.2) - def * 0.5) * (skill.mult ?? 1)));
-    if (target.status.some((status) => status.type === 'LIQUID_BODY')) dmg = Math.floor(dmg * 0.5);
+      : Math.floor(getEffectiveCombatStat(target, 'def', 'standard') * (user.jobData?.name === '欧皇' ? 0.5 : 1));
+    if (hasIdentity(target, 'WT_ERA')) def = Math.floor(def * 2.0);
+    dmg = Math.max(1, Math.floor((atk * rollDamageMultiplier() - def * 0.5) * (skill.mult ?? 1)));
+    if (hasIdentity(target, 'LIQUID_BODY')) dmg = Math.floor(dmg * 0.5);
   } else if (skill.tag === runtime.skillTags.MAG || skill.tag === runtime.skillTags.DEBUFF) {
-    let res = (ignoreDefOverride || sexyTrueDamage) ? 0 : (user.jobData?.name === '欧皇' ? Math.floor(target.res * 0.5) : target.res);
-    if (target.status.some((status) => status.type === 'BABY_WEAKNESS_MARK')) res = Math.floor(res * 0.62);
-    if (target.status.some((status) => status.type === 'VALO_VIPER_DECAY')) res = Math.floor(res * 0.5);
-    if (target.status.some((status) => status.type === 'YUZU_RES_DOWN')) res = Math.floor(res * 0.7);
-    if (target.status.some((status) => status.type === 'GAMER_READ_INPUTS')) res = Math.floor(res * 0.9);
-    dmg = Math.max(1, Math.floor((user.mag * weakOutputMultiplier * (1 + Math.random() * 0.2) - res * 0.5) * (skill.mult ?? 1)));
+    const standardFormulaOutput = getOutgoingDirectStatusMultiplier(user, 'standard', 'magical', 'standard_formula');
+    const res = (ignoreDefOverride || sexyTrueDamage)
+      ? 0
+      : Math.floor(getEffectiveCombatStat(target, 'res', 'standard') * (user.jobData?.name === '欧皇' ? 0.5 : 1));
+    dmg = Math.max(1, Math.floor((effectiveMag * standardFormulaOutput * rollDamageMultiplier() - res * 0.5) * (skill.mult ?? 1)));
     if (skill.tag === runtime.skillTags.DEBUFF) dmg = Math.max(1, Math.floor(dmg * 0.5));
-    if (target.status.some((status) => status.type === 'ETHEREAL')) {
+    if (hasIdentity(target, 'ETHEREAL')) {
       dmg = Math.floor(dmg * 2.0);
       runtime.log('crit', `👻 魔法爆裂！${target.name} 处于虚无状态，受到了双倍的魔法打击！`);
     }
@@ -87,25 +101,36 @@ export function calculateDamage(
     }
   }
 
-  const charmedByTarget = user.status.some((status) =>
-    status.type === 'CHARMED' && status.applierId === target.id,
+  const charmedByTarget = findIdentity(user, 'CHARMED')?.attribution.applierId === target.id;
+  const canCrit = !skill.cannotCrit && !skill.noDamage && !paralyzed && !hasMentalBreakdown(user);
+  const ordinaryCritChance = Math.max(
+    0,
+    user.critRate +
+      getCritRateBonus(user) +
+      getEffectiveCombatStat(user, 'agl', 'standard') * 0.001 +
+      getPoiseCritBonus(user) +
+      getOpeningCritBonus(target) +
+      getMoraleCritModifier(user),
   );
-  const canCrit = !skill.cannotCrit && !skill.noDamage;
   const isCrit = canCrit && !charmedByTarget && (
-    user.status.some((status) => status.type === 'AIM') ||
-    (user.isWT && target.status.some((status) => status.type === 'WT_SCOUTED')) ||
-    target.status.some((status) => status.type === 'NEURAL_THEFT_DEBUFF') ||
+    hasMechanic(user, 'AIM') ||
+    (user.isWT && hasIdentity(target, 'WT_SCOUTED')) ||
     skill.alwaysCrit ||
-    Math.random() < (user.critRate + user.agl * 0.001) ||
-    user.status.some((status) => status.type === 'STYLE_ANGRY')
+    Math.random() < ordinaryCritChance ||
+    hasIdentity(user, 'STYLE_ANGRY')
   );
 
   if (isCrit) {
-    if (target.status.some((status) => status.type === 'LIQUID_BODY') && skill.tag === runtime.skillTags.PHYS) {
+    if (hasIdentity(target, 'LIQUID_BODY') && skill.tag === runtime.skillTags.PHYS) {
       // Liquid body immune to physical crits.
     } else {
-      dmg = Math.floor(dmg * 1.5);
+      const critMultiplier = Math.max(1, 1.5 + getCriticalDamagePointModifier(user, target));
+      dmg = Math.floor(dmg * critMultiplier);
       logType = 'crit';
+      if (consumePoiseOnCritical(user)) {
+        runtime.log('buff', `🫁 【呼吸】${user.name} 借助呼吸打出暴击，并消耗 1 次呼吸。`);
+      }
+      consumeCriticalDamageStatuses(user, target);
     }
   }
 
@@ -118,16 +143,22 @@ export function calculateDamage(
     usedSkillId !== 'chimera_strike' &&
     dmg > 0
   ) {
-    const plugCount = user.status.filter((status) => status.type.startsWith('PLUG_')).length;
+    const plugCount = getStatusIdentityIdsByTag('chimera_plug')
+      .filter((identityId) => hasIdentity(user, identityId)).length;
     if (plugCount >= 6) dmg = Math.floor(dmg * 1.17);
     else if (plugCount >= 4) dmg = Math.floor(dmg * 1.09);
   }
   if (skill.minDamagePct && (skill.tag === runtime.skillTags.PHYS || skill.tag === runtime.skillTags.SPECIAL)) {
-    const minDamageBase = user.atk * weakOutputMultiplier * (skill.mult ?? 1) * (skill.hits ?? 1);
+    const standardFormulaOutput = getOutgoingDirectStatusMultiplier(user, 'standard', 'physical', 'standard_formula');
+    const minDamageBase = effectiveAtk * standardFormulaOutput * (skill.mult ?? 1) * (skill.hits ?? 1);
     dmg = Math.max(dmg, Math.floor(minDamageBase * skill.minDamagePct));
   }
   const fatigueBonus = usesCustomFormula ? 0 : runtime.getFatigueDamageBonus();
   if (fatigueBonus > 0 && dmg > 0) dmg += fatigueBonus;
 
+  if (paralyzed && !skill.noDamage) {
+    consumeParalysis(user);
+    runtime.log('debuff', `⚡ 【麻痹】${user.name} 的这次攻击只能打出最低浮动且无法暴击，并消耗 1 次麻痹。`);
+  }
   return { dmg, logType, ignoreDefOverride, sexyTrueDamage };
 }

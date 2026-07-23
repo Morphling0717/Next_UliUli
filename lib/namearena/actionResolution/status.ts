@@ -1,37 +1,33 @@
-import type { Fighter, StatusApplicationOptions } from '../types';
+import type { Fighter, StatusApplication } from '../types';
 import {
   findDefenseStatus,
   formatControlBlocked,
-  grantStatus,
 } from '../defenseStatus';
-import { BKB_BLOCKED_STATUS_TYPES, isStatusType, shouldTrackStatusApplier } from '../statusRules';
+import { applyStatus } from '../statusSystem';
+import { getStatusIdentityDefinition, identityHasTag } from '../statusRegistry';
 import type { ActionResolutionRuntime } from './types';
 
-export type HostileStatusOptions = StatusApplicationOptions;
+export type HostileStatusOptions = StatusApplication;
 
 export function tryApplyHostileStatus(
-  runtime: Pick<ActionResolutionRuntime, 'statusEffects' | 'log'>,
+  runtime: Pick<ActionResolutionRuntime, 'log'>,
   target: Fighter,
-  type: string,
-  duration: number,
-  options: HostileStatusOptions = {},
+  application: HostileStatusOptions,
 ): boolean {
+  const type = application.identityId;
   const controlImmune = findDefenseStatus(target, 'BKB');
-  if (controlImmune && isStatusType(type, BKB_BLOCKED_STATUS_TYPES)) {
-    if (options.logBlocked ?? true) {
-      const effectName = options.effectName ?? `${runtime.statusEffects[type]?.name ?? type}效果`;
+  if (controlImmune && identityHasTag(type, 'spell_immunity_blocked')) {
+    if (application.logBlocked ?? true) {
+      const statusName = getStatusIdentityDefinition(type).displayName;
+      const effectSource = application.effectName;
+      const effectName = effectSource
+        ? effectSource.includes(statusName) ? effectSource : `${effectSource}的${statusName}效果`
+        : `${statusName}效果`;
       runtime.log('info', formatControlBlocked(controlImmune, target.name, effectName));
     }
     return false;
   }
 
-  grantStatus(target, type, duration, options.sourceId);
-  const appliedStatus = target.status.find((status) =>
-    status.type === type && (!options.sourceId || status.sourceId === options.sourceId),
-  );
-  if (appliedStatus && shouldTrackStatusApplier(type)) {
-    if (options.applierId) appliedStatus.applierId = options.applierId;
-    if (options.applierName) appliedStatus.applierName = options.applierName;
-  }
+  applyStatus(target, application);
   return true;
 }

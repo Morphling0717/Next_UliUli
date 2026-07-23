@@ -1,18 +1,12 @@
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, isActiveCombatant } from '../combatState';
-import {
-  consumeSpellBlock,
-  findDefenseStatus,
-  formatControlBlocked,
-  formatInvul,
-  formatSpellBlock,
-  grantStatus,
-} from '../defenseStatus';
+import { isActiveCombatant, resolveHealing } from '../combatState';
+import { consumeSpellBlock, findDefenseStatus, formatControlBlocked, formatInvul, formatSpellBlock } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
-import { consumeStatusCharge } from '../statusLifecycle';
-import { WT_REPAIRING_PROFILE } from '../statusRules';
+import { applyStatus, consumeStatusValue, hasIdentity, hasMechanic, queryMechanic } from '../statusSystem';
+import { getPanelCombatStat, WT_REPAIRING_PROFILE } from '../statusMechanics';
+import { isDamageRedirected } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -30,17 +24,22 @@ const WT_CAS_COST = 5;
 const WT_PRECISE_CAS_COST = 4;
 
 const WT_CONTROL_CLEAN = new Set([
-  'STUN', 'FREEZE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'WT_SUPPRESS', 'WT_AIRBORNE', 'AIRBORNE', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED',
+  'STUN', 'FREEZE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'WT_SUPPRESS', 'AIRBORNE', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'ZEROED',
 ]);
 
-const WT_MODULE_STATUSES = new Set(['WT_BREECH_DAMAGED', 'WT_TRACK_DAMAGED', 'WT_AMMO_EXPOSED', 'WT_SCOUTED']);
+const WT_ORIGINIUM_MODULE_IDENTITIES: Record<string, string> = {
+  WT_BREECH_DAMAGED: 'WT_ORIGINIUM_BREECH_DAMAGED',
+  WT_TRACK_DAMAGED: 'WT_ORIGINIUM_TRACK_DAMAGED',
+  WT_AMMO_EXPOSED: 'WT_ORIGINIUM_AMMO_EXPOSED',
+};
+const WT_MODULE_STATUSES = new Set([
+  'WT_BREECH_DAMAGED', 'WT_TRACK_DAMAGED', 'WT_AMMO_EXPOSED',
+  'WT_ORIGINIUM_BREECH_DAMAGED', 'WT_ORIGINIUM_TRACK_DAMAGED',
+  'WT_ORIGINIUM_AMMO_EXPOSED', 'WT_SCOUTED',
+]);
 
 function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((status) => status.type === type);
-}
-
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(fighter, type, duration, sourceId);
+  return hasIdentity(fighter, type);
 }
 
 function isTopTierWt(fighter: Fighter): boolean {
@@ -66,10 +65,13 @@ function activeEnemies(ctx: SkillContext): Fighter[] {
 }
 
 function threatScore(fighter: Fighter): number {
-  let score = fighter.atk + fighter.mag + fighter.spd * 0.55 + fighter.wis * 0.35;
+  let score = getPanelCombatStat(fighter, 'atk') +
+    getPanelCombatStat(fighter, 'mag') +
+    getPanelCombatStat(fighter, 'spd') * 0.55 +
+    getPanelCombatStat(fighter, 'wis') * 0.35;
   if (fighter.hpPct < 0.35) score += 260;
   if (hasStatus(fighter, 'WT_SCOUTED')) score += 260;
-  if (hasStatus(fighter, 'WT_AMMO_EXPOSED')) score += 320;
+  if (hasMechanic(fighter, 'WT_AMMO_EXPOSED')) score += 320;
   if (fighter.isGacha || fighter.isGamer || fighter.isSigua || fighter.isJoker || fighter.isTuJuanJuan) score += 180;
   if (fighter.isSummon && fighter.isAdvancedSummon) score += 220;
   if (hasStatus(fighter, 'SYNERGY_SLACKING')) score -= 9999;
@@ -90,44 +92,31 @@ function isOriginiumEntity(target: Fighter): boolean {
   return !!(target.isOriginiumCrystal || target.isOriginiumCore || target.isPuruisaishi);
 }
 
-function describeOriginiumModuleHit(ctx: SkillContext, target: Fighter, type: string): string | null {
+function describeOriginiumModuleHit(ctx: SkillContext, target: Fighter, identityId: string): string | null {
   if (!isOriginiumEntity(target)) return null;
-  if (type === 'WT_AMMO_EXPOSED') {
+  if (identityId === 'WT_AMMO_EXPOSED') {
     return `💠 【源石核心暴露】${ctx.user.name} 的火力震裂 ${target.name} 外层晶格，内部源石核心完全暴露！`;
   }
-  if (type === 'WT_BREECH_DAMAGED') {
+  if (identityId === 'WT_BREECH_DAMAGED') {
     return `🔹 【晶格破损】${ctx.user.name} 的钢针震裂 ${target.name} 的源石晶格，结构输出下降！`;
   }
-  if (type === 'WT_TRACK_DAMAGED') {
+  if (identityId === 'WT_TRACK_DAMAGED') {
     return `◆ 【结晶锚点断裂】${ctx.user.name} 的火力打断 ${target.name} 的固定锚点，闪避归零！`;
   }
   return null;
 }
 
-function applyOriginiumModuleDisplay(target: Fighter, type: string): void {
-  if (!isOriginiumEntity(target)) return;
-  const status = target.status.find((entry) => entry.type === type);
-  if (!status) return;
-  if (type === 'WT_AMMO_EXPOSED') {
-    status.displayName = '源石核心暴露';
-    status.displayIcon = '💠';
-    status.displayDesc = '外层晶格破损，低生命时容易发生核心崩解';
-  } else if (type === 'WT_BREECH_DAMAGED') {
-    status.displayName = '晶格破损';
-    status.displayIcon = '🔹';
-    status.displayDesc = '源石晶格受损，输出下降';
-  } else if (type === 'WT_TRACK_DAMAGED') {
-    status.displayName = '结晶锚点断裂';
-    status.displayIcon = '◆';
-    status.displayDesc = '固定锚点断裂，闪避归零';
-  }
-}
-
-function exposeModule(ctx: SkillContext, target: Fighter, type: string, duration: number, text: string): void {
+function exposeModule(ctx: SkillContext, target: Fighter, moduleIdentityId: string, remainingTurns: number, text: string): void {
   if (!isActiveCombatant(target) || hasStatus(target, 'BKB')) return;
-  refreshStatus(target, type, duration);
-  applyOriginiumModuleDisplay(target, type);
-  ctx.log('info', describeOriginiumModuleHit(ctx, target, type) ?? text);
+  const identityId = isOriginiumEntity(target)
+    ? (WT_ORIGINIUM_MODULE_IDENTITIES[moduleIdentityId] ?? moduleIdentityId)
+    : moduleIdentityId;
+  applyStatus(target, {
+    identityId,
+    remainingTurns,
+    attribution: { effectSourceId: identityId, applierId: ctx.user.id, applierName: ctx.user.name },
+  });
+  ctx.log('info', describeOriginiumModuleHit(ctx, target, moduleIdentityId) ?? text);
 }
 
 function grantDamageSpawnPoint(ctx: SkillContext, actualDmg: number, target: Fighter): void {
@@ -141,7 +130,7 @@ function grantDamageSpawnPoint(ctx: SkillContext, actualDmg: number, target: Fig
 
 function maybeAmmoRack(ctx: SkillContext, target: Fighter, actualDmg: number, actionName: string): boolean {
   if (!isActiveCombatant(target) || actualDmg <= 0 || target.transformed) return false;
-  const exposed = hasStatus(target, 'WT_AMMO_EXPOSED') || hasStatus(target, 'WT_SCOUTED');
+  const exposed = hasMechanic(target, 'WT_AMMO_EXPOSED') || hasStatus(target, 'WT_SCOUTED');
   const threshold = exposed ? 0.34 : 0.24;
   const chance = exposed ? 0.34 : 0.18;
   if (target.hpPct >= threshold || Math.random() >= chance) return false;
@@ -155,9 +144,9 @@ function maybeAmmoRack(ctx: SkillContext, target: Fighter, actualDmg: number, ac
 }
 
 function consumeAim(user: Fighter): boolean {
-  const aim = user.status.find((status) => status.type === 'AIM');
+  const aim = queryMechanic(user, 'AIM').entries.find((entry) => (entry.charges ?? 0) > 0);
   if (!aim) return false;
-  consumeStatusCharge(user, aim);
+  consumeStatusValue(user, aim, 'charges');
   return true;
 }
 
@@ -176,13 +165,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '快捷语音', tag: SKILL_TAGS.BUFF,
     text: '📻 {USER} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 {USER} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！',
     onExecute: (ctx) => {
-      const confused = ctx.applyStatus(ctx.user, 'CONFUSED', 2, {
-        applierId: ctx.user.id,
-        applierName: ctx.user.name,
-        effectName: 'D点无线电混乱',
-      });
-      const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && ctx.getTeamId(f) === ctx.getTeamId(ctx.user));
-      allies.forEach((ally) => grantStatus(ally, 'WT_RADIO_MORALE', 3));
+      const confused = ctx.applyStatus(ctx.user, { identityId: 'CONFUSED', remainingTurns: 2, effectName: 'D点无线电混乱', attribution: { applierId: ctx.user.id, applierName: ctx.user.name } });
+      const allies = (ctx.fighters ?? []).filter((f) => isActiveCombatant(f) && ctx.getTeamId(f) === ctx.getTeamId(ctx.user));
+      allies.forEach((ally) => applyStatus(ally, { identityId: 'WT_RADIO_MORALE', remainingTurns: 3 }));
       ctx.log('buff', confused
         ? `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 ${ctx.user.name} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！`
         : `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n控制免疫滤掉了无线电噪声，但己方火力系统仍然受到动员（攻击力上升）！`);
@@ -193,8 +178,8 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '长按F修车', tag: SKILL_TAGS.HEAL, condition: (u) => u.hpPct < 0.6,
     text: '🔧 {USER} 载具受损！黑炮管了！"长按F进行战地抢修（50秒）"\n{USER} 停车抢修，装甲正在逐步恢复！',
     onExecute: (ctx) => {
-      grantStatus(ctx.user, 'WT_REPAIRING', WT_REPAIRING_PROFILE.duration);
-      ctx.log('buff', `🔧 【战地抢修】${ctx.user.name} 停车长按 F：接下来 ${WT_REPAIRING_PROFILE.duration} 次行动机会无法行动，每次恢复 20% 最大生命；停车暴露期间受到非持续伤害提高 30%！`);
+      applyStatus(ctx.user, { identityId: 'WT_REPAIRING', remainingTurns: WT_REPAIRING_PROFILE.remainingTurns });
+      ctx.log('buff', `🔧 【战地抢修】${ctx.user.name} 停车长按 F：接下来 ${WT_REPAIRING_PROFILE.remainingTurns} 次行动机会无法行动，每次恢复 20% 最大生命；停车暴露期间受到非持续伤害提高 30%！`);
       return true;
     },
   },
@@ -202,38 +187,31 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: '王牌乘员抢修', tag: SKILL_TAGS.HEAL,
     condition: (u) =>
       u.hpPct < 0.72 ||
-      u.status.some((status) =>
-        status.type === 'BURN' ||
-        status.type === 'POISON' ||
-        status.type === 'BLEED' ||
-        WT_CONTROL_CLEAN.has(status.type) ||
-        WT_MODULE_STATUSES.has(status.type),
-      ),
+      ['BURN', 'POISON', 'BLEED', ...WT_CONTROL_CLEAN, ...WT_MODULE_STATUSES]
+        .some((identityId) => hasIdentity(u, identityId)),
     text: '🔧 {USER} 载具受损！但【王牌乘员组】迅速介入！"履带断了？几秒钟的事！"\n{USER} 瞬间完成抢修，清除了所有负面状态，并恢复了巨量生命值！',
     onExecute: (ctx) => {
+      ctx.log('skill', `🔧 【战地抢修】${ctx.user.name} 停车检修，王牌乘员组开始处理伤员、履带与受损模块！`);
       const hadBurn = hasStatus(ctx.user, 'BURN');
       const hadPoison = hasStatus(ctx.user, 'POISON');
       const hadBleed = hasStatus(ctx.user, 'BLEED');
       const fpeUsed = hadBurn && (ctx.user.wtFpeCharges ?? 0) > 0;
       const nbcsUsed = hadPoison && (ctx.user.wtNbcsCharges ?? 0) > 0;
-      const hadCrewControl = ctx.user.status.some((status) => WT_CONTROL_CLEAN.has(status.type));
-      const hadModuleDamage = ctx.user.status.some((status) => WT_MODULE_STATUSES.has(status.type));
+      const hadCrewControl = [...WT_CONTROL_CLEAN].some((identityId) => hasIdentity(ctx.user, identityId));
+      const hadModuleDamage = [...WT_MODULE_STATUSES].some((identityId) => hasIdentity(ctx.user, identityId));
       const spentSp = (ctx.user.wtSpawnPoints ?? 0) >= 2 && (ctx.user.hpPct < 0.34 || (hadCrewControl && ctx.user.hpPct < 0.56) || (hadModuleDamage && ctx.user.hpPct < 0.56));
 
       if (fpeUsed) ctx.user.wtFpeCharges = Math.max(0, (ctx.user.wtFpeCharges ?? 0) - 1);
       if (nbcsUsed) ctx.user.wtNbcsCharges = Math.max(0, (ctx.user.wtNbcsCharges ?? 0) - 1);
       if (spentSp) spendSpawnPoints(ctx.user, 2);
 
-      ctx.user.status = ctx.user.status.filter((s) => {
-        if (s.type === 'BURN') return !fpeUsed;
-        if (s.type === 'POISON') return !nbcsUsed;
-        if (s.type === 'BLEED') return false;
-        return !WT_CONTROL_CLEAN.has(s.type) && !WT_MODULE_STATUSES.has(s.type) && !['BLIND', 'SILENCE', 'WT_REPAIRING', 'NO_HEAL', 'WEAK'].includes(s.type);
-      });
-
-      const healPct = spentSp ? 0.46 : 0.26;
-      const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * healPct), ctx.log);
-      const healText = healed > 0 ? `实际恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+      const repairTargets = new Set([
+        ...WT_CONTROL_CLEAN,
+        ...WT_MODULE_STATUSES,
+        'BLEED', 'BLIND', 'SILENCE', 'WT_REPAIRING', 'NO_HEAL', 'WEAK',
+      ]);
+      if (fpeUsed) repairTargets.add('BURN');
+      if (nbcsUsed) repairTargets.add('POISON');
       if (fpeUsed) {
         ctx.log('heal', `🧯 【FPE灭火】${ctx.user.name} 拉下灭火系统，扑灭舱内火势！（剩余 FPE ${ctx.user.wtFpeCharges ?? 0}）`);
       } else if (hadBurn) {
@@ -250,8 +228,25 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       if (hadCrewControl || hadModuleDamage) {
         ctx.log('buff', `🔧 【王牌乘员】${ctx.user.name} 更换乘员、接上履带、修复炮闩，重新获得作战能力！`);
       }
-      refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'war_thunder_repair');
-      if (spentSp) refreshStatus(ctx.user, 'BKB', 1, 'war_thunder_repair');
+      ctx.dispelStatusEffects(ctx.user, {
+        strength: 'strong',
+        direction: 'negative',
+        identityIds: [...repairTargets],
+      });
+
+      const healPct = spentSp ? 0.46 : 0.26;
+      const healing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * healPct), {
+        kind: 'direct',
+        sourceId: '王牌乘员抢修',
+        healer: ctx.user,
+      }, ctx.log);
+      const healText = healing.actual > 0
+        ? `实际恢复 ${healing.actual} 点生命`
+        : healing.outcome === 'blocked'
+          ? '治疗被完全阻止'
+          : '生命已满，治疗溢出';
+      applyStatus(ctx.user, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'war_thunder_repair' } });
+      if (spentSp) applyStatus(ctx.user, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'war_thunder_repair' } });
       ctx.log('heal', `🔧 【抢修完成】${ctx.user.name} ${healText}${spentSp ? `，消耗 2 SP 强化抢修（当前 SP ${ctx.user.wtSpawnPoints ?? 0}/${WT_SP_MAX}）` : ''}！`);
       return true;
     },
@@ -262,7 +257,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       if (Math.random() < (isTopTierWt(ctx.user) ? 0.03 : 0.05)) {
         ctx.log('info', `👻 【安东星魔法】服务器丢包了！${ctx.user.name} 的钢针变成了【幽灵炮弹】，直接穿模透过了 ${ctx.target.name} 的身体！伤害为 0！(血压飙升)`);
-        refreshStatus(ctx.user, 'RAGE', 2);
+        applyStatus(ctx.user, { identityId: 'RAGE', remainingTurns: 2 });
         return true;
       }
       return false;
@@ -281,39 +276,37 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     },
   },
   wt_magic_ricochet: {
-    name: '魔法跳弹', tag: SKILL_TAGS.BUFF, status: 'INVUL', statusSource: 'war_thunder_ricochet',
+    name: '魔法跳弹', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'INVUL', attribution: { effectSourceId: 'war_thunder_ricochet' } }],
     text: '🛡️ {USER} 摆出了刁钻的倾斜装甲角度，大喊："BVVD保佑！"\n触发战雷经典【魔法跳弹】，浑身散发斯大林合金的光辉，免疫接下来的所有伤害！',
     onExecute: (ctx) => {
-      refreshStatus(ctx.user, 'INVUL', 1, 'war_thunder_ricochet');
+      applyStatus(ctx.user, { identityId: 'INVUL', remainingTurns: 1, attribution: { effectSourceId: 'war_thunder_ricochet' } });
       ctx.log('buff', `🛡️ ${ctx.user.name} 摆出了刁钻的倾斜装甲角度，大喊："BVVD保佑！" 触发战雷经典【魔法跳弹】，免疫接下来的所有伤害！`);
       return true;
     },
   },
   wt_magic_ricochet_premium: {
-    name: '顶级魔法跳弹', tag: SKILL_TAGS.BUFF, status: 'INVUL', statusSource: 'war_thunder_top_ricochet', cleanStatus: true,
+    name: '顶级魔法跳弹', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'INVUL', attribution: { effectSourceId: 'war_thunder_top_ricochet' } }],
+    dispelSpecs: [{ strength: 'strong', direction: 'negative' }],
     text: '🛡️ {USER} 摆出了无懈可击的完美倾斜角度，复合装甲闪耀着魔法的光辉！\n大喊："BVVD保佑！" 触发【顶级魔法跳弹】，清除了自身负面状态，并绝对免疫接下来的所有伤害！',
     onExecute: (ctx) => {
-      ctx.user.status = ctx.user.status.filter((status) =>
-        !WT_CONTROL_CLEAN.has(status.type) &&
-        !WT_MODULE_STATUSES.has(status.type) &&
-        !['BLIND', 'SILENCE', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'WEAK', 'ZEROED'].includes(status.type),
-      );
-      refreshStatus(ctx.user, 'INVUL', 1, 'war_thunder_top_ricochet');
-      refreshStatus(ctx.user, 'SPELL_BLOCK', 1, 'war_thunder_top_ricochet');
+      ctx.log('buff', `🛡️ 【顶级魔法跳弹】${ctx.user.name} 摆出完美倾斜角度，复合装甲与烟幕开始清除控制和模块异常！`);
+      ctx.dispelStatusEffects(ctx.user, { strength: 'strong', direction: 'negative' });
+      applyStatus(ctx.user, { identityId: 'INVUL', remainingTurns: 1, attribution: { effectSourceId: 'war_thunder_top_ricochet' } });
+      applyStatus(ctx.user, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'war_thunder_top_ricochet' } });
       const before = ctx.user.wtSpawnPoints ?? 0;
       const current = Math.random() < 0.35 ? gainSpawnPoints(ctx.user, 1) : before;
-      ctx.log('buff', `🛡️ ${ctx.user.name} 摆出完美倾斜角度，复合装甲与烟幕齐开！触发【顶级魔法跳弹】，清除控制/模块异常并进入跳弹保护窗口！`);
+      ctx.log('buff', `🛡️ 【跳弹窗口】${ctx.user.name} 已完成清理并进入绝对防护窗口！`);
       if (current > before) ctx.log('buff', `🪖 【生存收益】跳弹骗炮成功，出生点 +1！（当前 SP ${current}/${WT_SP_MAX}）`);
       return true;
     },
   },
   wt_laser_rangefinder: {
-    name: '激光测距仪', tag: SKILL_TAGS.BUFF, status: 'AIM',
+    name: '激光测距仪', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'AIM' }],
     text: '🔭 {USER} 开启热成像与激光测距仪，锁定目标！\n下一次攻击必定暴击、无法闪避；若呼叫苏-30SM2，将获得精确CAS引导！',
     onExecute: (ctx) => {
       const target = preferredTarget(ctx);
-      refreshStatus(ctx.user, 'AIM', 2);
-      refreshStatus(target, 'WT_SCOUTED', 3);
+      applyStatus(ctx.user, { identityId: 'AIM', charges: 2 });
+      applyStatus(target, { identityId: 'WT_SCOUTED', remainingTurns: 3 });
       ctx.user.wtMarkedTargetId = target.id;
       const before = ctx.user.wtSpawnPoints ?? 0;
       const current = Math.random() < 0.45 ? gainSpawnPoints(ctx.user, 1) : before;
@@ -323,7 +316,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     },
   },
   wt_bmpt_suppress: {
-    name: 'BMPT死亡收割机', tag: SKILL_TAGS.PHYS, mult: 0.58, hits: 5, status: 'WT_SUPPRESS', alwaysHit: true,
+    name: 'BMPT死亡收割机', tag: SKILL_TAGS.PHYS, mult: 0.58, hits: 5, statusApplications: [{ identityId: 'WT_SUPPRESS' }], alwaysHit: true,
     text: '🚜 {USER} 召唤巨大 BMPT 终结者！双联装30毫米机炮狂啸！\n"哒哒哒哒哒！" 对 {TARGET} 倾泻 5 段火力（共 {VAL} 伤害）并形成绝对【火力压制】！',
     afterExecute: (ctx, actualDmg) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
@@ -336,7 +329,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     },
   },
   wt_t58_knockup: {
-    name: 'T-58 碎甲轰击', tag: SKILL_TAGS.PHYS, mult: 4.35, ignoreDef: true, status: 'AIRBORNE',
+    name: 'T-58 碎甲轰击', tag: SKILL_TAGS.PHYS, mult: 4.35, ignoreDef: true, statusApplications: [{ identityId: 'AIRBORNE' }],
     text: '💥 {USER} 召唤 T-58 重型坦克！155毫米线膛炮锁定！\n"一发入魂！" 粗壮的钢针瞬间粉碎了 {TARGET} 的装甲，造成 {VAL} 真实伤害并将其当场【击飞】！',
     afterExecute: (ctx, actualDmg) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user)) return;
@@ -345,7 +338,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
         exposeModule(ctx, ctx.target, 'WT_AMMO_EXPOSED', 3, `💥 【弹药架暴露】T-58 大口径碎甲让 ${ctx.target.name} 的内部弹药区完全暴露！`);
       }
-      if (ctx.target.currentHp > 0 && ctx.target.hpPct < (hasStatus(ctx.target, 'WT_AMMO_EXPOSED') ? 0.34 : 0.26) && !ctx.target.transformed && Math.random() < 0.36) {
+      if (ctx.target.currentHp > 0 && ctx.target.hpPct < (hasMechanic(ctx.target, 'WT_AMMO_EXPOSED') ? 0.34 : 0.26) && !ctx.target.transformed && Math.random() < 0.36) {
         const originium = isOriginiumEntity(ctx.target);
         tryExecuteDefeat(ctx, ctx.target, originium ? '源石核心崩解' : '弹药架殉爆', {
           message: originium
@@ -359,11 +352,11 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
   wt_su30_cas: {
     name: '苏-30SM2 狂暴轰入', tag: SKILL_TAGS.PHYS, ignoreDef: true,
     spellBlockMode: 'perHit',
-    condition: (u) => (u.wtSpawnPoints ?? 0) >= (u.status.some((status) => status.type === 'AIM') ? WT_PRECISE_CAS_COST : WT_CAS_COST),
+    condition: (u) => (u.wtSpawnPoints ?? 0) >= (hasMechanic(u, 'AIM') ? WT_PRECISE_CAS_COST : WT_CAS_COST),
     text: '✈️ 【CAS 请求确认】{USER} 呼叫空中支援！一架 苏-30SM2 呼啸而过...\n"全体目光向我看齐！狂暴轰入！！！"',
     onExecute: (ctx) => {
       const candidates = (ctx.currentTargets ?? []).filter((fighter) => isCasEligibleTarget(ctx, fighter));
-      const hasLaserDesignation = ctx.user.status.some((status) => status.type === 'AIM');
+      const hasLaserDesignation = hasMechanic(ctx.user, 'AIM');
       const cost = hasLaserDesignation ? WT_PRECISE_CAS_COST : WT_CAS_COST;
       if (!spendSpawnPoints(ctx.user, cost)) {
         ctx.log('info', `✈️ 【CAS请求失败】${ctx.user.name} 出生点不足，空军排队中！（需要 ${cost} SP，当前 ${ctx.user.wtSpawnPoints ?? 0}/${WT_SP_MAX}）`);
@@ -378,17 +371,19 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         .sort(() => 0.5 - Math.random())
         .slice(0, CAS_MAX_TARGETS - 1);
       const enemies = [primary, ...splashTargets];
-      const mainDmg = Math.floor(ctx.user.atk * (hasLaserDesignation ? CAS_DESIGNATED_MAIN_DAMAGE_MULT : CAS_MAIN_DAMAGE_MULT));
-      const splashDmg = Math.floor(ctx.user.atk * (hasLaserDesignation ? CAS_DESIGNATED_SPLASH_DAMAGE_MULT : CAS_SPLASH_DAMAGE_MULT));
+      const effectiveAtk = ctx.getEffectiveStat(ctx.user, 'atk');
+      const mainDmg = Math.floor(effectiveAtk * (hasLaserDesignation ? CAS_DESIGNATED_MAIN_DAMAGE_MULT : CAS_MAIN_DAMAGE_MULT));
+      const splashDmg = Math.floor(effectiveAtk * (hasLaserDesignation ? CAS_DESIGNATED_SPLASH_DAMAGE_MULT : CAS_SPLASH_DAMAGE_MULT));
       let lethalOutcomeTriggered = false;
 
+      ctx.setVisualTargets(enemies);
       ctx.log('skill', hasLaserDesignation
         ? `✈️ 【苏-30SM2 精确CAS】${ctx.user.name} 消耗 ${cost} SP 上传激光测距坐标，主目标 ${primary.name} 被战机锁定！`
         : `✈️ 【苏-30SM2 洗地】${ctx.user.name} 消耗 ${cost} SP 呼叫空中支援，航弹将重点轰炸 ${primary.name} 并压制周边目标！`);
 
       for (const [index, e] of enemies.entries()) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+        if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
         const isPrimary = index === 0;
         const invul = findDefenseStatus(e, 'INVUL');
         if (invul) {
@@ -398,8 +393,12 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         const spellBlock = consumeSpellBlock(e);
         if (spellBlock) {
-          const healed = healFighter(e, Math.floor(e.maxHp * 0.15), ctx.log);
-          const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
+          const healing = resolveHealing(e, Math.floor(e.maxHp * 0.15), {}, ctx.log);
+          const healText = healing.actual > 0
+            ? `，并恢复了 ${healing.actual} 点生命`
+            : healing.outcome === 'blocked'
+              ? '，但附带治疗被完全阻止'
+              : '，但生命已满，治疗溢出';
           ctx.log('info', formatSpellBlock(spellBlock, e.name, `${ctx.user.name}的【苏-30SM2空袭】`, healText));
           continue;
         }
@@ -411,7 +410,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         const damageOptions: DamageApplicationOptions = { actionName: '苏-30SM2 洗地' };
         const actualDmg = ctx.applyDamage(e, plannedDmg, 'skill', true, ctx.user, damageOptions);
-        if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
+        if (isDamageRedirected(damageOptions)) continue;
         const airborneImmune = findDefenseStatus(e, 'BKB') || findDefenseStatus(e, 'INVUL');
         if (actualDmg <= 0) {
           ctx.log('info', `💥 轰炸冲击被化解！${e.name} 没有承受实际伤害，也没有被【击飞】！`);
@@ -424,8 +423,10 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
         ctx.flushDeferredDamageEvents?.();
         if (actualDmg > 0 && !airborneImmune && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
-          ctx.applyStatus(e, isPrimary ? 'AIRBORNE' : 'WT_SUPPRESS', 1, {
-            sourceId: isPrimary ? 'war_thunder_airborne' : undefined,
+          ctx.applyStatus(e, {
+            identityId: isPrimary ? 'AIRBORNE' : 'WT_SUPPRESS',
+            remainingTurns: 1,
+            attribution: { effectSourceId: isPrimary ? 'war_thunder_airborne' : undefined },
           });
         }
 

@@ -12,8 +12,13 @@ import type {
   SkillDefinition,
   SpinalSwordRef,
   StatKey,
+  StatusApplication,
+  StatusInstance,
 } from '../../../lib/namearena/types';
 import { createBattleState, withBattleRandom } from '../../../lib/namearena/battleState';
+import { spawnPuruisaishiEvent } from '../../../lib/namearena/puruisaishiMechanics';
+import { getBarrierIdentityDefinition, getStatusIdentityDefinition, getStatusMechanicDefinition } from '../../../lib/namearena/statusRegistry';
+import { applyStatus, removeEffects } from '../../../lib/namearena/statusSystem';
 import { installTypeScriptHook, projectRoot } from './register';
 
 installTypeScriptHook(projectRoot);
@@ -57,7 +62,17 @@ type FighterFactoryModule = {
   generateNameArenaFighter: (name: string) => Fighter | null;
 };
 
-export type LogEntry = { type: string; text: string };
+export type LogEntry = {
+  id?: string;
+  sequence?: number;
+  type: string;
+  text: string;
+  rootEventId?: string;
+  actionId?: string;
+  turn?: number;
+  displayInFeed?: boolean;
+  visualCue?: BattleEvent['visualCue'];
+};
 
 export type BattleSpec = {
   phase: string;
@@ -68,10 +83,12 @@ export type BattleSpec = {
 
 export type RunBattleOptions = {
   checkInvariants?: boolean;
+  checkInvariantsEachStep?: boolean;
   includeInvariantLabel?: boolean;
   maxTurns?: number;
   scanLogs?: boolean;
   scanRosterNames?: boolean;
+  forcePuruisaishi?: boolean;
 };
 
 export type LogIssue = {
@@ -100,6 +117,7 @@ export type BattleResult = BattleSpec & {
   logCount: number;
   survivors: string[];
   logs: LogEntry[];
+  events: BattleEvent[];
 };
 
 export type BattleEngineInstance = InstanceType<typeof BattleEngine>;
@@ -117,6 +135,8 @@ export type LoadedProject = {
 };
 
 const COMBAT_STAT_KEYS: StatKey[] = ['atk', 'def', 'spd', 'agl', 'mag', 'res', 'wis'];
+const STATUS_NUMERIC_FIELDS = ['potency', 'count', 'remainingTurns', 'charges', 'appliedSequence', 'lastAdvancedAt'] as const;
+let statusFixtureSequence = 0;
 
 export function purgeProjectCache(root: string): void {
   const prefix = `${path.resolve(root)}${path.sep}`;
@@ -199,6 +219,41 @@ export function makeFighter(name: string): Fighter {
   return makeProjectFighter(localProject, name);
 }
 
+export function makeStatusFixtures(application: StatusApplication): StatusInstance[] {
+  statusFixtureSequence += 1;
+  const holder = {
+    id: `status-fixture-${statusFixtureSequence}`,
+    name: '状态测试夹具',
+    statuses: [],
+    barriers: [],
+    statusSequence: 0,
+    barrierSequence: 0,
+    isNpc: true,
+  } as unknown as Fighter;
+  return applyStatus(holder, application).statuses.map((status) => ({
+    ...status,
+    attribution: { ...status.attribution },
+    damageSourceMask: status.damageSourceMask ? [...status.damageSourceMask] : undefined,
+    statScope: status.statScope ? [...status.statScope] : undefined,
+  }));
+}
+
+export function applyTestStatus(fighter: Fighter, application: StatusApplication): StatusInstance[] {
+  return applyStatus(fighter, application).statuses;
+}
+
+export function applySingleTestStatus(fighter: Fighter, application: StatusApplication): StatusInstance {
+  return applyStatus(fighter, application).primary;
+}
+
+export function replaceTestStatuses(
+  fighter: Fighter,
+  applications: readonly StatusApplication[],
+): StatusInstance[] {
+  removeEffects(fighter, { reason: 'scripted' });
+  return applications.flatMap((application) => applyStatus(fighter, application).statuses);
+}
+
 export function makeProjectEngine(
   project: LoadedProject,
   fighters: Fighter[],
@@ -230,7 +285,15 @@ export function snapshot(fighters: Fighter[]): FighterSnapshot[] {
     hp: fighter.currentHp,
     hpPct: fighter.hpPct,
     dmgTaken: fighter.stats.dmgTaken,
-    status: fighter.status.map((status) => `${status.type}:${status.duration}`).sort().join(','),
+    status: fighter.statuses.map((status) => [
+      status.identityId,
+      status.mechanicId,
+      status.potency ?? '-',
+      status.count ?? '-',
+      status.remainingTurns ?? '-',
+      status.charges ?? '-',
+      status.attribution.effectSourceId,
+    ].join(':')).sort().join(','),
   }));
 }
 
@@ -244,18 +307,23 @@ export function assertUnchanged(before: FighterSnapshot[], fighters: Fighter[], 
     assert(next.hpPct === prev.hpPct, `${name} hpPct changed: ${prev.hpPct} -> ${next.hpPct}`);
     assert(next.stats.dmgTaken === prev.dmgTaken, `${name} dmgTaken changed: ${prev.dmgTaken} -> ${next.stats.dmgTaken}`);
     if (checkStatus) {
-      assert(next.status.map((status) => `${status.type}:${status.duration}`).sort().join(',') === prev.status, `${name} status changed unexpectedly`);
+      assert(snapshot([next])[0]?.status === prev.status, `${name} status changed unexpectedly`);
     }
   });
 }
 
 export function applySlacking(fighter: Fighter): Fighter {
-  fighter.status = [
-    { type: 'SYNERGY_SLACKING', duration: 5 },
-    { type: 'INVUL', duration: 5 },
-    { type: 'BKB', duration: 5 },
-    { type: 'STUN', duration: 5 },
-  ];
+  removeEffects(fighter, { reason: 'scripted' });
+  ['SYNERGY_SLACKING', 'INVUL', 'BKB', 'STUN'].forEach((identityId) => {
+    applyStatus(fighter, {
+      identityId,
+      remainingTurns: 5,
+      attribution: {
+        effectSourceId: 'SYNERGY_SLACKING',
+        effectSourceName: '摸鱼伙伴羁绊',
+      },
+    });
+  });
   fighter.wasSynergySlacking = true;
   return fighter;
 }
@@ -263,7 +331,10 @@ export function applySlacking(fighter: Fighter): Fighter {
 export function checkInvariants(fighters: Fighter[], label: string, options: { includeLabel?: boolean } = {}): string[] {
   const errors: string[] = [];
   const suffix = options.includeLabel ? ` in ${label}` : '';
+  const fighterIds = new Set<string>();
   fighters.forEach((fighter) => {
+    if (fighterIds.has(fighter.id)) errors.push(`duplicate fighter id ${fighter.id} (${fighter.name})${suffix}`);
+    fighterIds.add(fighter.id);
     const hpPct = fighter.maxHp > 0 ? Math.max(0, fighter.currentHp) / fighter.maxHp : 0;
     const hpPctDelta = Math.abs((fighter.hpPct ?? 0) - hpPct);
     if (!Number.isFinite(fighter.currentHp) || !Number.isFinite(fighter.maxHp) || !Number.isFinite(fighter.hpPct)) errors.push(`${fighter.name} has non-finite HP${suffix}`);
@@ -273,7 +344,33 @@ export function checkInvariants(fighters: Fighter[], label: string, options: { i
     if (hpPctDelta > 0.0001) errors.push(`${fighter.name} hpPct mismatch in ${label}: ${fighter.hpPct} vs ${hpPct}`);
     if (fighter.isDead && fighter.currentHp > 0) errors.push(`${fighter.name} is dead but currentHp is ${fighter.currentHp}${suffix}`);
     if (!fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp <= 0) errors.push(`${fighter.name} is active but currentHp is ${fighter.currentHp}${suffix}`);
-    if (fighter.status.some((status) => !Number.isFinite(status.duration))) errors.push(`${fighter.name} has non-finite status duration${suffix}`);
+    fighter.statuses.forEach((status) => {
+      try {
+        getStatusIdentityDefinition(status.identityId);
+        getStatusMechanicDefinition(status.mechanicId);
+      } catch (error) {
+        errors.push(`${fighter.name} has unregistered status ${status.identityId}/${status.mechanicId}${suffix}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!status.instanceId || !status.identityId || !status.mechanicId || !status.attribution?.effectSourceId) {
+        errors.push(`${fighter.name} has incomplete status instance${suffix}`);
+      }
+      if (STATUS_NUMERIC_FIELDS.some((field) => status[field] !== undefined && !Number.isFinite(status[field]))) {
+        errors.push(`${fighter.name} has non-finite status value${suffix}`);
+      }
+    });
+    (fighter.barriers ?? []).forEach((barrier) => {
+      try {
+        getBarrierIdentityDefinition(barrier.identityId);
+      } catch (error) {
+        errors.push(`${fighter.name} has unregistered barrier ${barrier.identityId}${suffix}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!barrier.id || !barrier.sourceId || !barrier.attribution?.effectSourceId) {
+        errors.push(`${fighter.name} has incomplete barrier instance${suffix}`);
+      }
+      if (!Number.isFinite(barrier.value) || !Number.isFinite(barrier.maxValue)) {
+        errors.push(`${fighter.name} has non-finite barrier value${suffix}`);
+      }
+    });
     if ((fighter.pendingDamageEvents?.length ?? 0) > 0) errors.push(`${fighter.name} retained ${fighter.pendingDamageEvents?.length ?? 0} deferred damage event(s)${suffix}`);
   });
   return errors;
@@ -322,6 +419,12 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     const withoutIcon = value.replace(/^\S+\s+/, '');
     return orderedNames.find((name) => withoutIcon.startsWith(name));
   };
+  const titledSubjectName = (value: string): string | undefined => {
+    const titleEnd = value.indexOf('】');
+    if (titleEnd < 0) return undefined;
+    const afterTitle = value.slice(titleEnd + 1).trimStart();
+    return orderedNames.find((name) => new RegExp(`^${exactNamePattern(name)}`).test(afterTitle));
+  };
   const parseDeathVictim = (value: string): string | undefined => {
     const match = value.match(/^(?:💀|☠️) (?:【[^】]+】)?(.+?) (?:被|因|承受不住|遭到|跌入|化为|化为了)/);
     if (!match?.[1]) return undefined;
@@ -338,6 +441,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
       ['zero-heal-log', /恢复了? 0 点生命/],
       ['zero-reduction-log', /削减 0 点伤害/],
       ['zero-deflection-log', /偏折 0 点/],
+    ['zero-shield-absorb-log', /护盾吸收 0 点伤害/],
     ['zero-damage-control', /(?:承受了|造成了|实际造成) 0 点.*(?:并被|并深度|并使其|并施加|眩晕|魅惑|击飞|中毒|灼烧|沉默|混乱)/],
     ['duplicate-damage-type', /物理\(物理\)|魔法\(魔法\)/],
     ['legacy-generic-death', /伤重不治倒下了/],
@@ -346,17 +450,78 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     ['joker-redundant-zero-settlement', /📌 实际结算：屑 实际承受 0 点伤害/],
     ['legacy-joker-no-victim-dodge', /【随机恶作剧】屑 .*躲开了 \d+ 点伤害/],
     ['originium-ammo-rack-language', /(?:源石结晶|阿喃那|普瑞赛斯).*(?:弹药架|弹药区|弹药库|炮塔)|(?:弹药架|弹药区|弹药库|炮塔).*(?:源石结晶|阿喃那|普瑞赛斯)/],
+    ['internal-status-id-leak', /【(?:YUZU|WT|MOMO|OWL|TING|GACHA|VALO|TOKUSATSU|EMOTE|GAMER|CHIMERA|ORIGINIUM|CTR|STYLE|PLUG|SPELL|WATER)_[A-Z0-9_]+】/],
   ];
   let expectWaterSonInterceptLine = 0;
   const pendingCounterOutcomes: Array<{ counterName: string; line: number; text: string; deadline: number }> = [];
   const pendingInterceptions: Array<{ targetName: string; line: number; text: string; deadline: number; settlePattern: RegExp }> = [];
   const pendingGachaPityOutcomes: Array<{ line: number; text: string; deadline: number }> = [];
-  const recentDeaths: Array<{ name: string; line: number; text: string; deadline: number; targetPattern: RegExp }> = [];
+  const pendingBlockedHealing: Array<{
+    name: string;
+    line: number;
+    text: string;
+    deadline: number;
+    rootEventId?: string;
+    actionId?: string;
+  }> = [];
+  const recentDeaths: Array<{
+    name: string;
+    line: number;
+    text: string;
+    deadline: number;
+    targetPattern: RegExp;
+    rootEventId?: string;
+    actionTitle?: string;
+  }> = [];
   const summonedBaseNames = new Set<string>();
+  const repeatedTargetNamesByRoot = new Map<string, Set<string>>();
 
   logs.forEach((entry, index) => {
       const line = index + 1;
       const text = entry.text;
+      for (let i = pendingBlockedHealing.length - 1; i >= 0; i -= 1) {
+        const pending = pendingBlockedHealing[i];
+        if (!pending) continue;
+        const sameCausalWindow = pending.actionId && entry.actionId
+          ? pending.actionId === entry.actionId
+          : !pending.rootEventId || !entry.rootEventId || pending.rootEventId === entry.rootEventId;
+        const namedFullHealth = new RegExp(
+          `${escapeRegExp(pending.name)}(?: 的[^，。！？!]{0,24})? 生命(?:已|已经)(?:全)?满`,
+        ).test(text);
+        if (sameCausalWindow && namedFullHealth) {
+          issues.push({
+            label,
+            line,
+            type: 'blocked-healing-described-as-full-health',
+            text: `${pending.text}\nNEXT: ${text}`,
+            name: pending.name,
+          });
+          pendingBlockedHealing.splice(i, 1);
+        } else if (line > pending.deadline) {
+          pendingBlockedHealing.splice(i, 1);
+        }
+      }
+      const blockedHealingTarget = text.match(/【枯竭】(.+?) 的治疗被完全阻止/)?.[1];
+      if (blockedHealingTarget) {
+        pendingBlockedHealing.push({
+          name: blockedHealingTarget,
+          line,
+          text,
+          deadline: line + 3,
+          rootEventId: entry.rootEventId,
+          actionId: entry.actionId,
+        });
+      }
+      const listedTargets = text.match(/\d+ 名敌人：(.+?)(?:！|!|。|$)/)?.[1]
+        ?.split(/、|，|,/)
+        .map((name) => name.trim())
+        .filter(Boolean);
+      if (entry.rootEventId && listedTargets) {
+        const counts = new Map<string, number>();
+        listedTargets.forEach((name) => counts.set(name, (counts.get(name) ?? 0) + 1));
+        const repeated = new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+        if (repeated.size > 0) repeatedTargetNamesByRoot.set(entry.rootEventId, repeated);
+      }
       if (
         text.includes('触发了锁血保护') &&
         logs.slice(Math.max(0, index - 3), index).some((previous) => previous.text === text)
@@ -372,7 +537,21 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
         line <= recentDeath.deadline &&
         recentDeath.targetPattern.test(text)
       ) {
-        issues.push({ label, line, type: 'dead-fighter-mentioned-as-target', text: `${recentDeath.text}\nNEXT: ${text}`, name: recentDeath.name });
+        const repeatedInSameAction = !!(
+          entry.rootEventId &&
+          entry.rootEventId === recentDeath.rootEventId &&
+          repeatedTargetNamesByRoot.get(entry.rootEventId)?.has(recentDeath.name)
+        );
+        const numberedFollowUpInSameAction = !!(
+          entry.rootEventId &&
+          entry.rootEventId === recentDeath.rootEventId &&
+          recentDeath.actionTitle &&
+          text.includes(`【${recentDeath.actionTitle}】`) &&
+          /第 \d+\/\d+ 击/.test(text)
+        );
+        if (!repeatedInSameAction && !numberedFollowUpInSameAction) {
+          issues.push({ label, line, type: 'dead-fighter-mentioned-as-target', text: `${recentDeath.text}\nNEXT: ${text}`, name: recentDeath.name });
+        }
         recentDeaths.splice(i, 1);
       } else if (line > recentDeath.deadline) {
         recentDeaths.splice(i, 1);
@@ -424,7 +603,7 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
       });
     }
 
-    if (/【随机恶作剧】/.test(text)) {
+    if (/^🎭 【随机恶作剧】/.test(text)) {
       if (!/遭到.+【[^】]+】/.test(text)) {
         issues.push({ label, line, type: 'joker-transfer-without-source', text });
       }
@@ -449,7 +628,9 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
           line,
           text,
           deadline: line + 4,
-          targetPattern: new RegExp(`(?:对 ${exactNamePattern(deathName)}|攻击了 ${exactNamePattern(deathName)}|${exactNamePattern(deathName)} (?:承受|实际承受|受到持续伤害|在深渊水牢中窒息|没有承受实际伤害|被附加|陷入|获得【))`),
+          rootEventId: entry.rootEventId,
+          actionTitle: text.match(/【([^】]+)】/)?.[1],
+          targetPattern: new RegExp(`(?:对 ${exactNamePattern(deathName)}|命中 ${exactNamePattern(deathName)}|攻击了 ${exactNamePattern(deathName)}|${exactNamePattern(deathName)} (?:承受|实际承受|受到持续伤害|在深渊水牢中窒息|没有承受实际伤害|被附加|陷入|获得【))`),
         });
       }
     }
@@ -474,6 +655,69 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
     const blockedTarget = nextText.match(/光幕为 (.+?) 挡下/)?.[1];
     if (currentDamageTarget && blockedTarget && currentDamageTarget === blockedTarget && /实际造成 \d+/.test(text) && /挡下了.+【[^】]+】/.test(nextText)) {
       issues.push({ label, line, type: 'block-after-damage-result', text: `${text}\nNEXT: ${nextText}` });
+    }
+    if (/削减 \d+ 点伤害/.test(text)) {
+      const mitigationTarget = titledSubjectName(text) ?? leadingMentionedName(text) ?? mentionedName(text);
+      if (mitigationTarget) {
+        const targetPattern = exactNamePattern(mitigationTarget);
+        const sameCausalWindow = (candidate: LogEntry): boolean => {
+          if (entry.turn !== undefined && candidate.turn !== undefined && entry.turn !== candidate.turn) return false;
+          if (entry.rootEventId && candidate.rootEventId && entry.rootEventId !== candidate.rootEventId) return false;
+          if (entry.actionId && candidate.actionId && entry.actionId !== candidate.actionId) return false;
+          return true;
+        };
+        const targetsMitigationFighter = (value: string): boolean => new RegExp(
+          `(?:${targetPattern}[^\n]{0,120}(?:(?:实际)?(?:造成|承受|损失)(?:了)? \\d+|没有承受实际伤害|未受到生命伤害|(?:本体)?生命(?:实际)?未减少)|(?:命中|冲向|击中|波及|吞噬了|对) ${targetPattern}[^\n]{0,120}实际造成 \\d+)`,
+        ).test(value);
+        let hasFollowingSettlement = false;
+        for (let laterIndex = index + 1; laterIndex < Math.min(logs.length, index + 25); laterIndex += 1) {
+          const later = logs[laterIndex];
+          if (!later || !sameCausalWindow(later)) break;
+          if (later.type === 'system' && later.text.startsWith('state-sync:')) break;
+          if (targetsMitigationFighter(later.text)) {
+            hasFollowingSettlement = true;
+            break;
+          }
+        }
+        if (!hasFollowingSettlement) {
+          for (let previousIndex = index - 1; previousIndex >= Math.max(0, index - 3); previousIndex -= 1) {
+            const previous = logs[previousIndex];
+            if (!previous) continue;
+            if (!sameCausalWindow(previous)) break;
+            if (
+              /转移伤害已单独结算|【(?:\|OMO|镜界分摊)结算】|【状态(?:施加|叠加|结束|变化)】|安装了.+插件/.test(previous.text)
+            ) break;
+            if (
+              targetsMitigationFighter(previous.text) &&
+              /实际(?:造成|承受|损失) \d+/.test(previous.text)
+            ) {
+              const previousTitle = previous.text.match(/【([^】]+)】/)?.[1];
+              const previousSegment = previous.text.match(/第 (\d+)\/(\d+) (?:段|击)/);
+              const nextSegmentContinuesSameAction = !!(
+                previousTitle &&
+                previousSegment &&
+                logs.slice(index + 1, index + 3).some((later) =>
+                  later.text.includes(`【${previousTitle}】`) &&
+                  new RegExp(`第 ${Number(previousSegment[1]) + 1}\\/${previousSegment[2]} (?:段|击)`).test(later.text),
+                )
+              );
+              if (nextSegmentContinuesSameAction) break;
+              issues.push({
+                label,
+                line: previousIndex + 1,
+                type: 'result-before-mitigation',
+                text: `${previous.text}\nLATER: ${text}`,
+                name: mitigationTarget,
+              });
+              break;
+            }
+            if (previous.type === 'system' && previous.text.startsWith('state-sync:')) break;
+            if (/结算前预估|动作开始结算|开始随机寻找目标/.test(previous.text)) break;
+            if ((previous.type === 'attack' || previous.type === 'crit') && !/实际(?:造成|承受|损失)/.test(previous.text)) break;
+            if (previous.type === 'skill' || previous.type === 'poison') break;
+          }
+        }
+      }
     }
     const summonMatch = text.match(/【召唤成功】.+?召唤出了 (.+?)！/);
     if (summonMatch?.[1]) {
@@ -587,18 +831,33 @@ export function runProjectBattle(project: LoadedProject, spec: BattleSpec, optio
     let battleState = createBattleState(spec.seed, 0);
     let fighters = withBattleRandom(battleState, () => spec.names.map((name) => makeProjectFighter(project, name)));
     const logs: LogEntry[] = [];
+    const events: BattleEvent[] = [];
     const spinalSwordRef: SpinalSwordRef = { current: false };
     let turnCount = 0;
     let ended = false;
     let error: string | null = null;
+    const stepInvariantErrors: string[] = [];
+    const seenStepInvariantErrors = new Set<string>();
 
     for (let i = 0; i < maxTurns; i += 1) {
-      const engine = makeProjectEngine(project, project.cloneFighters(fighters), logs, turnCount, battleState);
+      const engine = makeProjectEngine(project, project.cloneFighters(fighters), logs, turnCount, battleState, events);
       try {
+        if (options.forcePuruisaishi && i === 0) {
+          spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '机制压力测试强制出场');
+        }
         ended = engine.step(spinalSwordRef);
         turnCount = engine.turnCount;
         battleState = engine.battleState;
         fighters = engine.fighters;
+        if (options.checkInvariants !== false && options.checkInvariantsEachStep) {
+          checkInvariants(fighters, spec.label, {
+            includeLabel: options.includeInvariantLabel ?? false,
+          }).forEach((invariantError) => {
+            if (seenStepInvariantErrors.has(invariantError)) return;
+            seenStepInvariantErrors.add(invariantError);
+            stepInvariantErrors.push(`[after step ${i + 1}; turn ${turnCount}] ${invariantError}`);
+          });
+        }
       } catch (err) {
         error = err instanceof Error ? `${err.name}: ${err.stack || err.message}` : String(err);
         break;
@@ -617,13 +876,18 @@ export function runProjectBattle(project: LoadedProject, spec: BattleSpec, optio
       ended,
       timedOut: !ended && !error,
       error,
-      invariantErrors: options.checkInvariants === false ? [] : checkInvariants(fighters, spec.label, {
-        includeLabel: options.includeInvariantLabel ?? false,
-      }),
+      invariantErrors: options.checkInvariants === false
+        ? []
+        : options.checkInvariantsEachStep
+          ? stepInvariantErrors
+          : checkInvariants(fighters, spec.label, {
+              includeLabel: options.includeInvariantLabel ?? false,
+            }),
       logIssues: options.scanLogs === false ? [] : scanLogs(logs, spec.label, options.scanRosterNames ? rosterNames : []),
       logCount: logs.length,
       survivors,
       logs,
+      events,
     };
   });
 }

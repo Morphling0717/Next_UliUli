@@ -5,6 +5,7 @@ import {
   NameArenaBattleStage,
   type NameArenaStageBadge,
 } from "@/components/namearena/NameArenaBattleStage";
+import { StatusDetailContent } from "@/components/namearena/StatusDetailContent";
 import { BattleEngine } from "@/lib/namearena/battleEngine";
 import {
   cloneFighters,
@@ -13,17 +14,31 @@ import {
 } from "@/lib/namearena/combatState";
 import { namerenaCore } from "@/lib/namearena/core";
 import { namerenaData } from "@/lib/namearena/data";
-import { getDefenseStatusDisplayName } from "@/lib/namearena/defenseStatus";
 import { generateNameArenaFighter } from "@/lib/namearena/fighterFactory";
 import { namerenaJobs } from "@/lib/namearena/jobs";
-import { hasPuruisaishiAppeared, spawnPuruisaishiEvent } from "@/lib/namearena/puruisaishiMechanics";
+import {
+  hasPuruisaishiAppeared,
+  PURUISAISHI_BARRIER_IDENTITY,
+  spawnPuruisaishiEvent,
+} from "@/lib/namearena/puruisaishiMechanics";
 import { parseNameArenaSetupInput } from "@/lib/namearena/setupInput";
 import { namerenaSkills } from "@/lib/namearena/skills";
-import { statusDurationText } from "@/lib/namearena/statusLifecycle";
+import {
+  buildFighterStatusPresentation,
+  formatStatusPresentationLabel,
+  type StatusPresentationTone,
+} from "@/lib/namearena/statusPresentation";
+import { getEffectiveCombatStat } from "@/lib/namearena/statusMechanics";
+import { getBarrierTotal, hasIdentity } from "@/lib/namearena/statusSystem";
+import { getStatusIdentityIdsByTag } from "@/lib/namearena/statusRegistry";
+import { YUZU_BARRIER_IDENTITY } from "@/lib/namearena/yuzuMechanics";
+import { formatTeamDisplayLabel } from "@/lib/namearena/teamPresentation";
 import {
   clearBattlePlaybackFeed,
   commitBattlePlaybackView,
   createBattlePlaybackView,
+  enqueueBattlePlaybackCommit,
+  type BattlePlaybackCommit,
   type BattlePlaybackView,
 } from "@/lib/namearena/battlePlaybackModel";
 import {
@@ -32,22 +47,21 @@ import {
   getLargeRoundProgress,
   withBattleRandom,
 } from "@/lib/namearena/battleState";
+import {
+  claimBattleVisualEvent as claimVisualEventOnce,
+  createBattleVisualEventLedger,
+  resetBattleVisualEventLedger,
+} from "@/lib/namearena/battleVisualLedger";
+import { getVisualCueMinimumDisplayMs } from "@/lib/namearena/battleVisualTiming";
 import type {
   BattleEvent,
   BattleLogEntry as EngineBattleLogEntry,
   BattleState,
   Fighter,
-  StatusEffectInfo,
-  StatusEntry,
 } from "@/lib/namearena/types";
 
 type BattleLogEntry = Pick<EngineBattleLogEntry, 'type' | 'text'> & Partial<Omit<EngineBattleLogEntry, 'type' | 'text'>>;
-type BattlePlaybackItem = {
-  log: BattleLogEntry;
-  fighters: Fighter[];
-  turnCount: number;
-  battleState: BattleState;
-};
+type BattlePlaybackItem = BattlePlaybackCommit<BattleLogEntry> & { log: BattleLogEntry };
 type SettlementStats = {
   dmgDealt: number;
   dmgTaken: number;
@@ -76,22 +90,17 @@ const LOG_PLAYBACK_PROFILE_BY_SPEED: Record<number, {
   minDeath: number;
   minLong: number;
   minHighlight: number;
-  minTransform: number;
-  minFinisher: number;
-  minSummon: number;
 }> = {
-  1500: { base: 2400, charMs: 28, maxTextExtra: 3600, minDeath: 3600, minLong: 4500, minHighlight: 5600, minTransform: 3400, minFinisher: 2100, minSummon: 4550 },
-  500: { base: 1100, charMs: 12, maxTextExtra: 1500, minDeath: 1700, minLong: 2100, minHighlight: 2800, minTransform: 3400, minFinisher: 2100, minSummon: 4550 },
-  50: { base: 260, charMs: 3, maxTextExtra: 320, minDeath: 480, minLong: 620, minHighlight: 800, minTransform: 3400, minFinisher: 2100, minSummon: 4550 },
+  1500: { base: 2400, charMs: 28, maxTextExtra: 3600, minDeath: 3600, minLong: 4500, minHighlight: 5600 },
+  500: { base: 1100, charMs: 12, maxTextExtra: 1500, minDeath: 1700, minLong: 2100, minHighlight: 2800 },
+  50: { base: 260, charMs: 3, maxTextExtra: 320, minDeath: 480, minLong: 620, minHighlight: 800 },
 };
 
 const isFormTransitionLog = (log: BattleLogEntry) => log.visualCue?.kind === 'transformation';
+const isFormShiftLog = (log: BattleLogEntry) => log.visualCue?.kind === 'form_shift';
 
 const isTransformLog = (log: BattleLogEntry) =>
-  isFormTransitionLog(log);
-
-const isCinematicLog = (log: BattleLogEntry) =>
-  log.presentation === 'finisher' || log.visualCue?.kind === 'summon_card';
+  isFormTransitionLog(log) || isFormShiftLog(log);
 
 const isHighlightLog = (log: BattleLogEntry) =>
   log.type === 'win' ||
@@ -106,9 +115,7 @@ const getLogPlaybackDelay = (log: BattleLogEntry, speed: number) => {
   if (log.text.includes('\n')) delay = Math.max(delay, profile.minLong);
   if (log.type === 'death') delay = Math.max(delay, profile.minDeath);
   if (isHighlightLog(log)) delay = Math.max(delay, profile.minHighlight);
-  if (isFormTransitionLog(log)) delay = Math.max(delay, profile.minTransform);
-  if (isCinematicLog(log)) delay = Math.max(delay, profile.minFinisher);
-  if (log.visualCue?.kind === 'summon_card') delay = Math.max(delay, profile.minSummon);
+  delay = Math.max(delay, getVisualCueMinimumDisplayMs(log));
   return delay;
 };
 
@@ -226,35 +233,6 @@ const Icons = {
   BarChart: (p: IconProps) => <Icon {...p} d="M18 20V10 M12 20V4 M6 20v-6" />,
 };
 
-type StatusCategory =
-  | 'control'
-  | 'defense'
-  | 'counter'
-  | 'damage'
-  | 'recovery'
-  | 'special'
-  | 'buff'
-  | 'debuff'
-  | 'unknown';
-
-type StatusDisplayInfo = {
-  type: string;
-  name: string;
-  icon: string;
-  desc: string;
-  sourceName?: string;
-  category: StatusCategory;
-  priority: number;
-  durationLabel?: string;
-  isUnknown: boolean;
-};
-
-type StatusDisplayItem = {
-  status: StatusEntry;
-  count: number;
-  info: StatusDisplayInfo;
-};
-
 type ResourceTone = 'luck' | 'tech' | 'combat' | 'support' | 'shield' | 'neutral';
 
 type ResourceChip = {
@@ -279,35 +257,11 @@ type StatChip = {
 const STATUS_CHIP_LIMIT = 5;
 const RESOURCE_CHIP_LIMIT = 4;
 
-const STATUS_CATEGORY_STYLES: Record<StatusCategory, string> = {
-  control: 'border-purple-400/40 bg-purple-500/10 text-purple-100',
-  defense: 'border-sky-400/40 bg-sky-500/10 text-sky-100',
-  counter: 'border-orange-400/40 bg-orange-500/10 text-orange-100',
-  damage: 'border-red-400/40 bg-red-500/10 text-red-100',
-  recovery: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100',
-  special: 'border-amber-300/40 bg-amber-400/10 text-amber-100',
-  buff: 'border-indigo-300/40 bg-indigo-500/10 text-indigo-100',
-  debuff: 'border-slate-300/40 bg-slate-500/10 text-slate-100',
-  unknown: 'border-rose-300/40 bg-rose-500/10 text-rose-100',
-};
-
-const STATUS_DISPLAY_FALLBACKS: Record<string, StatusEffectInfo> = {
-  BLEED: { name: '流血', icon: '🩸', desc: '自身行动开始损失 4% 最大生命，受到的治疗、再生与吸血降低 25%' },
-  YUZU_BARRIER: { name: '镜界护盾', icon: '🛡️', desc: '柚子施加的数值护盾，会先于生命承受伤害' },
-  YUZU_TAUNT: { name: '满级嘲讽', icon: '🪞', desc: '柚子抽到盾牌后吸引敌方火力' },
-  YUZU_MARKED: { name: '镜界标记', icon: '🎯', desc: '柚子三阶段定制目标，承受柚子更高伤害' },
-  YUZU_EVADE_DOWN: { name: '闪避破坏', icon: '🪞', desc: '敏捷按 55% 计算' },
-  YUZU_DEF_DOWN: { name: '防御破坏', icon: '🪞', desc: '防御力下降' },
-  YUZU_RES_DOWN: { name: '魔抗破坏', icon: '🪞', desc: '魔抗下降' },
-  YUZU_ATK_DOWN: { name: '攻击破坏', icon: '🪞', desc: '攻击力下降' },
-  YUZU_SLOW: { name: '减速', icon: '🪞', desc: '行动速度下降' },
-  ORIGINIUM_DISEASE: { name: '矿石病', icon: '🦠', desc: '源石侵蚀层数；层数越高越危险，80 层死亡' },
-  PURUISAISHI_SHIELD: { name: '源石映像护盾', icon: '🜲', desc: '普瑞赛斯二阶段护盾；场上有源石结晶时不会低于 1' },
-  MOMO_CAPTAIN: { name: '舰长', icon: '⚓', desc: '攻击与生命提高，造成伤害时会为萌月沫沫恢复生命' },
-  MOMO_CROWD_JOY: { name: '众宾欢也', icon: '🎉', desc: '按层数获得攻击吸血；行动结束减少 10 层' },
-  MOMO_MIC_DEF_DOWN: { name: '麦霸破防', icon: '🎙️', desc: '防御暂时下降' },
-  MOMO_VILLAGE_SWORD: { name: '村好剑', icon: '🗡️', desc: '无双龙赋予的低额攻击强化' },
-  MOMO_AWAKENED_SWORD: { name: '醒剑', icon: '⚔️', desc: '共鸣后的高额攻击强化，替换村好剑' },
+const STATUS_CATEGORY_STYLES: Record<StatusPresentationTone, string> = {
+  positive: 'border-emerald-400/55 bg-emerald-500/10 text-emerald-100',
+  negative: 'border-rose-400/55 bg-rose-500/10 text-rose-100',
+  neutral: 'border-slate-300/45 bg-slate-500/10 text-slate-100',
+  independent: 'border-amber-300/55 bg-amber-400/10 text-amber-100',
 };
 
 const RESOURCE_TONE_STYLES: Record<ResourceTone, string> = {
@@ -329,302 +283,45 @@ const STAT_TONE_STYLES: Record<StatTone, string> = {
 };
 
 const STAT_CHIPS: StatChip[] = [
-  { key: 'atk', icon: '🗡️', label: '攻击', tone: 'physical', value: (fighter) => fighter.atk },
-  { key: 'def', icon: '🛡️', label: '防御', tone: 'defense', value: (fighter) => fighter.def },
-  { key: 'mag', icon: '🔮', label: '魔力', tone: 'magic', value: (fighter) => fighter.mag },
-  { key: 'res', icon: '💠', label: '魔抗', tone: 'defense', value: (fighter) => fighter.res },
-  { key: 'spd', icon: '⚡', label: '速度', tone: 'speed', value: (fighter) => fighter.spd },
-  { key: 'agl', icon: '🦶', label: '敏捷', tone: 'speed', value: (fighter) => fighter.agl },
-  { key: 'wis', icon: '🧠', label: '智力', tone: 'mental', value: (fighter) => fighter.wis },
+  { key: 'atk', icon: '🗡️', label: '攻击', tone: 'physical', value: (fighter) => getEffectiveCombatStat(fighter, 'atk') },
+  { key: 'def', icon: '🛡️', label: '防御', tone: 'defense', value: (fighter) => getEffectiveCombatStat(fighter, 'def') },
+  { key: 'mag', icon: '🔮', label: '魔力', tone: 'magic', value: (fighter) => getEffectiveCombatStat(fighter, 'mag') },
+  { key: 'res', icon: '💠', label: '魔抗', tone: 'defense', value: (fighter) => getEffectiveCombatStat(fighter, 'res') },
+  { key: 'spd', icon: '⚡', label: '速度', tone: 'speed', value: (fighter) => getEffectiveCombatStat(fighter, 'spd') },
+  { key: 'agl', icon: '🦶', label: '敏捷', tone: 'speed', value: (fighter) => getEffectiveCombatStat(fighter, 'agl') },
+  { key: 'wis', icon: '🧠', label: '智力', tone: 'mental', value: (fighter) => getEffectiveCombatStat(fighter, 'wis') },
   { key: 'kills', icon: '☠️', label: '击杀', tone: 'kill', value: (fighter) => fighter.stats.kills },
 ];
 
-const CONTROL_STATUS_TYPES = new Set([
-  'STUN',
-  'FREEZE',
-  'CONFUSED',
-  'EMBARRASSED',
-  'CHARMED',
-  'SILENCE',
-  'WATER_PRISON',
-  'WT_SUPPRESS',
-  'WT_AIRBORNE',
-  'AIRBORNE',
-  'WT_REPAIRING',
-]);
-
-const DEFENSE_STATUS_TYPES = new Set([
-  'INVUL',
-  'BKB',
-  'SPELL_BLOCK',
-  'YUZU_BARRIER',
-  'TING_DEFIANCE',
-  'TOKUSATSU_DEFIANCE',
-  'RA_PHOENIX',
-  'VALO_ULT_RUN_IT_BACK',
-  'VALO_HARBOR_WALL',
-  'PURUISAISHI_SHIELD',
-]);
-
-const DAMAGE_STATUS_TYPES = new Set([
-  'BURN',
-  'POISON',
-  'BLEED',
-  'WATER_PRISON',
-  'NO_HEAL',
-  'WEAK',
-  'ZEROED',
-  'VALO_AIM_PUNCH',
-  'VALO_CYPHER_REVEALED',
-  'NEURAL_THEFT_DEBUFF',
-  'BABY_WEAKNESS_MARK',
-  'WT_SCOUTED',
-  'WT_BREECH_DAMAGED',
-  'WT_TRACK_DAMAGED',
-  'WT_AMMO_EXPOSED',
-  'YUZU_MARKED',
-  'YUZU_EVADE_DOWN',
-  'YUZU_DEF_DOWN',
-  'YUZU_RES_DOWN',
-  'YUZU_ATK_DOWN',
-  'YUZU_SLOW',
-  'ORIGINIUM_DISEASE',
-  'OWL_EVADE_DOWN',
-  'MOMO_MIC_DEF_DOWN',
-]);
-
-const RECOVERY_STATUS_TYPES = new Set([
-  'REGEN',
-  'PLUG_HEART',
-  'GACHA_SUMMON_LIFESTEAL',
-  'STYLE_FAMILY',
-  'MOMO_CROWD_JOY',
-]);
-
-const SPECIAL_STATUS_TYPES = new Set([
-  'SYNERGY_SLACKING',
-  'SPINAL_SWORD',
-  'PUPPET_MASTER',
-  'GAMER_WORLD_STAGE',
-  'LIQUID_BODY',
-  'ETHEREAL',
-  'VALO_ULT_EMPRESS',
-  'VALO_CLUTCH',
-  'VALO_REPOSITION',
-  'VALO_OPERATOR_PENALTY',
-  'RABBIT_CALC_HASTE',
-  'RABBIT_ZERO_HASTE',
-  'GACHA_TRAP_GUARD_COOLDOWN',
-  'GACHA_BLUE_EYES_GUARD_COOLDOWN',
-  'GACHA_ULTIMATE_GUARD_COOLDOWN',
-  'WT_ERA',
-  'YUZU_TAUNT',
-  'MOMO_CAPTAIN',
-  'MOMO_VILLAGE_SWORD',
-  'MOMO_AWAKENED_SWORD',
-]);
-
-const STATUS_PRIORITY_BY_TYPE: Record<string, number> = {
-  SYNERGY_SLACKING: 0,
-  STUN: 5,
-  FREEZE: 6,
-  CHARMED: 7,
-  CONFUSED: 8,
-  EMBARRASSED: 8,
-  WATER_PRISON: 9,
-  WT_SUPPRESS: 10,
-  WT_AIRBORNE: 11,
-  AIRBORNE: 11,
-  WT_REPAIRING: 12,
-  TING_DEFIANCE: 18,
-  TOKUSATSU_DEFIANCE: 19,
-  INVUL: 20,
-  SPELL_BLOCK: 21,
-  BKB: 22,
-  VALO_ULT_RUN_IT_BACK: 23,
-  RA_PHOENIX: 24,
-  YUZU_BARRIER: 25,
-  WAIT_COUNTER: 30,
-  COUNTER: 31,
-  SPINAL_SWORD: 40,
-  PUPPET_MASTER: 41,
-  GAMER_WORLD_STAGE: 42,
-  WT_ERA: 43,
-  GACHA_TRAP_GUARD_COOLDOWN: 44,
-  GACHA_BLUE_EYES_GUARD_COOLDOWN: 44,
-  GACHA_ULTIMATE_GUARD_COOLDOWN: 44,
-  YUZU_TAUNT: 45,
-  PURUISAISHI_SHIELD: 26,
-  YUZU_MARKED: 63,
-  YUZU_EVADE_DOWN: 64,
-  YUZU_DEF_DOWN: 64,
-  YUZU_RES_DOWN: 64,
-  YUZU_ATK_DOWN: 64,
-  YUZU_SLOW: 64,
-  OWL_EVADE_DOWN: 64,
-  MOMO_MIC_DEF_DOWN: 64,
-  MOMO_CAPTAIN: 46,
-  MOMO_VILLAGE_SWORD: 47,
-  MOMO_AWAKENED_SWORD: 47,
-  MOMO_CROWD_JOY: 48,
-  BURN: 60,
-  POISON: 61,
-  BLEED: 61,
-  ORIGINIUM_DISEASE: 60,
-  NO_HEAL: 62,
-};
-
-const getStatusCategory = (type: string, isUnknown: boolean): StatusCategory => {
-  if (isUnknown) return 'unknown';
-  if (CONTROL_STATUS_TYPES.has(type)) return 'control';
-  if (DEFENSE_STATUS_TYPES.has(type)) return 'defense';
-  if (type === 'COUNTER' || type === 'WAIT_COUNTER' || type.startsWith('CTR_')) return 'counter';
-  if (DAMAGE_STATUS_TYPES.has(type)) return 'damage';
-  if (RECOVERY_STATUS_TYPES.has(type)) return 'recovery';
-  if (
-    SPECIAL_STATUS_TYPES.has(type) ||
-    type.startsWith('PLUG_') ||
-    type.startsWith('STYLE_')
-  ) {
-    return 'special';
-  }
-  if (['RAGE', 'AIM', 'DIVA_HEADPHONE_GUARD', 'DIVA_FINAL_CHORUS', 'BABY_LOVE_BOTTLE', 'Q_BUNNY_IDOL_AGL'].includes(type)) return 'buff';
-  if (['BLIND', 'VALO_FLASH'].includes(type)) return 'debuff';
-  return 'buff';
-};
-
-const getStatusPriority = (type: string, category: StatusCategory) => {
-  if (STATUS_PRIORITY_BY_TYPE[type] !== undefined) return STATUS_PRIORITY_BY_TYPE[type];
-  if (type.startsWith('CTR_')) return 32;
-  if (type.startsWith('STYLE_')) return 45;
-  if (type.startsWith('PLUG_')) return 50;
-  return {
-    control: 15,
-    defense: 25,
-    counter: 35,
-    special: 55,
-    damage: 65,
-    recovery: 75,
-    debuff: 85,
-    buff: 90,
-    unknown: 1,
-  }[category];
-};
-
-const getStatusDurationLabel = (status: StatusEntry) => {
-  return statusDurationText({ ...status });
-};
-
-const getStatusDisplayInfo = (status: StatusEntry): StatusDisplayInfo => {
-  const effect = namerenaData.STATUS_EFFECTS?.[status.type] ?? STATUS_DISPLAY_FALLBACKS[status.type] ?? (
-    status.displayName
-      ? { name: status.displayName, icon: status.displayIcon ?? '⬆️', desc: status.displayDesc ?? '限时状态' }
-      : undefined
-  );
-  const sourceName = getDefenseStatusDisplayName(status);
-  const isUnknown = !effect;
-  const category = getStatusCategory(status.type, isUnknown);
-  const fallbackName = status.type.replace(/_/g, ' ');
-
-  return (
-    {
-      type: status.type,
-      name: sourceName ?? effect?.name ?? fallbackName,
-      icon: effect?.icon ?? '❔',
-      desc: effect?.desc ?? '未登记的状态，请检查状态显示表',
-      sourceName,
-      category,
-      priority: getStatusPriority(status.type, category),
-      durationLabel: getStatusDurationLabel(status),
-      isUnknown,
-    }
-  );
-};
-
-const statusGroupKey = (status: StatusEntry) => `${status.type}:${status.sourceId ?? ''}`;
-
-const buildStatusDisplayItems = (statuses: StatusEntry[]): StatusDisplayItem[] => {
-  const grouped = new Map<string, StatusDisplayItem>();
-  statuses.forEach((status) => {
-    const key = statusGroupKey(status);
-    const existing = grouped.get(key);
-    if (!existing) {
-      grouped.set(key, {
-        status: { ...status },
-        count: 1,
-        info: getStatusDisplayInfo(status),
-      });
-      return;
-    }
-    existing.count += 1;
-    if (status.duration > existing.status.duration) {
-      existing.status = { ...status };
-      existing.info = getStatusDisplayInfo(status);
-    }
-  });
-
-  return [...grouped.values()].sort((a, b) =>
-    a.info.priority - b.info.priority ||
-    a.info.name.localeCompare(b.info.name, 'zh-Hans-CN') ||
-    a.info.type.localeCompare(b.info.type),
-  );
-};
-
-const formatStatusTitle = (item: StatusDisplayItem) => {
-  const stackText = item.status.type === 'POISON' ? `（${Math.max(1, item.status.stacks ?? 1)} 层）` : '';
-  const lines = [
-    `${item.info.name}${stackText}${item.count > 1 ? ` x${item.count}` : ''}`,
-    item.info.desc,
-  ];
-  if (item.info.durationLabel) lines.push(`剩余：${item.info.durationLabel}`);
-  if (item.info.sourceName && item.info.sourceName !== item.info.name) {
-    lines.push(`来源：${item.info.sourceName}`);
-  }
-  if (item.status.applierName) lines.push(`施加者：${item.status.applierName}`);
-  if (item.info.isUnknown) lines.push(`原始状态：${item.info.type}`);
-  return lines.join('\n');
-};
-
-function StatusChip({ item, compact = false }: { item: StatusDisplayItem; compact?: boolean }) {
-  const stackText = item.status.type === 'POISON' ? ` x${Math.max(1, item.status.stacks ?? 1)}` : '';
-  const label = compact
-    ? `${item.info.name}${stackText}${item.info.durationLabel ? ` ${item.info.durationLabel}` : ''}`
-    : `${item.info.name}${stackText}`;
-  return (
-    <span
-      title={formatStatusTitle(item)}
-      className={`inline-flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold leading-none shadow-sm ${STATUS_CATEGORY_STYLES[item.info.category]}`}
-    >
-      <span className="shrink-0 text-[12px] leading-none">{item.info.icon}</span>
-      <span className="min-w-0 truncate">{label}</span>
-      {!compact && item.info.durationLabel ? (
-        <span className="shrink-0 rounded bg-slate-950/40 px-1 font-mono text-[9px] leading-4 text-white/80">
-          {item.info.durationLabel}
-        </span>
-      ) : null}
-      {item.count > 1 ? (
-        <span className="shrink-0 rounded bg-slate-950/40 px-1 font-mono text-[9px] leading-4 text-white/80">
-          x{item.count}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function StatusStrip({ statuses }: { statuses: StatusEntry[] }) {
+function StatusStrip({ fighter }: { fighter: Fighter }) {
   const [expanded, setExpanded] = useState(false);
-  const items = buildStatusDisplayItems(statuses);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const items = buildFighterStatusPresentation(fighter);
+  const selected = selectedKey ? items.find((item) => item.key === selectedKey) ?? null : null;
+
   if (items.length === 0) return null;
 
   const visibleItems = expanded ? items : items.slice(0, STATUS_CHIP_LIMIT);
   const hiddenItems = expanded ? [] : items.slice(STATUS_CHIP_LIMIT);
-  const hiddenTitle = hiddenItems.map(formatStatusTitle).join('\n\n');
+  const hiddenTitle = hiddenItems.map((item) => item.detail).join('\n\n');
 
   return (
     <div className="namerena-status-strip mt-2 rounded-lg border border-slate-700/60 bg-slate-950/50 px-2 py-1.5 shadow-inner">
       <div className="flex min-w-0 flex-wrap gap-1">
         {visibleItems.map((item) => (
-          <StatusChip key={statusGroupKey(item.status)} item={item} />
+          <button
+            key={item.key}
+            type="button"
+            title={item.detail}
+            onClick={() => setSelectedKey(item.key)}
+            className={`inline-flex h-7 min-w-0 max-w-full items-center gap-1 rounded-md border px-2 text-[11px] font-bold leading-none shadow-sm ${STATUS_CATEGORY_STYLES[item.polarity]}`}
+          >
+            <span className="shrink-0 text-[13px] leading-none">{item.icon}</span>
+            <span className="min-w-0 truncate">{formatStatusPresentationLabel(item, false)}</span>
+            {item.valueLabel ? (
+              <span className="shrink-0 rounded bg-slate-950/45 px-1 font-mono text-[10px] leading-4 text-white/85">{item.valueLabel}</span>
+            ) : null}
+          </button>
         ))}
         {hiddenItems.length > 0 ? (
           <button
@@ -647,6 +344,31 @@ function StatusStrip({ statuses }: { statuses: StatusEntry[] }) {
           </button>
         ) : null}
       </div>
+      {selected ? (
+        <div className="fixed inset-0 z-[120] flex items-end bg-black/55 p-3 backdrop-blur-sm sm:items-center sm:justify-center" onClick={() => setSelectedKey(null)}>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selected.name}状态详情`}
+            className={`w-full max-w-md rounded-lg border bg-[#0d1217] p-4 text-left shadow-2xl ${STATUS_CATEGORY_STYLES[selected.polarity]}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <span className="text-xl" aria-hidden>{selected.icon}</span>
+                <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2">
+                  <h3 className="min-w-0 break-words text-base font-black text-white">{selected.name}</h3>
+                  {selected.valueLabel ? (
+                    <span className="font-mono text-xs text-cyan-200">{selected.valueLabel}</span>
+                  ) : null}
+                </div>
+              </div>
+              <button type="button" aria-label="关闭状态详情" onClick={() => setSelectedKey(null)} className="grid h-8 w-8 place-items-center rounded-md border border-white/15 text-lg text-slate-300">×</button>
+            </header>
+            <StatusDetailContent detail={selected.detailModel} />
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -663,20 +385,34 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
     candidate.currentHp > 0,
   );
 
-  if ((fighter.originiumInfectionStacks ?? 0) > 0) {
+  if (!fighter.isNpc && fighter.morale !== undefined && fighter.maxMorale !== undefined && fighter.morale < fighter.maxMorale) {
     chips.push({
-      icon: '🦠',
-      label: '矿石病',
-      value: `${fighter.originiumInfectionStacks ?? 0}/80`,
-      title: getResourceTitle('矿石病层数', `${fighter.originiumInfectionStacks ?? 0}/80`, '60 层以上攻击与魔抗加成清零，80 层死亡'),
+      icon: '🫧',
+      label: '士气',
+      value: `${Math.floor(fighter.morale)}/${Math.floor(fighter.maxMorale)}`,
+      title: getResourceTitle('士气', `${Math.floor(fighter.morale)}/${Math.floor(fighter.maxMorale)}`, '士气低于 50 会降低暴击；低于或等于 25 会降低输出；归零后精神崩溃'),
+      tone: fighter.morale <= 25 ? 'combat' : 'tech',
+      priority: 2,
+    });
+  }
+
+  if (!fighter.isNpc && (fighter.stagger ?? 0) > 0) {
+    chips.push({
+      icon: '🟨',
+      label: '失衡',
+      value: `${Math.floor(fighter.stagger ?? 0)}/${Math.floor(fighter.staggerThreshold ?? 40)}`,
+      title: getResourceTitle('失衡值', `${Math.floor(fighter.stagger ?? 0)}/${Math.floor(fighter.staggerThreshold ?? 40)}`, '震颤爆发会增加失衡值；达到阈值时进入踉跄并清零'),
       tone: 'combat',
-      priority: 5,
+      priority: 3,
     });
   }
 
   if (fighter.isPuruisaishi) {
     const phase = Math.max(1, fighter.puruisaishiPhase ?? 1);
-    const shield = Math.max(0, Math.floor(fighter.puruisaishiShield ?? 0));
+    const shield = Math.max(0, Math.floor(getBarrierTotal(
+      fighter,
+      { identityIds: [PURUISAISHI_BARRIER_IDENTITY] },
+    )));
     chips.push({
       icon: '🜲',
       label: '源石映像',
@@ -727,7 +463,10 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
 
   if (fighter.isYuzu) {
     const phase = Math.max(1, fighter.yuzuPhase ?? 1);
-    const shield = Math.max(0, Math.floor(fighter.yuzuShield ?? 0));
+    const shield = Math.max(0, Math.floor(getBarrierTotal(
+      fighter,
+      { identityIds: [YUZU_BARRIER_IDENTITY] },
+    )));
     chips.push({
       icon: '🪞',
       label: '镜界',
@@ -999,7 +738,8 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
   }
 
   if (fighter.isSuccubus) {
-    const plugCount = fighter.status.filter((status) => status.type.startsWith('PLUG_')).length;
+    const plugCount = getStatusIdentityIdsByTag('chimera_plug')
+      .filter((identityId) => hasIdentity(fighter, identityId)).length;
     if (plugCount > 0) {
       chips.push({
         icon: '🧬',
@@ -1039,12 +779,13 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
 };
 
 const buildStageStatusBadges = (fighter: Fighter): NameArenaStageBadge[] =>
-  buildStatusDisplayItems(fighter.status).map((item) => ({
-    key: `status-${statusGroupKey(item.status)}`,
-    icon: item.info.icon,
-    label: `${item.info.name}${item.info.durationLabel ? ` ${item.info.durationLabel}` : ''}${item.count > 1 ? ` x${item.count}` : ''}`,
-    detail: formatStatusTitle(item),
-    tone: item.info.category,
+  buildFighterStatusPresentation(fighter).map((item) => ({
+    key: item.key,
+    icon: item.icon,
+    label: formatStatusPresentationLabel(item),
+    detail: item.detail,
+    statusDetail: item.detailModel,
+    tone: item.polarity,
   }));
 
 const buildStageResourceBadges = (
@@ -1108,17 +849,14 @@ function ResourceStrip({ fighter, fighters, turnCount, battleState }: { fighter:
 
 function HealthBar({ fighter }: { fighter: Fighter }) {
   const hpPct = Math.max(0, Math.min(100, fighter.hpPct * 100));
-  const yuzuShield = Math.max(0, Math.floor(fighter.yuzuShield ?? 0));
-  const puruisaishiShield = Math.max(0, Math.floor(fighter.puruisaishiShield ?? 0));
-  const shield = yuzuShield + puruisaishiShield;
+  const shield = Math.max(0, Math.floor(getBarrierTotal(fighter)));
   const shieldPct = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (shield / fighter.maxHp) * 100)) : 0;
   const effectivePct = fighter.maxHp > 0
     ? Math.max(0, Math.min(100, ((fighter.currentHp + shield) / fighter.maxHp) * 100))
     : hpPct;
   const hasShield = shield > 0;
   const shieldLabel = [
-    yuzuShield > 0 ? `镜界护盾：${yuzuShield}` : null,
-    puruisaishiShield > 0 ? `源石映像护盾：${puruisaishiShield}` : null,
+    ...(fighter.barriers ?? []).filter((barrier) => barrier.value > 0).map((barrier) => `${barrier.displayName}：${Math.floor(barrier.value)}`),
   ].filter(Boolean).join('\n');
   const title = hasShield
     ? `生命：${fighter.currentHp}/${fighter.maxHp}\n${shieldLabel}\n蓝色区域表示护盾覆盖量，护盾会先于生命承受伤害。`
@@ -1180,6 +918,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const battleTurn = battleView.battleTurn;
     const battleState = battleView.battleState;
     const [battleRunId, setBattleRunId] = useState(0);
+    const visualEventLedgerRef = useRef(createBattleVisualEventLedger());
     const [gameState, setGameState] = useState<'SETUP' | 'FIGHTING' | 'END'>('SETUP');
     const [showMvp, setShowMvp] = useState(false);
 
@@ -1219,6 +958,10 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         setBattleUiMode(mode);
     };
 
+    const claimBattleVisualEvent = useCallback((runId: number, eventKey: string): boolean => {
+        return claimVisualEventOnce(visualEventLedgerRef.current, runId, eventKey);
+    }, []);
+
     useEffect(() => {
         const updateScreenMode = () => {
             const portraitPhone = window.innerWidth < 768 && window.innerHeight > window.innerWidth;
@@ -1235,6 +978,14 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
+
+    useEffect(() => {
+        if (battleUiMode !== 'classic') return;
+        const latestLog = displayLogs[displayLogs.length - 1];
+        if (!latestLog?.visualCue) return;
+        const eventKey = latestLog.visualCueId ?? latestLog.id;
+        if (eventKey) claimBattleVisualEvent(battleRunId, eventKey);
+    }, [battleRunId, battleUiMode, claimBattleVisualEvent, displayLogs]);
 
     useEffect(() => {
         if (
@@ -1273,6 +1024,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         setGameState('SETUP');
         fullLogsRef.current = [];
         fullEventsRef.current = [];
+        resetBattleVisualEventLedger(visualEventLedgerRef.current);
 	        setFullLogSnapshot([]);
         fightersRef.current = [];
 	    playbackFightersSnapshotRef.current = [];
@@ -1326,8 +1078,10 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
         const addSetupEvent = (type: string, text: string) => {
             const sequence = ++nextBattleState.eventSequence;
+            const eventId = `event-${sequence}`;
             const event: EngineBattleLogEntry = {
-                id: `event-${sequence}`,
+                id: eventId,
+                rootEventId: eventId,
                 sequence,
                 kind: 'log',
                 visible: true,
@@ -1454,22 +1208,15 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
             const playbackItem: BattlePlaybackItem = {
                 log: logEntry,
                 fighters: latestPlaybackSnapshot,
-                turnCount: engine?.turnCount ?? battleTurnRef.current,
+                battleTurn: engine?.turnCount ?? battleTurnRef.current,
                 battleState: cloneBattleState(engine?.battleState ?? battleStateRef.current),
             };
             if (logEntry.displayInFeed === false) {
-                const previous = pendingPlaybackItemsRef.current[pendingPlaybackItemsRef.current.length - 1];
-                if (previous && previous.log.actionId === logEntry.actionId) {
-                    previous.fighters = playbackItem.fighters;
-                    previous.turnCount = playbackItem.turnCount;
-                    previous.battleState = playbackItem.battleState;
-                    return;
-                }
-                pendingPlaybackItemsRef.current.push(playbackItem);
+                enqueueBattlePlaybackCommit(pendingPlaybackItemsRef.current, playbackItem);
                 return;
             }
             fullLogsRef.current.push(logEntry);
-            pendingPlaybackItemsRef.current.push(playbackItem);
+            enqueueBattlePlaybackCommit(pendingPlaybackItemsRef.current, playbackItem);
         };
 
         engine = new BattleEngine(
@@ -1526,7 +1273,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
             if (playbackItem.log.displayInFeed === false) {
                 setBattleView((current) => commitBattlePlaybackView(current, {
                     fighters: playbackItem.fighters,
-                    battleTurn: playbackItem.turnCount,
+                    battleTurn: playbackItem.battleTurn,
                     battleState: playbackItem.battleState,
                 }));
                 scheduleBattlePump(0);
@@ -1534,7 +1281,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
             }
             setBattleView((current) => commitBattlePlaybackView(current, {
                 fighters: playbackItem.fighters,
-                battleTurn: playbackItem.turnCount,
+                battleTurn: playbackItem.battleTurn,
                 battleState: playbackItem.battleState,
                 log: playbackItem.log,
             }));
@@ -1821,12 +1568,14 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                     <div className="namerena-ui-mode-control flex shrink-0 gap-0.5 rounded border border-slate-700 bg-slate-950 p-0.5" role="group" aria-label="战斗界面版本">
                         <button
                             type="button"
+                            aria-label="新舞台"
                             aria-pressed={battleUiMode === 'next'}
                             onClick={() => changeBattleUiMode('next')}
                             className={`rounded-sm px-2 py-1 text-[11px] font-bold transition-colors ${battleUiMode === 'next' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400 hover:text-white'}`}
                             title="使用新战斗舞台"
                         >
-                            新<span className="namerena-ui-mode-long">舞台</span>
+                            <span className="namerena-ui-mode-short">新版</span>
+                            <span className="namerena-ui-mode-long">新舞台</span>
                         </button>
                         <button
                             type="button"
@@ -1924,6 +1673,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             logGroups={displayLogGroups}
                             battleTurn={battleTurn}
                             battleRunId={battleRunId}
+                            claimVisualEvent={claimBattleVisualEvent}
                             roundProgress={roundProgress}
                             aliveCount={aliveCount}
                             gameState={gameState}
@@ -2017,12 +1767,12 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                                 <div className="mb-1 flex min-w-0 items-end justify-between gap-2">
                                                     <span title={f.name} className="min-w-0 truncate text-sm font-bold md:text-base">
                                                         {f.name}
-                                                        {f.teamId && <span className="text-[10px] ml-1.5 bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 hidden sm:inline-block border border-slate-600 shadow-sm">@{f.teamId}</span>}
+                                                        {formatTeamDisplayLabel(f.teamId) && <span className="text-[10px] ml-1.5 bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 hidden sm:inline-block border border-slate-600 shadow-sm">@{formatTeamDisplayLabel(f.teamId)}</span>}
                                                     </span>
                                                     <span className="inline-flex shrink-0 items-center gap-1 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-bold text-slate-400 shadow-inner">
                                                         <span>{f.currentHp}/{f.maxHp}</span>
-                                                        {((f.yuzuShield ?? 0) + (f.puruisaishiShield ?? 0)) > 0 ? (
-                                                            <span className="rounded bg-sky-500/15 px-1 text-sky-200">+{Math.floor((f.yuzuShield ?? 0) + (f.puruisaishiShield ?? 0))}</span>
+                                                        {getBarrierTotal(f) > 0 ? (
+                                                            <span className="rounded bg-sky-500/15 px-1 text-sky-200">+{Math.floor(getBarrierTotal(f))}</span>
                                                         ) : null}
                                                     </span>
                                                 </div>
@@ -2030,7 +1780,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                                 <HealthBar fighter={f} />
                                             </div>
                                         </div>
-                                        <StatusStrip statuses={f.status} />
+                                        <StatusStrip fighter={f} />
                                         <ResourceStrip fighter={f} fighters={fighters} turnCount={battleTurn} battleState={battleState} />
                                         {!f.isDead && (
                                             <StatGrid fighter={f} />
@@ -2132,6 +1882,10 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                     background: #11171d;
                 }
 
+                .namerena-ui-mode-short {
+                    display: none;
+                }
+
                 .namerena-integrated-shell .namerena-game-header {
                     padding-top: max(0.75rem, env(safe-area-inset-top));
                     padding-left: max(0.75rem, env(safe-area-inset-left));
@@ -2139,6 +1893,12 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                 }
 
                 @media (max-width: 767px) and (orientation: portrait) {
+                    .namerena-speed-control button,
+                    .namerena-ui-mode-control button {
+                        min-width: 2rem;
+                        min-height: 2rem;
+                        padding: 0;
+                    }
                     .namerena-mobile-tabs {
                         display: flex;
                     }
@@ -2221,11 +1981,19 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                         gap: 0.125rem;
                     }
                     .namerena-speed-control button {
-                        padding: 0.25rem 0.375rem;
+                        min-width: 1.75rem;
+                        min-height: 1.75rem;
+                        padding: 0;
                         font-size: 0.625rem;
+                    }
+                    .namerena-ui-mode-control button {
+                        min-height: 1.75rem;
                     }
                     .namerena-ui-mode-long {
                         display: none;
+                    }
+                    .namerena-ui-mode-short {
+                        display: inline;
                     }
                     .namerena-mobile-tabs {
                         display: none;

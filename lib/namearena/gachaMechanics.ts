@@ -1,10 +1,5 @@
-import { healFighter, isActiveCombatant } from './combatState';
-import {
-  COMMON_NEGATIVE_STATUS_TYPES,
-  CONTROL_STATUS_TYPES,
-  REVIVE_CLEAN_STATUS_TYPES,
-  isStatusType,
-} from './statusRules';
+import { clearZeroedStatPenalty, healFighter, isActiveCombatant, resolveHealing } from './combatState';
+import { getStatusIdentityIdsByTag } from './statusRegistry';
 import type {
   BattleCombatEffectId,
   BattleEngineData,
@@ -14,11 +9,12 @@ import type {
   GachaEntry,
   SkillContext,
 } from './types';
-import {
-  grantStatus,
-} from './defenseStatus';
+
 import { isSelectableTargetFor } from './targeting';
-import { clearZeroedStatPenalty } from './statModifiers';
+import { applyStatus, hasIdentity, removeBarriers, removeEffects } from './statusSystem';
+import { hasStatusApplication } from './skillEffects';
+import { getEffectiveCombatStat } from './statusMechanics';
+import { isDamageRedirected } from './damageRedirects';
 
 export const GACHA_LUCK_MAX = 5;
 export const GACHA_SUMMON_LIFESTEAL_STATUS = 'GACHA_SUMMON_LIFESTEAL';
@@ -29,6 +25,12 @@ export const GACHA_ADVANCED_SUMMON_NAMES = ['青眼白龙', '翼神龙', '黑暗
 const EXODIA_NORMAL_PIECE_CHANCES = [0.055, 0.11, 0.21, 0.38, 0.62] as const;
 const EXODIA_SMALL_PITY_PIECE_CHANCES = [0.09, 0.18, 0.36, 0.68, 1] as const;
 const EXODIA_MAJOR_PITY_PIECE_CHANCES = [0, 0.16, 0.46, 0.86, 1] as const;
+
+function summonPower(fighter: Fighter): number {
+  return getEffectiveCombatStat(fighter, 'atk') +
+    getEffectiveCombatStat(fighter, 'mag') +
+    getEffectiveCombatStat(fighter, 'spd');
+}
 
 type LogFn = (type: string, text: string, metadata?: BattleLogMetadata) => void;
 
@@ -63,9 +65,54 @@ export function gachaEffectMetadata(
 ): BattleLogMetadata {
   const targetIds = targets.map((target) => target.id);
   return {
+    actorId: source.id,
+    actorName: source.name,
     targetIds,
     visualCue: {
       kind: 'combat_fx',
+      effectId,
+      sourceId: source.id,
+      targetIds,
+      ...options,
+    },
+  };
+}
+
+function gachaActionMetadata(
+  effectId: BattleCombatEffectId,
+  source: Fighter,
+  targets: Fighter[] = [],
+  options: Omit<GachaEffectOptions, 'source' | 'targets' | 'links'> = {},
+): BattleLogMetadata {
+  const targetIds = targets.map((target) => target.id);
+  return {
+    actorId: source.id,
+    actorName: source.name,
+    targetIds,
+    visualCue: {
+      kind: 'combat_action',
+      effectId,
+      sourceId: source.id,
+      targetIds,
+      presentation: 'skill',
+      ...options,
+    },
+  };
+}
+
+export function gachaReactionMetadata(
+  effectId: BattleCombatEffectId,
+  source: Fighter,
+  targets: Fighter[] = [],
+  options: Omit<GachaEffectOptions, 'source' | 'targets' | 'links'> = {},
+): BattleLogMetadata {
+  const targetIds = targets.map((target) => target.id);
+  return {
+    actorId: source.id,
+    actorName: source.name,
+    targetIds,
+    visualCue: {
+      kind: 'reaction_fx',
       effectId,
       sourceId: source.id,
       targetIds,
@@ -83,10 +130,6 @@ function logGachaEffect(
 ): void {
   const { source = ctx.user, targets = [], ...cueOptions } = options;
   ctx.log(type, text, gachaEffectMetadata(effectId, source, targets, cueOptions));
-}
-
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(fighter, type, duration, sourceId);
 }
 
 function activeFighters(runtime: LuckDrawRuntime): Fighter[] {
@@ -220,20 +263,9 @@ function restoreZeroedStats(user: Fighter): void {
   clearZeroedStatPenalty(user);
 }
 
-function cleanseLuckEmperor(user: Fighter): void {
+function cleanseLuckEmperor(user: Fighter, strongDispel: (target: Fighter) => void): void {
   restoreZeroedStats(user);
-  const cleanTypes = new Set([
-    ...COMMON_NEGATIVE_STATUS_TYPES,
-    ...REVIVE_CLEAN_STATUS_TYPES,
-    'WATER_PRISON',
-    'WT_SUPPRESS',
-    'WT_AIRBORNE',
-    'WT_REPAIRING',
-    'NO_HEAL',
-    'WEAK',
-    'ZEROED',
-  ]);
-  user.status = user.status.filter((status) => !cleanTypes.has(status.type));
+  strongDispel(user);
 }
 
 export function isLuckEmperor(fighter: Fighter): boolean {
@@ -265,7 +297,7 @@ export function grantGachaLuck(
   log(
     'buff',
     `🍀 ${fighter.name} 因${reason}积攒欧气 +${gained}！（${hint}）`,
-    gachaEffectMetadata('gacha_luck_gain', fighter, [fighter], { count: after }),
+    { actorId: fighter.id, actorName: fighter.name, targetIds: [fighter.id] },
   );
   return gained;
 }
@@ -287,7 +319,11 @@ export function activateGachaSummonLifesteal(
 ): void {
   if (!isLuckEmperor(user)) return;
   user.gachaSummonLifestealPct = GACHA_SUMMON_LIFESTEAL_PCT;
-  refreshStatus(user, GACHA_SUMMON_LIFESTEAL_STATUS, turns);
+  applyStatus(user, {
+    identityId: GACHA_SUMMON_LIFESTEAL_STATUS,
+    remainingTurns: turns,
+    attribution: { effectSourceId: GACHA_SUMMON_LIFESTEAL_STATUS },
+  });
   log(
     'buff',
     `🧛 ${user.name} 抽到吸血牌！接下来 ${turns} 回合内，召唤物造成伤害的 ${Math.floor(GACHA_SUMMON_LIFESTEAL_PCT * 100)}% 会转化为治疗灌回本体！`,
@@ -306,14 +342,9 @@ export function applyGachaSummonLifesteal(
     fighter.id === attacker.summonerId &&
     isLuckEmperor(fighter) &&
     runtime.isActiveCombatant(fighter) &&
-    fighter.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS),
+    hasIdentity(fighter, GACHA_SUMMON_LIFESTEAL_STATUS),
   );
   if (!summoner) return;
-
-  if (summoner.status.some((status) => status.type === 'NO_HEAL')) {
-    runtime.log('info', `🥀 ${summoner.name} 处于禁疗状态，吸血牌无法回收召唤物造成的伤害！`);
-    return;
-  }
 
   const healPct = summoner.gachaSummonLifestealPct ?? GACHA_SUMMON_LIFESTEAL_PCT;
   const healed = healFighter(summoner, Math.floor(healBase * healPct), runtime.log);
@@ -321,7 +352,7 @@ export function applyGachaSummonLifesteal(
     runtime.log(
       'heal',
       `🧛 吸血牌回流！${attacker.name} 的伤害为 ${summoner.name} 恢复了 ${healed} 点生命！`,
-      gachaEffectMetadata('gacha_lifesteal_proc', attacker, [summoner]),
+      { actorId: attacker.id, actorName: attacker.name, targetIds: [summoner.id] },
     );
   }
 }
@@ -330,21 +361,22 @@ export function triggerGachaDeathSave(
   fighter: Fighter,
   log: LogFn,
   syncHpPct: (fighter: Fighter) => void,
+  strongDispel: (target: Fighter) => void,
 ): boolean {
   if (!isLuckEmperor(fighter) || fighter.hasUsedGachaDeathSave) return false;
 
   fighter.hasUsedGachaDeathSave = true;
-  cleanseLuckEmperor(fighter);
   fighter.currentHp = Math.max(1, Math.floor(fighter.maxHp * 0.3));
-  refreshStatus(fighter, 'SPELL_BLOCK', 3, 'gacha_death_charm');
-  refreshStatus(fighter, 'BKB', 2, 'gacha_death_charm');
-  refreshStatus(fighter, 'REGEN', 3);
   syncHpPct(fighter);
   log(
     'buff',
-    `👑 【欧皇护符】${fighter.name} 在致死瞬间强行改命，清除异常并锁住了 ${fighter.currentHp} 点生命！`,
-    gachaEffectMetadata('gacha_death_save', fighter, [fighter]),
+    `👑 【欧皇护符】${fighter.name} 在致死瞬间强行改命，锁住了 ${fighter.currentHp} 点生命，并开始清除异常！`,
+    gachaReactionMetadata('gacha_death_save', fighter, [fighter]),
   );
+  cleanseLuckEmperor(fighter, strongDispel);
+  applyStatus(fighter, { identityId: 'SPELL_BLOCK', charges: 3, attribution: { effectSourceId: 'gacha_death_charm' } });
+  applyStatus(fighter, { identityId: 'BKB', remainingTurns: 2, attribution: { effectSourceId: 'gacha_death_charm' } });
+  applyStatus(fighter, { identityId: 'REGEN', remainingTurns: 3 });
   grantGachaLuck(fighter, 3, log, '死里逃生');
   return true;
 }
@@ -377,8 +409,8 @@ function activeContextOrdinarySummons(ctx: SkillContext): Fighter[] {
 }
 
 function canSummonRespondToCommand(summon: Fighter): boolean {
-  if (summon.status.some((status) => status.type === 'BKB' || status.type === 'STYLE_FOOL')) return true;
-  return !summon.status.some((status) => isStatusType(status.type, CONTROL_STATUS_TYPES));
+  if (hasIdentity(summon, 'BKB') || hasIdentity(summon, 'STYLE_FOOL')) return true;
+  return !getStatusIdentityIdsByTag('control').some((identityId) => hasIdentity(summon, identityId));
 }
 
 function responsiveContextFriendlySummons(ctx: SkillContext): Fighter[] {
@@ -410,14 +442,32 @@ function damageFromSummon(
   amount: number,
   actionName: string,
   trueDamage = false,
-  options: { deferOutcome?: boolean } = {},
+  options: {
+    deferOutcome?: boolean;
+    effectId?: BattleCombatEffectId;
+    openingText?: string;
+    afterDamage?: (actualDamage: number, redirected: boolean) => void;
+  } = {},
 ): number {
-  const damageOptions: DamageApplicationOptions = { actionName };
-  const actualDmg = ctx.applyDamage(target, amount, 'skill', trueDamage, summon, damageOptions);
-  if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) return 0;
-  if (options.deferOutcome) return actualDmg;
-  finalizeSummonDamage(ctx, summon, target, actionName);
-  return actualDmg;
+  let actualDmg = 0;
+  let redirected = false;
+  ctx.runReactionAction(summon, {
+    skillId: 'gacha_summon_card_attack',
+    skillName: actionName,
+    presentation: 'skill',
+    targets: [target],
+    triggerDepth: ctx.triggerDepth + 1,
+  }, () => {
+    if (options.effectId && options.openingText) {
+      ctx.log('skill', options.openingText, gachaActionMetadata(options.effectId, summon, [target]));
+    }
+    const damageOptions: DamageApplicationOptions = { actionName, sourceKind: 'custom' };
+    actualDmg = ctx.applyDamage(target, amount, 'skill', trueDamage, summon, damageOptions);
+    redirected = isDamageRedirected(damageOptions);
+    if (!redirected && !options.deferOutcome) finalizeSummonDamage(ctx, summon, target, actionName);
+    options.afterDamage?.(redirected ? 0 : actualDmg, redirected);
+  });
+  return redirected ? 0 : actualDmg;
 }
 
 function finalizeSummonDamage(ctx: SkillContext, summon: Fighter, target: Fighter, actionName: string): void {
@@ -557,7 +607,7 @@ export const GACHA_SUMMON_COMMAND_CARD: GachaEntry = {
   requiresAnyFriendlySummon: true,
   onExecute: (ctx) => {
     const summons = responsiveContextFriendlySummons(ctx)
-      .sort((a, b) => (b.atk + b.mag + b.spd) - (a.atk + a.mag + a.spd));
+      .sort((a, b) => summonPower(b) - summonPower(a));
     const summon = summons[0];
     if (!summon) {
       ctx.log('info', `🎴 【召唤指令】${ctx.user.name} 发出指令，但己方召唤物都被控制，没人能响应！`);
@@ -593,26 +643,44 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
       const activeTargets = enemies.filter((enemy) => isActiveCombatant(enemy));
       const target = activeTargets[Math.floor(Math.random() * activeTargets.length)];
       if (!target) continue;
-      const dmg = Math.max(1, Math.floor((summon.atk + summon.mag) * 1.05));
-      const damageOptions: DamageApplicationOptions = { actionName: '全军进击' };
-      const actualDmg = ctx.applyDamage(target, dmg, 'skill', false, summon, damageOptions);
-      if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
-        ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 的防护机制转移，原目标没有受伤；转移伤害已单独结算！`);
-        continue;
-      }
-      logGachaEffect(
-        ctx,
-        actualDmg > 0 ? 'skill' : 'info',
-        actualDmg > 0
-          ? `⚔️ ${summon.name} 响应进击，命中 ${target.name}，实际造成 ${actualDmg} 点伤害！`
-          : `⚔️ ${summon.name} 的进击被 ${target.name} 化解，没有造成实际伤害！`,
-        'gacha_all_out_attack',
-        { source: summon, targets: [target] },
-      );
-      ctx.flushDeferredDamageEvents?.();
-      if (target.currentHp <= 0) {
-        ctx.markDefeated(target, { message: `💀 【全军进击】${target.name} 被 ${summon.name} 击败！`, killer: summon });
-      }
+      ctx.runReactionAction(summon, {
+        skillId: 'gacha_all_out_summon_attack',
+        skillName: '全军进击',
+        presentation: 'skill',
+        targets: [target],
+        triggerDepth: ctx.triggerDepth + 1,
+      }, () => {
+        ctx.log(
+          'skill',
+          `⚔️ ${summon.name} 响应【全军进击】，向 ${target.name} 压上！`,
+          gachaActionMetadata('gacha_all_out_attack', summon, [target]),
+        );
+        const dmg = Math.max(1, Math.floor((
+          getEffectiveCombatStat(summon, 'atk', 'custom') +
+          getEffectiveCombatStat(summon, 'mag', 'custom')
+        ) * 1.05));
+        const damageOptions: DamageApplicationOptions = { actionName: '全军进击', sourceKind: 'custom' };
+        const actualDmg = ctx.applyDamage(target, dmg, 'skill', false, summon, damageOptions);
+        if (isDamageRedirected(damageOptions)) {
+          ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 的防护机制转移，原目标没有受伤；转移伤害已单独结算！`, {
+            actorId: summon.id,
+            actorName: summon.name,
+            targetIds: [target.id],
+          });
+          return;
+        }
+        ctx.log(
+          actualDmg > 0 ? 'skill' : 'info',
+          actualDmg > 0
+            ? `⚔️ ${summon.name} 命中 ${target.name}，实际造成 ${actualDmg} 点伤害！`
+            : `⚔️ ${summon.name} 的进击被 ${target.name} 化解，没有造成实际伤害！`,
+          { actorId: summon.id, actorName: summon.name, targetIds: [target.id] },
+        );
+        ctx.flushDeferredDamageEvents?.();
+        if (target.currentHp <= 0) {
+          ctx.markDefeated(target, { message: `💀 【全军进击】${target.name} 被 ${summon.name} 击败！`, killer: summon });
+        }
+      });
     }
     return true;
   },
@@ -626,8 +694,8 @@ export const GACHA_TRIBUTE_PREP_CARD: GachaEntry = {
   onExecute: (ctx) => {
     const summons = activeContextOrdinarySummons(ctx);
     for (const summon of summons) {
-      refreshStatus(summon, 'SPELL_BLOCK', 2, 'gacha_tribute_compensation');
-      refreshStatus(summon, 'REGEN', 2);
+      applyStatus(summon, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'gacha_tribute_compensation' } });
+      applyStatus(summon, { identityId: 'REGEN', remainingTurns: 2 });
     }
     logGachaEffect(
       ctx,
@@ -658,10 +726,18 @@ export const GACHA_SUMMON_RECYCLE_CARD: GachaEntry = {
     );
     ctx.markDefeated(victim, { message: `💀 【召唤物回收】${victim.name} 被 ${ctx.user.name} 回收为卡组资源！`, awardKill: false });
     victim.isDead = true;
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.18), ctx.log);
-    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    const healing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * 0.18), {
+      kind: 'direct',
+      sourceId: '召唤物回收',
+      healer: ctx.user,
+    }, ctx.log);
+    const healText = healing.actual > 0
+      ? `恢复 ${healing.actual} 点生命`
+      : healing.outcome === 'blocked'
+        ? '治疗被完全阻止'
+        : '生命已满，治疗溢出';
     ctx.log(
-      healed > 0 ? 'heal' : 'info',
+      healing.actual > 0 ? 'heal' : 'info',
       `♻️ 【召唤物回收】${ctx.user.name} 回收 ${victim.name}，${healText}，并获得 2 点欧气！`,
       { targetIds: [ctx.user.id] },
     );
@@ -691,16 +767,18 @@ export const GACHA_MONSTER_REBORN_CARD: GachaEntry = {
     target.isDead = false;
     target.isDeadAnnounced = false;
     target.defeatHooksResolved = false;
-    target.status = [];
     target.currentHp = Math.max(1, Math.floor(target.maxHp * 0.55));
-    target.hpPct = target.currentHp / target.maxHp;
     logGachaEffect(
       ctx,
       'heal',
-      `⚗️ 【死者苏生】${ctx.user.name} 将 ${target.name} 从墓地拉回战场，恢复到 ${target.currentHp} 点生命！`,
+      `⚗️ 【死者苏生】${ctx.user.name} 发动卡片，将 ${target.name} 从墓地拉回战场并开始重塑状态！`,
       'gacha_monster_reborn',
       { targets: [target], label: target.name },
     );
+    removeEffects(target, { reason: 'revive' });
+    removeBarriers(target);
+    target.hpPct = target.currentHp / target.maxHp;
+    ctx.log('heal', `⚗️ 【死者苏生完成】${target.name} 已恢复到 ${target.currentHp} 点生命！`, { targetIds: [target.id] });
     return true;
   },
 };
@@ -710,15 +788,25 @@ export const GACHA_ASH_BLOSSOM_CARD: GachaEntry = {
   tag: 'debuff',
   visualEffect: 'gacha_ash_blossom',
   onExecute: (ctx) => {
-    if (ctx.applyStatus(ctx.target, 'STUN', 2, { effectName: '灰流丽的打断效果' })) {
-      logGachaEffect(
-        ctx,
-        'skill',
-        `🌸 【灰流丽】${ctx.user.name} 无效了 ${ctx.target.name} 的下一次关键行动，使其眩晕！`,
-        'gacha_ash_blossom',
-        { targets: [ctx.target] },
-      );
-    }
+    logGachaEffect(
+      ctx,
+      'skill',
+      `🌸 【灰流丽】${ctx.user.name} 抛出手坑，试图无效 ${ctx.target.name} 的下一次关键行动！`,
+      'gacha_ash_blossom',
+      { targets: [ctx.target] },
+    );
+    const applied = ctx.applyStatus(ctx.target, {
+      identityId: 'STUN',
+      remainingTurns: 2,
+      effectName: '灰流丽的打断效果',
+    });
+    ctx.log(
+      applied ? 'debuff' : 'info',
+      applied
+        ? `🌸 【灰流丽结算】${ctx.target.name} 的下一次关键行动已被封锁，陷入眩晕！`
+        : `🌸 【灰流丽结算】${ctx.target.name} 抵挡了打断，眩晕未能生效。`,
+      { actorId: ctx.user.id, actorName: ctx.user.name, targetIds: [ctx.target.id] },
+    );
     return true;
   },
 };
@@ -728,8 +816,8 @@ export const GACHA_MIRROR_FORCE_CARD: GachaEntry = {
   tag: 'buff',
   visualEffect: 'gacha_mirror_force',
   onExecute: (ctx) => {
-    refreshStatus(ctx.user, 'COUNTER', 2);
-    for (const summon of activeContextFriendlySummons(ctx)) refreshStatus(summon, 'COUNTER', 2);
+    applyStatus(ctx.user, { identityId: 'COUNTER', remainingTurns: 2 });
+    for (const summon of activeContextFriendlySummons(ctx)) applyStatus(summon, { identityId: 'COUNTER', remainingTurns: 2 });
     const protectedUnits = [ctx.user, ...activeContextFriendlySummons(ctx)];
     logGachaEffect(
       ctx,
@@ -778,17 +866,25 @@ export const GACHA_BLUE_EYES_BURST_CARD: GachaEntry = {
       ctx.log('info', `🐲 【毁灭爆裂疾风弹】${ctx.user.name} 翻开支援牌，但 ${blueEyes.name} 正被控制，无法释放龙息！`);
       return true;
     }
-    const dmg = Math.floor(blueEyes.mag * 4.2 + blueEyes.atk * 2.1);
-    logGachaEffect(
-      ctx,
-      'skill',
-      `🐲 【毁灭爆裂疾风弹】${ctx.user.name} 翻开支援牌，${blueEyes.name} 向 ${ctx.target.name} 轰出白色龙息！`,
-      'gacha_blue_eyes_burst',
-      { source: blueEyes, targets: [ctx.target] },
+    const dmg = Math.floor(
+      getEffectiveCombatStat(blueEyes, 'mag', 'custom') * 4.2 +
+      getEffectiveCombatStat(blueEyes, 'atk', 'custom') * 2.1,
     );
-    const actualDmg = damageFromSummon(ctx, blueEyes, ctx.target, dmg, '毁灭爆裂疾风弹', true, { deferOutcome: true });
-    if (actualDmg > 0) ctx.log('crit', `🐲 白龙龙息贯穿 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`);
-    finalizeSummonDamage(ctx, blueEyes, ctx.target, '毁灭爆裂疾风弹');
+    damageFromSummon(ctx, blueEyes, ctx.target, dmg, '毁灭爆裂疾风弹', true, {
+      deferOutcome: true,
+      effectId: 'gacha_blue_eyes_burst',
+      openingText: `🐲 【毁灭爆裂疾风弹】${ctx.user.name} 翻开支援牌，${blueEyes.name} 向 ${ctx.target.name} 轰出白色龙息！`,
+      afterDamage: (actualDmg, redirected) => {
+        if (!redirected && actualDmg > 0) {
+          ctx.log('crit', `🐲 白龙龙息贯穿 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`, {
+            actorId: blueEyes.id,
+            actorName: blueEyes.name,
+            targetIds: [ctx.target.id],
+          });
+        }
+        if (!redirected) finalizeSummonDamage(ctx, blueEyes, ctx.target, '毁灭爆裂疾风弹');
+      },
+    });
     return true;
   },
 };
@@ -801,9 +897,9 @@ export const GACHA_TRUE_LIGHT_CARD: GachaEntry = {
   onExecute: (ctx) => {
     const blueEyes = contextFriendlySummonByBaseName(ctx, '青眼白龙');
     if (!blueEyes) return false;
-    refreshStatus(blueEyes, 'SPELL_BLOCK', 3, 'gacha_true_light');
-    refreshStatus(blueEyes, 'BKB', 2, 'gacha_true_light');
-    refreshStatus(blueEyes, 'REGEN', 3);
+    applyStatus(blueEyes, { identityId: 'SPELL_BLOCK', charges: 3, attribution: { effectSourceId: 'gacha_true_light' } });
+    applyStatus(blueEyes, { identityId: 'BKB', remainingTurns: 2, attribution: { effectSourceId: 'gacha_true_light' } });
+    applyStatus(blueEyes, { identityId: 'REGEN', remainingTurns: 3 });
     const healed = blueEyes.hpPct <= 0.55 ? healFighter(blueEyes, Math.floor(blueEyes.maxHp * 0.22), ctx.log) : 0;
     consumeGachaLuck(ctx.user, 1);
     logGachaEffect(
@@ -826,7 +922,7 @@ export const GACHA_ANCIENT_CHANT_CARD: GachaEntry = {
     const ra = contextFriendlySummonByBaseName(ctx, '翼神龙');
     if (!ra) return false;
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
-    refreshStatus(ra, 'SPELL_BLOCK', 2, 'gacha_ancient_chant');
+    applyStatus(ra, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'gacha_ancient_chant' } });
     const healed = healFighter(ra, Math.floor(ra.maxHp * 0.18), ctx.log);
     logGachaEffect(
       ctx,
@@ -853,22 +949,40 @@ export const GACHA_BLAZE_CANNON_CARD: GachaEntry = {
       return true;
     }
     const burnHp = Math.min(ra.currentHp - 1, Math.max(1, Math.floor(ra.maxHp * 0.22)));
-    ra.currentHp = Math.max(1, ra.currentHp - burnHp);
-    ra.hpPct = ra.currentHp / ra.maxHp;
+    const burnOptions: DamageApplicationOptions = {
+      actionName: '太阳神火焰加农·生命燃烧',
+      sourceKind: 'self_cost',
+      respectDefenses: false,
+      bypassShields: true,
+      creditAttacker: false,
+      suppressStatusAftermath: true,
+      suppressOwlCooperation: true,
+      bypassOwlOutgoingModifier: true,
+      bypassOwlIncomingModifier: true,
+    };
+    const actualBurnHp = ctx.applyDamage(ra, burnHp, 'self_cost', true, ra, burnOptions);
     const boost = ra.raChantBoost ?? 0;
     ra.raChantBoost = 0;
-    const dmg = Math.floor(burnHp * (2.8 + boost * 0.75) + ra.mag * 3.0);
-    logGachaEffect(
-      ctx,
-      'crit',
-      `🔥 【太阳神火焰加农】${ra.name} 燃烧 ${burnHp} 点生命，向 ${ctx.target.name} 释放神炎！（古之咒文强化 ${boost} 层）`,
-      'gacha_blaze_cannon',
-      { source: ra, targets: [ctx.target], count: boost },
+    const dmg = Math.floor(
+      actualBurnHp * (2.8 + boost * 0.75) +
+      getEffectiveCombatStat(ra, 'mag', 'custom') * 3.0,
     );
-    const actualDmg = damageFromSummon(ctx, ra, ctx.target, dmg, '太阳神火焰加农', true, { deferOutcome: true });
-    if (actualDmg > 0) ctx.log('crit', `🔥 神炎命中 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`);
-    finalizeSummonDamage(ctx, ra, ctx.target, '太阳神火焰加农');
-    if (isActiveCombatant(ra)) refreshStatus(ra, 'BKB', 1, 'ra_divine_aura');
+    damageFromSummon(ctx, ra, ctx.target, dmg, '太阳神火焰加农', true, {
+      deferOutcome: true,
+      effectId: 'gacha_blaze_cannon',
+      openingText: `🔥 【太阳神火焰加农】${ra.name} 燃烧 ${actualBurnHp} 点生命，向 ${ctx.target.name} 释放神炎！（古之咒文强化 ${boost} 层）`,
+      afterDamage: (actualDmg, redirected) => {
+        if (!redirected && actualDmg > 0) {
+          ctx.log('crit', `🔥 神炎命中 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`, {
+            actorId: ra.id,
+            actorName: ra.name,
+            targetIds: [ctx.target.id],
+          });
+        }
+        if (!redirected) finalizeSummonDamage(ctx, ra, ctx.target, '太阳神火焰加农');
+      },
+    });
+    if (isActiveCombatant(ra)) applyStatus(ra, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'ra_divine_aura' } });
     return true;
   },
 };
@@ -885,7 +999,11 @@ export const GACHA_RA_PHOENIX_CARD: GachaEntry = {
       ctx.log('info', `🔥 ${ra.name} 已经使用过【神不死鸟】，太阳神力无法再次复燃。`);
       return true;
     }
-    refreshStatus(ra, GACHA_RA_PHOENIX_STATUS, 6);
+    applyStatus(ra, {
+      identityId: GACHA_RA_PHOENIX_STATUS,
+      remainingTurns: 6,
+      attribution: { effectSourceId: GACHA_RA_PHOENIX_STATUS },
+    });
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
     logGachaEffect(
       ctx,
@@ -917,9 +1035,17 @@ export const GACHA_RA_TRIBUTE_ASCENSION_CARD: GachaEntry = {
     );
     ctx.markDefeated(victim, { message: `💀 【献祭升格】${victim.name} 化作 ${ra.name} 的太阳神力！`, awardKill: false });
     victim.isDead = true;
-    const healed = healFighter(ra, Math.floor(ra.maxHp * 0.28), ctx.log);
+    const healing = resolveHealing(ra, Math.floor(ra.maxHp * 0.28), {
+      kind: 'direct',
+      sourceId: '献祭升格',
+      healer: ctx.user,
+    }, ctx.log);
     ra.raChantBoost = Math.min(3, (ra.raChantBoost ?? 0) + 1);
-    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
+    const healText = healing.actual > 0
+      ? `恢复 ${healing.actual} 点生命`
+      : healing.outcome === 'blocked'
+        ? '治疗被完全阻止'
+        : '生命已满，治疗溢出';
     ctx.log(
       'buff',
       `🛐 【献祭升格】${ctx.user.name} 献祭 ${victim.name}，${ra.name} ${healText}，并获得 1 层太阳神力！`,
@@ -935,18 +1061,29 @@ export const GACHA_SMALL_PITY_CARD: GachaEntry = {
   visualEffect: 'gacha_small_pity',
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, 3);
-    cleanseLuckEmperor(ctx.user);
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.22 + power * 0.03)), ctx.log);
-    refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_small_pity');
-    refreshStatus(ctx.user, 'REGEN', 3);
-    const healText = healed > 0 ? `恢复了 ${healed} 点生命` : '生命已满，治疗溢出';
     logGachaEffect(
       ctx,
       'heal',
-      `🍀 【小保底歪了但没完全歪】${ctx.user.name} 被保底光芒护住，${healText}，并获得法术抵挡与再生！`,
+      `🍀 【小保底歪了但没完全歪】${ctx.user.name} 被保底光芒护住，开始改写异常状态！`,
       'gacha_small_pity',
       { targets: [ctx.user], count: power },
     );
+    cleanseLuckEmperor(ctx.user, (target) => {
+      ctx.dispelStatusEffects(target, { strength: 'strong', direction: 'negative' });
+    });
+    const healing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * (0.22 + power * 0.03)), {
+      kind: 'direct',
+      sourceId: '小保底',
+      healer: ctx.user,
+    }, ctx.log);
+    applyStatus(ctx.user, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'gacha_small_pity' } });
+    applyStatus(ctx.user, { identityId: 'REGEN', remainingTurns: 3 });
+    const healText = healing.actual > 0
+      ? `恢复了 ${healing.actual} 点生命`
+      : healing.outcome === 'blocked'
+        ? '治疗被完全阻止'
+        : '生命已满，治疗溢出';
+    ctx.log(healing.outcome === 'blocked' ? 'info' : 'heal', `🍀 【小保底结算】${ctx.user.name} ${healText}，并获得法术抵挡与再生！`, { targetIds: [ctx.user.id] });
     return true;
   },
 };
@@ -970,11 +1107,11 @@ export const GACHA_CEILING_EXCHANGE_CARD: GachaEntry = {
       return true;
     }
 
-    const summons = responsiveContextFriendlySummons(ctx).sort((a, b) => (b.atk + b.mag + b.spd) - (a.atk + a.mag + a.spd));
+    const summons = responsiveContextFriendlySummons(ctx).sort((a, b) => summonPower(b) - summonPower(a));
     if (summons.length > 0) {
       const leader = summons[0];
       if (leader) {
-        refreshStatus(leader, 'SPELL_BLOCK', 2, 'gacha_heavenly_exchange');
+        applyStatus(leader, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'gacha_heavenly_exchange' } });
         commandSummon(ctx, leader, '天井指令');
         if (power >= GACHA_LUCK_MAX && isActiveCombatant(leader)) commandSummon(ctx, leader, '天井连携');
       }
@@ -1014,7 +1151,7 @@ export const GACHA_TEN_PULL_GOLD_CARD: GachaEntry = {
     for (const summon of activeContextFriendlySummons(ctx)) {
       summon.atk = Math.floor(summon.atk * (1.08 + power * 0.01));
       summon.mag = Math.floor(summon.mag * (1.08 + power * 0.01));
-      refreshStatus(summon, 'REGEN', 2);
+      applyStatus(summon, { identityId: 'REGEN', remainingTurns: 2 });
     }
     return true;
   },
@@ -1026,19 +1163,30 @@ export const GACHA_WHALE_REWRITE_CARD: GachaEntry = {
   visualEffect: 'gacha_whale_rewrite',
   onExecute: (ctx: SkillContext) => {
     const power = getPityPower(ctx.user, 3);
-    cleanseLuckEmperor(ctx.user);
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * (0.18 + power * 0.04)), ctx.log);
-    refreshStatus(ctx.user, 'BKB', 1, 'gacha_whale_rewrite');
-    refreshStatus(ctx.user, 'SPELL_BLOCK', 2, 'gacha_whale_rewrite');
-    refreshStatus(ctx.user, 'REGEN', 3);
-    const healText = healed > 0 ? `恢复 ${healed} 点生命` : '生命已满，治疗溢出';
     logGachaEffect(
       ctx,
       'buff',
-      `💳 【氪金改命】${ctx.user.name} 清除异常，${healText}，并获得改命抗性、法术抵挡与再生！`,
+      `💳 【氪金改命】${ctx.user.name} 把这一回合从坏结局里买了回来，开始重写异常与伤势！`,
       'gacha_whale_rewrite',
       { targets: [ctx.user], count: power },
     );
+    cleanseLuckEmperor(ctx.user, (target) => {
+      ctx.dispelStatusEffects(target, { strength: 'strong', direction: 'negative' });
+    });
+    const healing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * (0.18 + power * 0.04)), {
+      kind: 'direct',
+      sourceId: '氪金改命',
+      healer: ctx.user,
+    }, ctx.log);
+    applyStatus(ctx.user, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'gacha_whale_rewrite' } });
+    applyStatus(ctx.user, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'gacha_whale_rewrite' } });
+    applyStatus(ctx.user, { identityId: 'REGEN', remainingTurns: 3 });
+    const healText = healing.actual > 0
+      ? `恢复 ${healing.actual} 点生命`
+      : healing.outcome === 'blocked'
+        ? '治疗被完全阻止'
+        : '生命已满，治疗溢出';
+    ctx.log('buff', `💳 【氪金改命结算】${ctx.user.name} ${healText}，并获得改命抗性、法术抵挡与再生！`, { targetIds: [ctx.user.id] });
     grantGachaLuck(ctx.user, 1, ctx.log, '氪金改命余波');
     return true;
   },
@@ -1059,7 +1207,7 @@ function chooseMajorPityEntry(runtime: LuckDrawRuntime, user: Fighter): GachaEnt
   const summons = activeFriendlySummons(runtime, user);
   const summonCount = summons.length;
   const enemies = activeEnemies(runtime, user);
-  const hasSummonLifesteal = user.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS);
+  const hasSummonLifesteal = hasIdentity(user, GACHA_SUMMON_LIFESTEAL_STATUS);
   const summonCards = usableSummonEntries(runtime, user, runtime.data.GACHA_SSR_POOL);
   const tributeCards = tributeSummonEntries(runtime, user, runtime.data.GACHA_SSR_POOL);
   const supports = supportEntries(runtime, user, runtime.data.GACHA_SSR_POOL);
@@ -1081,7 +1229,7 @@ function chooseEnhancedEntry(runtime: LuckDrawRuntime, user: Fighter, pool: Gach
   const summons = activeFriendlySummons(runtime, user);
   const summonCount = summons.length;
   const usablePool = usableEntries(runtime, user, pool);
-  const hasSummonLifesteal = user.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS);
+  const hasSummonLifesteal = hasIdentity(user, GACHA_SUMMON_LIFESTEAL_STATUS);
   const summonCards = usableSummonEntries(runtime, user, pool);
   const tributeCards = tributeSummonEntries(runtime, user, pool);
   const supports = supportEntries(runtime, user, pool);
@@ -1101,8 +1249,8 @@ function chooseEnhancedEntry(runtime: LuckDrawRuntime, user: Fighter, pool: Gach
     (entry.lifesteal ?? 0) > 0 ||
     (entry.mult ?? 0) >= 5 ||
     entry.ignoreDef ||
-    entry.status === 'STUN' ||
-    entry.status === 'CHARMED' ||
+    hasStatusApplication(entry, 'STUN') ||
+    hasStatusApplication(entry, 'CHARMED') ||
     entry.triggerAgain,
   );
   return premium.length > 0 ? pickRandom(premium) : GACHA_CEILING_EXCHANGE_CARD;
@@ -1116,7 +1264,7 @@ function chooseSmartEntry(runtime: LuckDrawRuntime, user: Fighter, pool: GachaEn
   const candidates = usablePool.length > 0 ? usablePool : pool;
   const summonCards = usableSummonEntries(runtime, user, candidates);
   const tributeCards = tributeSummonEntries(runtime, user, pool);
-  const hasSummonLifesteal = user.status.some((status) => status.type === GACHA_SUMMON_LIFESTEAL_STATUS);
+  const hasSummonLifesteal = hasIdentity(user, GACHA_SUMMON_LIFESTEAL_STATUS);
   const supports = supportEntries(runtime, user, pool);
   const raSupports = raSupportEntries(runtime, user, pool);
 
@@ -1143,8 +1291,8 @@ function chooseSmartEntry(runtime: LuckDrawRuntime, user: Fighter, pool: GachaEn
       entry === GACHA_TEN_PULL_GOLD_CARD ||
       entry.triggerAgain ||
       (entry.mult ?? 0) >= 5 ||
-      entry.status === 'STUN' ||
-      entry.status === 'CHARMED',
+      hasStatusApplication(entry, 'STUN') ||
+      hasStatusApplication(entry, 'CHARMED'),
     );
     if (crowdControl.length > 0 && Math.random() < 0.55) return pickRandom(crowdControl);
   }

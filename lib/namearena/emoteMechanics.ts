@@ -1,4 +1,5 @@
 import type { Fighter, StatKey } from './types';
+import { getPanelCombatStat, hasPanelStatProjection } from './statusMechanics';
 
 export const EMOTE_STAT_KEYS: StatKey[] = ['atk', 'def', 'spd', 'agl', 'mag', 'res', 'wis'];
 export const EMOTE_DEATH_GAIN_KEYS = ['maxHp', ...EMOTE_STAT_KEYS] as const;
@@ -97,7 +98,8 @@ export function buildEmoteStatGain(
 ): EmoteStatMap {
   const gain = emptyEmoteStats();
   keys.forEach((key) => {
-    const raw = Math.floor(source[key] * ratio);
+    const sourceValue = key === 'maxHp' ? source.maxHp : getPanelCombatStat(source, key);
+    const raw = Math.floor(sourceValue * ratio);
     gain[key] = Math.max(minPositiveGain, raw);
   });
   return gain;
@@ -112,7 +114,11 @@ export function grantEmoteAdaptStats(
   options: { healAddedMaxHp?: boolean } = {},
 ): EmoteStatMap {
   const gain = buildEmoteStatGain(source, ratio, keys, minPositiveGain);
-  addStatsToFighter(emote, gain, options);
+  // 临时面板投影期间复制到的战斗属性只记入适应账本，避免绕过当前投影基准。
+  const appliedGain = hasPanelStatProjection(emote)
+    ? { maxHp: gain.maxHp }
+    : gain;
+  addStatsToFighter(emote, appliedGain, options);
   const adaptStats = ensureEmoteAdaptStats(emote);
   EMOTE_DEATH_GAIN_KEYS.forEach((key) => {
     adaptStats[key] += gain[key];

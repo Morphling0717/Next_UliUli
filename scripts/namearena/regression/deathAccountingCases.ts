@@ -1,5 +1,7 @@
 import type { Fighter, SpinalSwordRef } from '../../../lib/namearena/types';
+import { resolveHealing } from '../../../lib/namearena/combatState';
 import {
+  applyTestStatus,
   assert,
   localProject,
   makeEngine,
@@ -22,11 +24,23 @@ export function runDeathAccountingCases(): string[] {
   const cases: string[] = [];
 
   {
+    const target = makeFighter('已宣布死亡治疗靶@A');
+    const { engine } = makeDeathEngine([target]);
+    engine.markDefeated(engine.fighters[0], { message: '💀 【测试】已宣布死亡治疗靶 倒下了。', awardKill: false });
+
+    const healing = resolveHealing(engine.fighters[0], 500);
+
+    assert(healing.actual === 0, 'Ordinary healing must not restore a fighter whose death has already been announced');
+    assert(engine.fighters[0].currentHp === 0, 'A defeated fighter must remain at zero HP until an explicit revival handler runs');
+    cases.push('ordinary healing cannot implicitly revive a defeated fighter');
+  }
+
+  {
     const attacker = makeFighter('死亡结算杀手@A');
     const target = makeFighter('死亡结算靶子@B');
     attacker.atk = 10000;
     attacker.agl = 10000;
-    attacker.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(attacker, { identityId: 'AIM', charges: 1 });
     target.maxHp = 100;
     localProject.setCurrentHp(target, 100);
 
@@ -42,16 +56,36 @@ export function runDeathAccountingCases(): string[] {
   }
 
   {
+    const attacker = makeFighter('克蕾儿丝菲尔@A');
+    const target = makeFighter('致死吸血顺序靶子@B');
+    attacker.maxHp = 5000;
+    localProject.setCurrentHp(attacker, 500);
+    attacker.mag = 1000;
+    attacker.agl = 10000;
+    applyTestStatus(attacker, { identityId: 'AIM', charges: 1 });
+    target.maxHp = 500;
+    localProject.setCurrentHp(target, 500);
+
+    const { engine, logs } = makeDeathEngine([attacker, target]);
+    engine.executeSkillAction('life_drain', engine.fighters[0], engine.fighters[1]);
+
+    const healIndex = logs.findIndex((entry) => entry.text.includes('吸血被动') && entry.text.includes('生命汲取'));
+    const deathIndex = logs.findIndex((entry) => entry.text.includes('【击杀】') && entry.text.includes(engine.fighters[1].name));
+    assert(healIndex >= 0 && deathIndex > healIndex, 'Lethal lifesteal must resolve after damage but before death follow-up logs');
+    cases.push('lethal lifesteal resolves before death follow-ups');
+  }
+
+  {
     const attacker = makeFighter('反伤测试攻击者@A');
     const target = makeFighter('反伤测试目标@B');
     attacker.maxHp = 100;
     localProject.setCurrentHp(attacker, 100);
     attacker.atk = 80;
     attacker.agl = 10000;
-    attacker.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(attacker, { identityId: 'AIM', charges: 1 });
     target.maxHp = 10000;
     localProject.setCurrentHp(target, 10000);
-    target.status.push({ type: 'COUNTER', duration: 3 });
+    applyTestStatus(target, { identityId: 'COUNTER', remainingTurns: 3 });
 
     const { engine, logs } = makeDeathEngine([attacker, target]);
     engine.executeSkillAction('serious_punch', engine.fighters[0], engine.fighters[1]);
@@ -67,7 +101,7 @@ export function runDeathAccountingCases(): string[] {
   {
     const attacker = makeFighter('再火击杀者@A');
     const target = makeFighter('再火目标@B');
-    target.status.push({ type: 'VALO_ULT_RUN_IT_BACK', duration: 3 });
+    applyTestStatus(target, { identityId: 'VALO_ULT_RUN_IT_BACK', remainingTurns: 3 });
 
     const { engine } = makeDeathEngine([attacker, target]);
     engine.markDefeated(engine.fighters[1], { message: '💀 【测试】再火目标受到致命伤。', killer: engine.fighters[0] });
@@ -100,7 +134,9 @@ export function runDeathAccountingCases(): string[] {
   }
 
   {
-    const attacker = makeFighter('屑击杀者@A');
+    const attacker = makeFighter('鸮@A');
+    attacker.isOwl = true;
+    attacker.owlState = { phase: 2, warForm: 'defeat', warFormStartedTurn: 0, heavenStacks: 0, sweepUsed: false };
     const teammate = makeFighter('屑队友@J');
     const joker = makeFighter('屑@J');
     attacker.maxHp = 200000;
@@ -124,6 +160,10 @@ export function runDeathAccountingCases(): string[] {
     const reviveIndex = logs.findIndex((entry) => entry.text.includes('从地狱归来'));
     assert(countdownIndex >= 0 && reviveIndex >= 0 && countdownIndex < reviveIndex, 'Joker death should explain the revival countdown before returning');
     assert(logs.filter((entry) => entry.text.includes('从地狱归来')).length === 1, 'Joker should revive exactly once');
+    assert(!logs.some((entry) => entry.text.includes('【绝对驱散】') && entry.text.includes(engine.fighters[2].name)), 'Joker revival cleanup must not be presented as Waterman absolute dispel');
+    const mitigationIndex = logs.findIndex((entry) => entry.text.includes('败兵阵势') && entry.text.includes('削减'));
+    const aoeResultIndex = logs.findIndex((entry) => entry.text.includes('地狱笑话命中') && entry.text.includes('鸮'));
+    assert(mitigationIndex >= 0 && aoeResultIndex > mitigationIndex, 'Joker revival AoE must explain Owl mitigation before its final damage result');
     cases.push('Joker death countdown revives without duplicate accounting');
   }
 

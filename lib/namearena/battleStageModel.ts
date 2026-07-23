@@ -21,24 +21,23 @@ export type StageLogGroup = {
 
 export type StageManualFocus = {
   fighterId: string;
-  focusCycleKey: string;
+  battleRunId: number;
 };
 
-export function getStageFocusCycleKey(
-  log: StageLogEntry | undefined,
+export function toggleStageManualFocus(
+  current: StageManualFocus | null,
+  fighterId: string,
   battleRunId: number,
-  battleTurn: number,
-  actorId?: string,
-): string {
-  const actionKey = log?.actionId ?? `turn-${log?.turn ?? battleTurn}`;
-  return `run-${battleRunId}:${actionKey}:actor-${actorId ?? log?.actorId ?? 'global'}`;
+): StageManualFocus | null {
+  if (current?.battleRunId === battleRunId && current.fighterId === fighterId) return null;
+  return { fighterId, battleRunId };
 }
 
 export function resolveStageManualFocusId(
   manualFocus: StageManualFocus | null,
-  focusCycleKey: string,
+  battleRunId: number,
 ): string | null {
-  return manualFocus?.focusCycleKey === focusCycleKey ? manualFocus.fighterId : null;
+  return manualFocus?.battleRunId === battleRunId ? manualFocus.fighterId : null;
 }
 
 export function shouldRenderFighterOnStage(fighter: Fighter): boolean {

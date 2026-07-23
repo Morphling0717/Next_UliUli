@@ -26,6 +26,7 @@ export class StageAnimationScheduler {
   private readonly generations = new Map<string, number>();
   private readonly timers = new Map<string, Set<number>>();
   private readonly frames = new Map<string, Set<number>>();
+  private epoch = 0;
   private disposed = false;
 
   constructor(host: StageAnimationHost = createDefaultHost()) {
@@ -47,10 +48,11 @@ export class StageAnimationScheduler {
 
   after(scope: string, delay: number, callback: () => void, generation = this.generation(scope)): number | null {
     if (this.disposed) return null;
+    const epoch = this.epoch;
     let handle = 0;
     handle = this.host.setTimeout(() => {
       this.timers.get(scope)?.delete(handle);
-      if (this.isCurrent(scope, generation)) callback();
+      if (epoch === this.epoch && this.isCurrent(scope, generation)) callback();
     }, Math.max(0, delay));
     this.addHandle(this.timers, scope, handle);
     return handle;
@@ -58,10 +60,11 @@ export class StageAnimationScheduler {
 
   frame(scope: string, callback: FrameRequestCallback, generation = this.generation(scope)): number | null {
     if (this.disposed) return null;
+    const epoch = this.epoch;
     let handle = 0;
     handle = this.host.requestAnimationFrame((time) => {
       this.frames.get(scope)?.delete(handle);
-      if (this.isCurrent(scope, generation)) callback(time);
+      if (epoch === this.epoch && this.isCurrent(scope, generation)) callback(time);
     });
     this.addHandle(this.frames, scope, handle);
     return handle;
@@ -91,18 +94,30 @@ export class StageAnimationScheduler {
   }
 
   reset(): void {
+    this.epoch += 1;
     const scopes = new Set([
       ...this.generations.keys(),
       ...this.timers.keys(),
       ...this.frames.keys(),
     ]);
     scopes.forEach((scope) => this.cancel(scope));
+    this.generations.clear();
+    this.timers.clear();
+    this.frames.clear();
   }
 
   pendingCount(scope?: string): number {
     if (scope) return (this.timers.get(scope)?.size ?? 0) + (this.frames.get(scope)?.size ?? 0);
     return [...this.timers.values(), ...this.frames.values()]
       .reduce((total, handles) => total + handles.size, 0);
+  }
+
+  trackedScopeCount(): number {
+    return new Set([
+      ...this.generations.keys(),
+      ...this.timers.keys(),
+      ...this.frames.keys(),
+    ]).size;
   }
 
   dispose(): void {

@@ -102,28 +102,29 @@ export function PwaUpdateBanner() {
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: -20 }}
         transition={{ type: "spring", stiffness: 280, damping: 24 }}
-        className="fixed inset-x-3 z-[10000] sm:inset-x-auto sm:right-6 sm:w-[360px]"
-        style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
+        className="pwa-update-banner pointer-events-none fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+4rem)] z-[10000] w-[210px] sm:right-auto sm:bottom-auto sm:left-1/2 sm:top-[calc(env(safe-area-inset-top)+0.75rem)] sm:-ml-[180px] sm:w-[360px]"
       >
-        <div className="relative overflow-hidden rounded-2xl border border-cyan-400/25 bg-[#0a0d14]/90 p-4 shadow-[0_0_40px_rgba(45,226,230,0.18)] backdrop-blur-2xl">
+        <div className="pwa-update-card pointer-events-none relative overflow-hidden rounded-2xl border border-cyan-400/25 bg-[#0a0d14]/90 p-2 shadow-[0_0_40px_rgba(45,226,230,0.18)] backdrop-blur-2xl sm:p-4">
           <div className="pointer-events-none absolute -top-8 right-8 h-16 w-24 rounded-full bg-cyan-500/20 blur-2xl" />
           <div className="relative flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-500/10 text-cyan-300">
+            <div className="pwa-update-icon hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-500/10 text-cyan-300 sm:flex">
               <Sparkles className="h-4 w-4" />
             </div>
-            <div className="flex-1 min-w-0">
+            <div className="pwa-update-copy flex-1 min-w-0">
               <div className="text-sm font-semibold text-white">发现新版本</div>
-              <div className="mt-0.5 text-[11px] leading-snug text-gray-400">
+              <div className="pwa-update-description mt-0.5 hidden text-[11px] leading-snug text-gray-400 sm:block">
                 点击立即应用，无需重装
               </div>
             </div>
             <button
               type="button"
+              aria-label="应用网站更新"
+              title="应用网站更新"
               onClick={handleApply}
-              className="flex shrink-0 items-center gap-1 rounded-full bg-cyan-400 px-3 py-2 text-xs font-semibold text-black transition hover:bg-white active:scale-[0.96]"
+              className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-full bg-cyan-400 px-3 py-2 text-xs font-semibold text-black transition hover:bg-white active:scale-[0.96]"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              更新
+              <span className="pwa-update-button-label">更新</span>
             </button>
           </div>
         </div>

@@ -2,15 +2,13 @@ import type {
   Fighter,
   SkillDefinition,
 } from '../types';
-import { healFighter } from '../combatState';
+import { resolveHealing } from '../combatState';
 import type { ActionResolutionRuntime } from './types';
-import {
-  grantStatus,
-  statusSourceFromSkill,
-} from '../defenseStatus';
-import { consumeStatusCharge, normalizeStatusEntry } from '../statusLifecycle';
 import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
-import { withTimedStatModifiersSuspended } from '../statModifiers';
+import { consumeStatusValue, findIdentity, grantBarrier, hasIdentity, hasMechanic, queryMechanic, removeEffects, applyStatus } from '../statusSystem';
+import { consumeDrain, getDrainPercent, getEffectiveCombatStat } from '../statusMechanics';
+import { buildFighterStatusPresentation, buildStatusPresentationMember } from '../statusPresentation';
+import { getStatusIdentityDefinition } from '../statusRegistry';
 
 const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
   chimera_devour: 'baby_feed',
@@ -26,11 +24,7 @@ const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
 const VALO_FOCUS_MAX = 10;
 
 function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((status) => status.type === type);
-}
-
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(fighter, type, duration, sourceId);
+  return hasIdentity(fighter, type);
 }
 
 function gainValorantFocus(fighter: Fighter, amount: number): void {
@@ -38,12 +32,8 @@ function gainValorantFocus(fighter: Fighter, amount: number): void {
 }
 
 function restoreValorantOperatorMobility(fighter: Fighter): boolean {
-  if (!fighter.savedSpd) return false;
-  fighter.spd = fighter.savedSpd;
-  fighter.agl = fighter.savedAgl ?? fighter.agl;
-  delete fighter.savedSpd;
-  delete fighter.savedAgl;
-  fighter.status = fighter.status.filter((status) => status.type !== 'VALO_OPERATOR_PENALTY');
+  if (!hasStatus(fighter, 'VALO_OPERATOR_PENALTY')) return false;
+  removeEffects(fighter, { identityIds: ['VALO_OPERATOR_PENALTY'], reason: 'scripted' });
   return true;
 }
 
@@ -60,13 +50,29 @@ export function applySelfDamage(
 ): void {
   if (!skill.selfDmgPct) return;
 
-  const selfDamageFloor = skill.selfDmgCanKill ? 0 : 1;
-  const beforeHp = user.currentHp;
-  user.currentHp = Math.max(selfDamageFloor, user.currentHp - Math.floor(user.maxHp * skill.selfDmgPct));
-  runtime.syncHpPct(user);
-  const actualSelfDmg = Math.max(0, beforeHp - user.currentHp);
+  const rawSelfDamage = Math.floor(user.maxHp * skill.selfDmgPct);
+  const payableSelfDamage = skill.selfDmgCanKill
+    ? rawSelfDamage
+    : Math.min(rawSelfDamage, Math.max(0, user.currentHp - 1));
+  const options = {
+    actionName: `${skill.name}反噬`,
+    sourceKind: 'self_cost' as const,
+    respectDefenses: false,
+    bypassShields: true,
+    creditAttacker: false,
+    suppressStatusAftermath: true,
+    suppressOwlCooperation: true,
+    bypassOwlOutgoingModifier: true,
+    bypassOwlIncomingModifier: true,
+    deferTransform: true,
+  };
+  const actualSelfDmg = runtime.applyDamage(user, payableSelfDamage, 'self_cost', true, user, options);
   if (actualSelfDmg > 0) {
     runtime.log('info', `🩸 ${user.name} 因【${skill.name}】反噬，实际损失 ${actualSelfDmg} 点生命！`);
+  }
+  if (actualSelfDmg > 0 || (user.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(user);
+  if (user.currentHp <= 0 && skill.selfDmgCanKill) {
+    runtime.markDefeated(user, { message: `💀 ${user.name} 被【${skill.name}】的反噬击倒！`, awardKill: false });
   }
 }
 
@@ -76,25 +82,27 @@ export function applyAttackerStyleEffects(
   target: Fighter,
   allowHostileStatus = true,
 ): void {
-  if (user.status.some((status) => status.type === 'STYLE_VAIN')) {
-    const stealAtk = Math.floor(target.atk * 0.1);
-    const stealMag = Math.floor(target.mag * 0.1);
-    withTimedStatModifiersSuspended(target, () => {
-      target.atk = Math.max(1, target.atk - stealAtk);
-      target.mag = Math.max(1, target.mag - stealMag);
-    });
-    withTimedStatModifiersSuspended(user, () => {
-      user.atk += stealAtk;
-      user.mag += stealMag;
-    });
+  if (hasStatus(user, 'STYLE_VAIN')) {
+    const stealAtk = Math.floor(getEffectiveCombatStat(target, 'atk') * 0.1);
+    const stealMag = Math.floor(getEffectiveCombatStat(target, 'mag') * 0.1);
+    target.atk = Math.max(1, target.atk - stealAtk);
+    target.mag = Math.max(1, target.mag - stealMag);
+    user.atk += stealAtk;
+    user.mag += stealMag;
     runtime.log('buff', `💅 虚荣窃取！${user.name} 偷走了 ${target.name} 的属性化为己用！(吸收了攻击和魔力)`);
   }
 
-  if (allowHostileStatus && user.status.some((status) => status.type === 'STYLE_FOOL') && Math.random() < 0.5) {
+  if (allowHostileStatus && hasStatus(user, 'STYLE_FOOL') && Math.random() < 0.5) {
     const debuffs = ['STUN', 'FREEZE', 'POISON', 'BURN'];
     const randomDebuff = debuffs[Math.floor(Math.random() * debuffs.length)];
-    if (runtime.applyStatus(target, randomDebuff, 2, { applierId: user.id, applierName: user.name })) {
-      runtime.log('skill', `🤪 笨蛋女人乱拳挥舞！不经意间给 ${target.name} 附加了【${runtime.statusEffects[randomDebuff]?.name ?? randomDebuff}】异常状态！`);
+    const application = randomDebuff === 'BURN'
+      ? { identityId: randomDebuff, count: 2 }
+      : { identityId: randomDebuff, remainingTurns: 2 };
+    if (runtime.applyStatus(target, {
+      ...application,
+      attribution: { applierId: user.id, applierName: user.name },
+    })) {
+      runtime.log('skill', `🤪 笨蛋女人乱拳挥舞！不经意间给 ${target.name} 附加了【${getStatusIdentityDefinition(randomDebuff).displayName}】异常状态！`);
     }
   }
 }
@@ -106,37 +114,74 @@ export function applySkillStatusEffect(
   target: Fighter,
   allowTargetStatus = true,
 ): void {
-  if (!skill.status) return;
+  for (const declared of skill.statusApplications ?? []) {
+    const recipient = declared.target === 'user' ? user : target;
+    if (!allowTargetStatus && recipient.id === target.id) continue;
+    const appliedSourceId = declared.attribution?.effectSourceId ?? declared.identityId;
+    const definition = getStatusIdentityDefinition(declared.identityId);
+    const lifecycle = definition.dualValue
+      ? { count: declared.count ?? definition.defaultCount ?? 1 }
+      : definition.expiresOn === 'trigger'
+        ? { charges: declared.charges ?? definition.defaultCharges ?? 2 }
+        : definition.expiresOn === 'never'
+          ? {}
+          : { remainingTurns: declared.remainingTurns ?? 2 };
+    const application = { ...declared };
+    delete application.target;
+    const applied = runtime.applyStatus(recipient, {
+      ...lifecycle,
+      ...application,
+      effectName: declared.effectName ?? skill.name,
+      attribution: {
+        ...declared.attribution,
+        effectSourceId: appliedSourceId,
+        applierId: user.id,
+        applierName: user.name,
+      },
+      silent: true,
+    });
+    if (!applied || !runtime.isActiveCombatant(recipient)) continue;
 
-  const recipient = skill.statusTarget === 'user' ? user : target;
-  if (!allowTargetStatus && recipient.id === target.id) return;
-  const sourceId = statusSourceFromSkill(skill);
-  const applied = runtime.applyStatus(recipient, skill.status, 2, {
-    sourceId,
-    applierId: user.id,
-    applierName: user.name,
-  });
-  if (!applied) return;
-  if (!runtime.isActiveCombatant(recipient)) return;
-
-  const status = recipient.status.find((entry) =>
-    entry.type === skill.status && (!sourceId || entry.sourceId === sourceId),
-  );
-  if (!status) return;
-  normalizeStatusEntry(status);
-  const statusName = runtime.statusEffects[skill.status]?.name ?? skill.status;
-  const remaining = status.remainingTurns ?? status.duration;
-  const durationText = status.expiresOn === 'global_action_end'
-    ? `，持续接下来 ${remaining} 个全局行动回合`
-    : status.expiresOn === 'self_turn_end'
-      ? `，影响接下来 ${remaining} 次自身行动`
-      : status.expiresOn === 'trigger'
-        ? `，可触发 ${status.charges ?? status.duration} 次`
-        : '';
-  runtime.log(
-    recipient.id === user.id ? 'buff' : 'debuff',
-    `📌 【状态结算】${recipient.name} 获得【${statusName}】${durationText}。`,
-  );
+    const status = findIdentity(recipient, declared.identityId, {
+      effectSourceIds: [appliedSourceId],
+      applierIds: [user.id],
+    });
+    if (!status) continue;
+    const presentation = buildFighterStatusPresentation(recipient).find((item) =>
+      item.members.some((member) => member.key === status.instanceId),
+    ) ?? buildStatusPresentationMember(status);
+    const valueText = presentation.valueLabel ? `（${presentation.valueLabel}）` : '';
+    const sourceText = presentation.sourceLabel ? `，来源：${presentation.sourceLabel}` : '';
+    runtime.log(
+      recipient.id === user.id ? 'buff' : 'debuff',
+      `📌 【状态结算】${recipient.name} 获得【${presentation.name}】${valueText}${sourceText}。`,
+    );
+  }
+  for (const declared of skill.barrierApplications ?? []) {
+    const recipient = declared.target === 'user' ? user : target;
+    if (!allowTargetStatus && recipient.id === target.id) continue;
+    const barrier = grantBarrier(recipient, declared.value, {
+      identityId: declared.identityId,
+      sourceId: declared.sourceId,
+      displayName: declared.displayName,
+      icon: declared.icon,
+      remainingTurns: declared.remainingTurns,
+      tickMode: declared.tickMode,
+      priority: declared.priority,
+      polarity: declared.polarity,
+      dispelTier: declared.dispelTier,
+      stackMode: declared.stackMode,
+      attribution: {
+        effectSourceId: declared.attribution?.effectSourceId ?? declared.sourceId,
+        effectSourceName: declared.attribution?.effectSourceName ?? declared.displayName,
+        applierId: user.id,
+        applierName: user.name,
+        creditActorId: declared.attribution?.creditActorId ?? user.id,
+        creditOwnerId: declared.attribution?.creditOwnerId,
+      },
+    });
+    runtime.log('buff', `🔵 【屏障结算】${recipient.name} 获得【${barrier.displayName}】${declared.value} 点屏障。`);
+  }
 }
 
 export function handleValorantWeaponDrop(
@@ -144,19 +189,16 @@ export function handleValorantWeaponDrop(
   target: Fighter,
   actualDmg: number,
 ): void {
-  if (target.job !== 'VALO_JUNIOR' || (target.economy ?? 0) < 6) return;
+  const operatorEquipped = hasStatus(target, 'VALO_OPERATOR_PENALTY');
+  if (target.job !== 'VALO_JUNIOR' || !operatorEquipped) return;
 
   const isHeavyHit = actualDmg > target.maxHp * 0.2;
-  const isControlled = target.status.some((status) => ['STUN', 'FREEZE', 'CONFUSED', 'EMBARRASSED', 'CHARMED'].includes(status.type));
+  const isControlled = ['STUN', 'FREEZE', 'CONFUSED', 'EMBARRASSED', 'CHARMED']
+    .some((identityId) => hasStatus(target, identityId));
   if (!isHeavyHit && !isControlled) return;
 
   target.economy = Math.max(0, (target.economy ?? 0) - 5);
-  if (target.savedSpd) {
-    target.spd = target.savedSpd;
-    target.agl = target.savedAgl ?? 0;
-    delete target.savedSpd;
-    delete target.savedAgl;
-  }
+  removeEffects(target, { identityIds: ['VALO_OPERATOR_PENALTY'], reason: 'scripted' });
   runtime.log('info', `💔 损失惨重！${target.name} 受到重创或被控，手中的【冥驹】掉落了！经济大幅衰退！`);
 }
 
@@ -167,19 +209,25 @@ export function handlePhysicalCounterReflect(
   target: Fighter,
   actualDmg: number,
 ): void {
-  if (skill.tag !== runtime.skillTags.PHYS || !target.status.some((status) => status.type === 'COUNTER')) return;
+  if (
+    skill.tag !== runtime.skillTags.PHYS ||
+    hasMechanic(target, 'STAGGERED') ||
+    !hasStatus(target, 'COUNTER')
+  ) return;
 
-  const counter = target.status.find((status) => status.type === 'COUNTER');
-  if (counter) consumeStatusCharge(target, counter);
+  const counter = queryMechanic(target, 'COUNTER').entries.find((entry) => (entry.charges ?? 0) > 0);
+  if (counter) consumeStatusValue(target, counter, 'charges');
   if (!runtime.isActiveCombatant(user)) {
     runtime.log('info', `💢 ${target.name} 的反击护盾亮起，但 ${user.name} 已经退场，反弹没有继续结算。`);
     return;
   }
+  runtime.log('skill', `💢 ${target.name} 触发反击！【反弹伤害】开始对 ${user.name} 结算。`);
   const reflectedDmg = runtime.applyDamage(user, actualDmg, 'reflect', false, target, { deferTransform: true });
+  runtime.flushDeferredDamageEvents(user, 'mitigation');
   if (reflectedDmg > 0) {
-    runtime.log('crit', `💢 ${target.name} 触发反击！将伤害弹回给了 ${user.name}，实际造成 ${reflectedDmg} 点反弹伤害！`);
+    runtime.log('crit', `💢 【反击结算】${user.name} 实际承受 ${reflectedDmg} 点反弹伤害！`);
   } else {
-    runtime.log('info', `💢 ${target.name} 触发反击，但反弹没有对 ${user.name} 造成实际伤害！`);
+    runtime.log('info', `💢 【反击结算】${user.name} 本人没有损失生命；拦截、分摊或无效化结果已在上方记录。`);
   }
   if (reflectedDmg > 0 || (user.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(user);
   if (user.currentHp <= 0) {
@@ -197,9 +245,9 @@ export function grantValorantKillRewards(
   user.ultPoints = (user.ultPoints ?? 0) + 1;
   gainValorantFocus(user, 1);
   const restored = restoreValorantOperatorMobility(user);
-  refreshStatus(user, 'VALO_REPOSITION', 1);
-  refreshStatus(user, 'VALO_CLUTCH', 3);
-  refreshStatus(user, 'SPELL_BLOCK', 1, 'valo_reposition');
+  applyStatus(user, { identityId: 'VALO_REPOSITION', remainingTurns: 1 });
+  applyStatus(user, { identityId: 'VALO_CLUTCH', remainingTurns: 3 });
+  applyStatus(user, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'valo_reposition' } });
   const enemyCount = activeEnemyCount(runtime, user);
   if ((user.crosshairFocus ?? 0) >= 6 && (enemyCount <= 2 || (enemyCount <= 3 && hasStatus(user, 'VALO_ULT_EMPRESS')))) {
     user.valoInstantActionQueued = true;
@@ -216,7 +264,7 @@ export function grantValorantHitRewards(
   if (user.job !== 'VALO_JUNIOR' || !isCompetitiveTarget(target) || actualDmg <= 0) return;
 
   user.economy = Math.min(12, (user.economy ?? 0) + 1);
-  if (actualDmg < Math.max(300, user.atk)) return;
+  if (actualDmg < Math.max(300, getEffectiveCombatStat(user, 'atk'))) return;
   const before = user.crosshairFocus ?? 0;
   gainValorantFocus(user, 1);
   if (before < 5 && (user.crosshairFocus ?? 0) >= 5) {
@@ -248,18 +296,16 @@ export function applyLifestealEffects(
   hpBeforeDamage: number,
 ): void {
   const tingBloodthirst = user.isTing ? (user.transformed ? 0.55 : 0.25) : 0;
+  const drainPct = getDrainPercent(user) / 100;
   const lsPct =
     (skill.lifesteal ?? 0) +
     tingBloodthirst +
-    (user.status.some((status) => status.type === 'PLUG_HEAD') ? 0.25 : 0) +
-    (user.status.some((status) => status.type === 'VALO_ULT_EMPRESS') ? 1.0 : 0) +
-    (user.status.some((status) => status.type === 'STYLE_SMART' || status.type === 'STYLE_EMPEROR') ? 0.5 : 0);
+    drainPct +
+    (hasStatus(user, 'PLUG_HEAD') ? 0.25 : 0) +
+    (hasStatus(user, 'VALO_ULT_EMPRESS') ? 1.0 : 0) +
+    (hasStatus(user, 'STYLE_SMART') || hasStatus(user, 'STYLE_EMPEROR') ? 0.5 : 0);
   if (lsPct <= 0 || actualDmg <= 0 || !runtime.isActiveCombatant(user)) return;
-
-  if (user.status.some((status) => status.type === 'NO_HEAL')) {
-    runtime.log('info', `🥀 ${user.name} 处于禁疗状态，无法触发吸血被动！`);
-    return;
-  }
+  if (drainPct > 0) consumeDrain(user);
 
   const tingOverkillCap = user.isTing ? Math.floor(target.maxHp * 0.4) : 0;
   const maxHealBase = user.isTing ? Math.max(hpBeforeDamage, tingOverkillCap) : hpBeforeDamage;
@@ -267,11 +313,30 @@ export function applyLifestealEffects(
   const healAmt = Math.floor(healBase * lsPct);
   if (healAmt <= 0) return;
 
-  const healed = healFighter(user, healAmt, runtime.log);
-  if (healed > 0) {
-    runtime.log('heal', `💉 ${user.name} 触发吸血被动，恢复了 ${healed} 点生命！`);
+  const lifestealSources = [
+    ...((skill.lifesteal ?? 0) > 0 ? [`【${skill.name}】`] : []),
+    ...(tingBloodthirst > 0 ? ['【小汀常驻吸血】'] : []),
+    ...(drainPct > 0 ? ['【汲取】'] : []),
+    ...(hasStatus(user, 'PLUG_HEAD') ? [`【${getStatusIdentityDefinition('PLUG_HEAD').displayName}】`] : []),
+    ...(hasStatus(user, 'VALO_ULT_EMPRESS') ? [`【${getStatusIdentityDefinition('VALO_ULT_EMPRESS').displayName}】`] : []),
+    ...(hasStatus(user, 'STYLE_EMPEROR')
+      ? [`【${getStatusIdentityDefinition('STYLE_EMPEROR').displayName}】`]
+      : hasStatus(user, 'STYLE_SMART')
+        ? [`【${getStatusIdentityDefinition('STYLE_SMART').displayName}】`]
+        : []),
+  ];
+  const sourceText = lifestealSources.length > 0 ? `（来源：${lifestealSources.join('、')}）` : '';
+  const healing = resolveHealing(user, healAmt, {
+    kind: 'lifesteal',
+    sourceId: lifestealSources.join('+') || skill.name,
+    healer: user,
+  }, runtime.log);
+  if (healing.actual > 0) {
+    runtime.log('heal', `💉 ${user.name} 触发吸血被动${sourceText}，恢复了 ${healing.actual} 点生命！`);
+  } else if (healing.modified <= 0) {
+    runtime.log('info', `🥀 ${user.name} 触发吸血被动${sourceText}，但治疗被完全阻止！`);
   } else {
-    runtime.log('info', `💉 ${user.name} 触发吸血被动，但生命已满，治疗溢出！`);
+    runtime.log('info', `💉 ${user.name} 触发吸血被动${sourceText}，但生命已满，治疗溢出！`);
   }
 }
 
@@ -282,8 +347,8 @@ export function consumeAimAfterAttack(
 ): void {
   if (skill.tag === runtime.skillTags.HEAL || skill.tag === runtime.skillTags.BUFF) return;
 
-  const aim = user.status.find((status) => status.type === 'AIM');
-  if (aim) consumeStatusCharge(user, aim);
+  const aim = queryMechanic(user, 'AIM').entries.find((entry) => (entry.charges ?? 0) > 0);
+  if (aim) consumeStatusValue(user, aim, 'charges');
   if (user.isWT && user.wtMarkedTargetId) {
     user.wtMarkedTargetId = undefined;
     runtime.log('info', `🎯 ${user.name} 已消耗激光测距坐标，本次火控优先窗口关闭。`);

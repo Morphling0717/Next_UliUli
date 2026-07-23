@@ -1,11 +1,17 @@
-import type { Fighter, JobDefinition, StatusEntry } from './types';
+import type { Fighter, HealingKind, HealingResolutionRecord, JobDefinition, StatKey, StatusInstance } from './types';
+import { hasIdentity, queryMechanic, removeEffects, withPersistentStatusShapesSuspended } from './statusSystem';
 
 export function cloneJobDefinition(job: JobDefinition): JobDefinition {
   return { ...job, skills: [...job.skills] };
 }
 
-export function cloneStatuses(status: StatusEntry[] = []): StatusEntry[] {
-  return status.map((s) => ({ ...s }));
+export function cloneStatuses(status: StatusInstance[] = []): StatusInstance[] {
+  return status.map((s) => ({
+    ...s,
+    attribution: { ...s.attribution },
+    damageSourceMask: s.damageSourceMask ? [...s.damageSourceMask] : undefined,
+    statScope: s.statScope ? [...s.statScope] : undefined,
+  }));
 }
 
 export function syncHpPct(fighter: Fighter): void {
@@ -17,23 +23,67 @@ export function setCurrentHp(fighter: Fighter, hp: number): void {
   syncHpPct(fighter);
 }
 
+export function resolveHealing(
+  fighter: Fighter,
+  amount: number,
+  options: {
+    kind?: HealingKind;
+    sourceId?: string;
+    healer?: Fighter;
+  } = {},
+  log?: (type: string, text: string) => void,
+): HealingResolutionRecord {
+  const attempted = Math.max(0, Math.floor(amount));
+  const vitality = queryMechanic(fighter, 'VITALITY').potency;
+  const exhaustion = queryMechanic(fighter, 'EXHAUSTION').potency;
+  const multiplier = Math.max(0, (1 + vitality / 100) * Math.max(0, 1 - exhaustion / 100));
+  // Ordinary healing must never double as an implicit revival. Explicit
+  // revival handlers restore the combatant state before invoking healing.
+  const canReceiveHealing = !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0;
+  const effectiveAmount = canReceiveHealing
+    ? Math.max(0, Math.floor(attempted * multiplier))
+    : 0;
+  const before = fighter.currentHp;
+  if (effectiveAmount > 0 && fighter.currentHp < fighter.maxHp) {
+    setCurrentHp(fighter, fighter.currentHp + effectiveAmount);
+  }
+  const actual = fighter.currentHp - before;
+  const prevented = Math.max(0, attempted - effectiveAmount);
+  const outcome: HealingResolutionRecord['outcome'] = actual > 0
+    ? 'healed'
+    : attempted <= 0
+      ? 'no_effect'
+      : effectiveAmount <= 0
+        ? 'blocked'
+        : 'full';
+  if (attempted > 0 && exhaustion > 0 && effectiveAmount <= 0) {
+    log?.('info', `🥀 【枯竭】${fighter.name} 的治疗被完全阻止！（枯竭 ${exhaustion}%）`);
+  } else if (attempted > 0 && (vitality > 0 || exhaustion > 0) && effectiveAmount !== attempted) {
+    const statusText = [vitality > 0 ? `生机 ${vitality}%` : '', exhaustion > 0 ? `枯竭 ${exhaustion}%` : '']
+      .filter(Boolean)
+      .join('、');
+    log?.(effectiveAmount > attempted ? 'buff' : 'debuff', `🌱 【治疗修正】${fighter.name} 受到${statusText}影响，治疗量由 ${attempted} 调整为 ${effectiveAmount}。`);
+  }
+  return {
+    attempted,
+    modified: effectiveAmount,
+    actual,
+    prevented,
+    outcome,
+    kind: options.kind ?? 'direct',
+    sourceId: options.sourceId,
+    healerId: options.healer?.id,
+    targetId: fighter.id,
+  };
+}
+
 export function healFighter(
   fighter: Fighter,
   amount: number,
   log?: (type: string, text: string) => void,
+  options: { kind?: HealingKind; sourceId?: string; healer?: Fighter } = {},
 ): number {
-  if (amount <= 0 || fighter.currentHp >= fighter.maxHp) return 0;
-  const isBleeding = fighter.status.some((status) => status.type === 'BLEED');
-  const effectiveAmount = isBleeding
-    ? Math.floor(amount * 0.75)
-    : amount;
-  if (isBleeding && effectiveAmount < amount) {
-    log?.('debuff', `🩸 【流血】${fighter.name} 的伤口妨碍治疗，本次可恢复量由 ${amount} 降至 ${effectiveAmount}！`);
-  }
-  if (effectiveAmount <= 0) return 0;
-  const before = fighter.currentHp;
-  setCurrentHp(fighter, fighter.currentHp + effectiveAmount);
-  return fighter.currentHp - before;
+  return resolveHealing(fighter, amount, options, log).actual;
 }
 
 export function isActiveCombatant(fighter: Fighter): boolean {
@@ -49,31 +99,39 @@ export function canActNormally(fighter: Fighter): boolean {
 }
 
 export function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((s) => s.type === type);
+  return hasIdentity(fighter, type);
 }
 
-export function addStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  fighter.status.push({ type, duration, ...(sourceId ? { sourceId } : {}) });
+export function applyPermanentStatBuff(
+  fighter: Fighter,
+  buff: Partial<Record<StatKey | 'crit', number>>,
+): void {
+  withPersistentStatusShapesSuspended(fighter, () => {
+    (Object.keys(buff) as Array<StatKey | 'crit'>).forEach((key) => {
+      const multiplier = buff[key];
+      if (multiplier === undefined) return;
+      if (key === 'crit') fighter.critRate += multiplier;
+      else fighter[key] = Math.max(1, Math.floor(fighter[key] * multiplier));
+    });
+  });
 }
 
-export function removeStatuses(fighter: Fighter, shouldRemove: (status: StatusEntry) => boolean): void {
-  fighter.status = fighter.status.filter((s) => !shouldRemove(s));
+export function clearZeroedStatPenalty(fighter: Fighter): void {
+  removeEffects(fighter, { identityIds: ['ZEROED'], reason: 'scripted' });
 }
 
 export function cloneFighter(fighter: Fighter): Fighter {
   return {
     ...fighter,
     jobData: fighter.jobData ? cloneJobDefinition(fighter.jobData) : fighter.jobData,
-    status: cloneStatuses(fighter.status),
+    statuses: cloneStatuses(fighter.statuses),
+    barriers: fighter.barriers?.map((barrier) => ({
+      ...barrier,
+      attribution: { ...barrier.attribution },
+    })),
     stats: { ...fighter.stats },
     exodiaPieces: fighter.exodiaPieces ? [...fighter.exodiaPieces] : fighter.exodiaPieces,
     originiumGrowthRoundActorIds: fighter.originiumGrowthRoundActorIds ? [...fighter.originiumGrowthRoundActorIds] : fighter.originiumGrowthRoundActorIds,
-    originiumStatMultipliers: fighter.originiumStatMultipliers ? { ...fighter.originiumStatMultipliers } : fighter.originiumStatMultipliers,
-    timedStatBase: fighter.timedStatBase ? { ...fighter.timedStatBase } : fighter.timedStatBase,
-    timedStatModifiers: fighter.timedStatModifiers?.map((modifier) => ({
-      ...modifier,
-      multipliers: { ...modifier.multipliers },
-    })),
     emoteAdaptStats: fighter.emoteAdaptStats ? { ...fighter.emoteAdaptStats } : fighter.emoteAdaptStats,
     emoteOwnerBonus: fighter.emoteOwnerBonus ? { ...fighter.emoteOwnerBonus } : fighter.emoteOwnerBonus,
     owlState: fighter.owlState ? { ...fighter.owlState } : fighter.owlState,

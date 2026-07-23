@@ -18,9 +18,6 @@ export const bunnyHook: CharacterHook = {
       fighter.res = 170;
       fighter.wis = 170;
       fighter.styleTurnCounter = 0;
-      if (fighter.baseStatsForStyle) {
-        fighter.baseStatsForStyle = { atk: 170, def: 170, res: 170, mag: 170, spd: 170, wis: 170, agl: 170 };
-      }
     });
     return true;
   },

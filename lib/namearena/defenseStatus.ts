@@ -1,9 +1,5 @@
-import type { Fighter, SkillDefinition, StatusEntry } from './types';
-import {
-  consumeStatusCharge,
-  createLifecycleStatus,
-  refreshLifecycleStatus,
-} from './statusLifecycle';
+import type { Fighter, StatusInstance } from './types';
+import { consumeStatusValue, queryMechanic } from './statusSystem';
 
 export const DEFENSE_STATUS_TYPES = new Set(['SPELL_BLOCK', 'BKB', 'INVUL']);
 
@@ -90,6 +86,13 @@ const DEFENSE_STATUS_PROFILES: Record<string, DefenseStatusProfile> = {
     preSkillBlockText: '🎮 【残局专注】{target} 预判 {user} 的【{skill}】，把命中窗口错开{healText}！',
     controlBlockText: '🎮 【残局专注】{target} 没有断节奏，免疫了{effect}！',
     controlCleanseText: '🎮 【残局专注】{target} 稳住输入节奏，甩开了控制与沉默效果！',
+  },
+  gamer_continue: {
+    name: '续关保护',
+    spellBlockText: '🎮 【CONTINUE?】留下的续关保护为 {target} 挡下了{source}{healText}！',
+    preSkillBlockText: '🎮 【CONTINUE?】留下的续关保护为 {target} 挡下了 {user} 的【{skill}】{healText}！',
+    controlBlockText: '🎮 【CONTINUE?】的续关保护稳住 {target} 的操作，免疫了{effect}！',
+    controlCleanseText: '🎮 【CONTINUE?】的续关保护为 {target} 重置了控制与沉默效果！',
   },
 
   rabbit_slide: {
@@ -372,16 +375,17 @@ export function isDefenseStatusType(type: string): type is DefenseStatusKind {
   return DEFENSE_STATUS_TYPES.has(type);
 }
 
-function profileFor(status: StatusEntry, kind: DefenseStatusKind): DefenseStatusProfile {
-  if (status.sourceId && DEFENSE_STATUS_PROFILES[status.sourceId]) return DEFENSE_STATUS_PROFILES[status.sourceId];
+function profileFor(status: StatusInstance, kind: DefenseStatusKind): DefenseStatusProfile {
+  const sourceId = status.attribution.effectSourceId;
+  if (DEFENSE_STATUS_PROFILES[sourceId]) return DEFENSE_STATUS_PROFILES[sourceId];
   if (kind === 'SPELL_BLOCK') return DEFENSE_STATUS_PROFILES.generic_spell_block;
   if (kind === 'BKB') return DEFENSE_STATUS_PROFILES.generic_control_immunity;
   return DEFENSE_STATUS_PROFILES.generic_invul;
 }
 
-export function getDefenseStatusDisplayName(status: StatusEntry): string | undefined {
-  if (!isDefenseStatusType(status.type)) return undefined;
-  return profileFor(status, status.type).name;
+export function getDefenseStatusDisplayName(status: StatusInstance): string | undefined {
+  if (!isDefenseStatusType(status.identityId)) return undefined;
+  return profileFor(status, status.identityId).name;
 }
 
 function applyTemplate(template: string, vars: DefenseTemplateVars): string {
@@ -394,38 +398,20 @@ function applyTemplate(template: string, vars: DefenseTemplateVars): string {
     .replace(/{effect}/g, vars.effect ?? '');
 }
 
-export function grantStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  const existing = fighter.status.find((status) =>
-    status.type === type && (!sourceId || status.sourceId === sourceId),
+export function findDefenseStatus(fighter: Fighter, type: DefenseStatusKind): StatusInstance | undefined {
+  return queryMechanic(fighter, type).entries.find((status) =>
+    status.identityId === type && (status.charges ?? status.remainingTurns ?? 1) > 0,
   );
-  if (existing) {
-    refreshLifecycleStatus(existing, duration);
-    if (sourceId) existing.sourceId = sourceId;
-    return;
-  }
-  fighter.status.push(createLifecycleStatus(type, duration, sourceId));
 }
 
-export function createStatusEntry(type: string, duration: number, sourceId?: string): StatusEntry {
-  return createLifecycleStatus(type, duration, sourceId);
-}
-
-export function statusSourceFromSkill(skill: SkillDefinition): string | undefined {
-  return skill.statusSource;
-}
-
-export function findDefenseStatus(fighter: Fighter, type: DefenseStatusKind): StatusEntry | undefined {
-  return fighter.status.find((status) => status.type === type);
-}
-
-export function consumeSpellBlock(fighter: Fighter): StatusEntry | undefined {
+export function consumeSpellBlock(fighter: Fighter): StatusInstance | undefined {
   const spellBlock = findDefenseStatus(fighter, 'SPELL_BLOCK');
   if (!spellBlock) return undefined;
-  consumeStatusCharge(fighter, spellBlock);
+  consumeStatusValue(fighter, spellBlock, 'charges');
   return spellBlock;
 }
 
-export function formatSpellBlock(status: StatusEntry, targetName: string, incomingSource: string, healText: string): string {
+export function formatSpellBlock(status: StatusInstance, targetName: string, incomingSource: string, healText: string): string {
   const profile = profileFor(status, 'SPELL_BLOCK');
   return applyTemplate(profile.spellBlockText ?? DEFENSE_STATUS_PROFILES.generic_spell_block.spellBlockText!, {
     target: targetName,
@@ -435,7 +421,7 @@ export function formatSpellBlock(status: StatusEntry, targetName: string, incomi
 }
 
 export function formatPreSkillSpellBlock(
-  status: StatusEntry,
+  status: StatusInstance,
   userName: string,
   skillName: string,
   targetName: string,
@@ -451,7 +437,7 @@ export function formatPreSkillSpellBlock(
   });
 }
 
-export function formatInvul(status: StatusEntry, targetName: string, incomingSource: string): string {
+export function formatInvul(status: StatusInstance, targetName: string, incomingSource: string): string {
   const profile = profileFor(status, 'INVUL');
   return applyTemplate(profile.invulText ?? DEFENSE_STATUS_PROFILES.generic_invul.invulText!, {
     target: targetName,
@@ -459,7 +445,7 @@ export function formatInvul(status: StatusEntry, targetName: string, incomingSou
   });
 }
 
-export function formatAttackInvul(status: StatusEntry, targetName: string, attackerName: string): string {
+export function formatAttackInvul(status: StatusInstance, targetName: string, attackerName: string): string {
   const profile = profileFor(status, 'INVUL');
   return applyTemplate(profile.attackInvulText ?? DEFENSE_STATUS_PROFILES.generic_invul.attackInvulText!, {
     target: targetName,
@@ -468,7 +454,7 @@ export function formatAttackInvul(status: StatusEntry, targetName: string, attac
   });
 }
 
-export function formatControlBlocked(status: StatusEntry, targetName: string, effectName: string): string {
+export function formatControlBlocked(status: StatusInstance, targetName: string, effectName: string): string {
   const profile = profileFor(status, 'BKB');
   return applyTemplate(profile.controlBlockText ?? DEFENSE_STATUS_PROFILES.generic_control_immunity.controlBlockText!, {
     target: targetName,
@@ -477,7 +463,7 @@ export function formatControlBlocked(status: StatusEntry, targetName: string, ef
   });
 }
 
-export function formatControlCleanse(status: StatusEntry, targetName: string): string {
+export function formatControlCleanse(status: StatusInstance, targetName: string): string {
   const profile = profileFor(status, 'BKB');
   return applyTemplate(profile.controlCleanseText ?? DEFENSE_STATUS_PROFILES.generic_control_immunity.controlCleanseText!, {
     target: targetName,
@@ -486,9 +472,9 @@ export function formatControlCleanse(status: StatusEntry, targetName: string): s
   });
 }
 
-export function formatDefenseBreak(statuses: StatusEntry[], targetName: string): string {
+export function formatDefenseBreak(statuses: StatusInstance[], targetName: string): string {
   const names = [...new Set(statuses.map((status) =>
-    profileFor(status, status.type === 'SPELL_BLOCK' || status.type === 'BKB' ? status.type : 'INVUL').name,
+    profileFor(status, status.identityId === 'SPELL_BLOCK' || status.identityId === 'BKB' ? status.identityId : 'INVUL').name,
   ))];
   return names.length > 0 ? `${targetName} 的${names.join('、')}` : `${targetName} 的防护状态`;
 }

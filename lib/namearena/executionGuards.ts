@@ -1,4 +1,5 @@
 import type { DefeatOptions, Fighter, SkillContext } from './types';
+import { hasIdentity } from './statusSystem';
 
 interface ExecuteDefeatGuardOptions {
   ignoreActiveDeathSave?: boolean;
@@ -11,7 +12,7 @@ const ACTIVE_DEATH_SAVE_STATUS_TYPES = new Set([
 ]);
 
 export function hasActiveDeathSave(target: Fighter): boolean {
-  return target.status.some((status) => ACTIVE_DEATH_SAVE_STATUS_TYPES.has(status.type)) ||
+  return [...ACTIVE_DEATH_SAVE_STATUS_TYPES].some((identityId) => hasIdentity(target, identityId)) ||
     !!target.tokusatsuInstantActionQueued;
 }
 

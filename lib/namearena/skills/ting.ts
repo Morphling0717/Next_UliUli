@@ -1,5 +1,6 @@
 import type { SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
+import { hasIdentity, removeEffects } from '../statusSystem';
 
 const {
   SKILL_TAGS,
@@ -14,11 +15,11 @@ export const tingSkills: Record<string, SkillDefinition> = {
   blood_mist: {
     name: '血雾爆发', tag: SKILL_TAGS.MAG, mult: 3.0, lifesteal: 1.0,
     text: '🌫️ {USER} 引爆了脊髓剑中的血液！对 {TARGET} 造成 {VAL} 伤害并大量吸血！脊髓剑随之破碎！',
-    condition: (user) => !!user.hasSpinalSword || user.status.some((s) => s.type === 'SPINAL_SWORD'),
+    condition: (user) => !!user.hasSpinalSword || hasIdentity(user, 'SPINAL_SWORD'),
     onExecute: (ctx) => {
       ctx.user.hasSpinalSword = false;
       ctx.user.spinalSwordTurns = 0;
-      ctx.user.status = (ctx.user.status ?? []).filter((s) => s.type !== 'SPINAL_SWORD');
+      removeEffects(ctx.user, { identityIds: ['SPINAL_SWORD'], reason: 'consumed' });
       if (!ctx.user.isTing) {
         ctx.user.jobData.skills = (ctx.user.jobData.skills ?? []).filter((s) => s !== 'summon_puppet_ting');
       }
@@ -44,14 +45,14 @@ export const tingSkills: Record<string, SkillDefinition> = {
     name: '怨灵尖啸',
     tag: SKILL_TAGS.DEBUFF,
     mult: 2.4,
-    status: 'WEAK',
+    statusApplications: [{ identityId: 'WEAK' }],
     lifesteal: 0.35,
     text: '👻 {USER} 发出刺耳尖啸，震碎 {TARGET} 的斗志，造成 {VAL} 伤害并附加虚弱！',
   },
   bone_guard: {
     name: '骨血架势',
     tag: SKILL_TAGS.BUFF,
-    status: 'COUNTER',
+    statusApplications: [{ identityId: 'COUNTER' }],
     text: '🦴 {USER} 用骨血摆出反击架势，下一次受到物理攻击会立刻反弹！',
   },
   suicide_bomb: {
@@ -65,6 +66,6 @@ export const tingSkills: Record<string, SkillDefinition> = {
     condition: (user) => user.hpPct > 0.35,
     text: '💣 {USER} 扑向了 {TARGET}，启动了自毁程序！"我和你爆了！！" 爆炸造成 {VAL} 真实伤害，自己也被反冲炸到濒死！',
   },
-  grudge_curse: { name: '怨念诅咒', tag: SKILL_TAGS.DEBUFF, status: 'WEAK', text: '👻 {USER} 发出凄厉的哀嚎，{TARGET} 受到诅咒，攻击力大幅下降！' },
+  grudge_curse: { name: '怨念诅咒', tag: SKILL_TAGS.DEBUFF, statusApplications: [{ identityId: 'WEAK' }], text: '👻 {USER} 发出凄厉的哀嚎，{TARGET} 受到诅咒，攻击力大幅下降！' },
   summon_puppet_ting: { name: '召唤小汀', tag: SKILL_TAGS.SPECIAL, isSummon: true, summonName: '小汀(傀儡)', summonJob: 'WARRIOR', stats: { hp: 5000, atk: 100, def: 500 }, text: '🩸 {USER} 将脊髓剑插入地面... 鲜血汇聚，召唤出了一具名为【小汀(傀儡)】的无意识肉身保护自己！' },
 };

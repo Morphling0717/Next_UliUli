@@ -9,6 +9,8 @@ import {
 } from './counters';
 import type { ActionResolutionRuntime } from './types';
 import { consumeOwlEvadeOpening } from './guards';
+import { getEffectiveCombatStat } from '../statusMechanics';
+import { isDamageRedirected } from '../damageRedirects';
 
 export function createSkillContext(
   runtime: ActionResolutionRuntime,
@@ -23,6 +25,11 @@ export function createSkillContext(
   skill?: SkillDefinition,
 ): SkillContext {
   let customDirectOpeningConsumed = false;
+  let actionVisualEmitted = false;
+  let declaredVisualTargetIds: string[] | undefined;
+  let lastAffectedTargetId: string | undefined;
+  const isSupportSkill = skill?.tag === 'heal' || skill?.tag === 'buff';
+  const actionPresentation = skill?.presentation ?? 'skill';
   const context: SkillContext = {
     user,
     target,
@@ -30,10 +37,38 @@ export function createSkillContext(
     fighters: runtime.fighters,
     turnCount: runtime.turnCount,
     largeRound: runtime.largeRound,
-    setLogs: () => {},
-    log: (type, text, metadata) => runtime.log(type, text, metadata),
+    log: (type, text, metadata) => {
+      const visualTargetIds = metadata?.targetIds ?? (
+        !actionVisualEmitted && declaredVisualTargetIds?.length
+          ? declaredVisualTargetIds
+          : [isSupportSkill ? user.id : lastAffectedTargetId ?? context.target.id]
+      );
+      const canAnchorAction = isSupportSkill
+        ? type === 'buff' || type === 'heal' || type === 'skill'
+        : type === 'skill' || type === 'crit' || type === 'poison';
+      const explicitVisual = metadata?.visualCue;
+      const visualCue = explicitVisual ?? (!actionVisualEmitted && canAnchorAction ? {
+        kind: 'combat_action' as const,
+        sourceId: user.id,
+        targetIds: visualTargetIds,
+        presentation: actionPresentation,
+        ...(skill?.visualEffect ? { effectId: skill.visualEffect } : {}),
+      } : undefined);
+      if (visualCue) actionVisualEmitted = true;
+      runtime.log(type, text, {
+        ...metadata,
+        targetIds: visualTargetIds,
+        ...(visualCue ? { visualCue } : {}),
+      });
+    },
+    setVisualTargets: (targets) => {
+      if (actionVisualEmitted) return;
+      declaredVisualTargetIds = [...new Set(targets.map((fighter) => fighter.id))];
+    },
     getTeamId: (fighter) => runtime.getTeamId(fighter),
+    getEffectiveStat: (fighter, key) => getEffectiveCombatStat(fighter, key, 'custom'),
     applyDamage: (damageTarget, amount, source, trueDamage, attacker, options) => {
+      lastAffectedTargetId = damageTarget.id;
       context.suppressOnHitStatuses = false;
       context.suppressOnHitStatusTargetId = damageTarget.id;
       const damageAttacker = attacker ?? user;
@@ -43,6 +78,9 @@ export function createSkillContext(
         deferTransform: true,
         actionName: options?.actionName ?? actionName,
         respectDefenses: options?.respectDefenses ?? (source === 'skill' && damageTarget.id !== damageAttacker.id),
+        sourceKind: options?.sourceKind ?? (source === 'skill' ? (skill?.damageSourceKind ?? (skill?.directTarget ? 'custom' : 'manual')) : undefined),
+        damageScope: options?.damageScope ?? (skill?.tag === 'magical' || skill?.tag === 'debuff' ? 'magical' : 'physical'),
+        statusHitCount: options?.statusHitCount ?? skill?.statusHitCount ?? 1,
       };
       const actualDmg = runtime.applyDamage(damageTarget, amount, source, trueDamage, attacker ?? user, damageOptions);
       const blockedOutcome = damageOptions.resolution?.outcome === 'spell_blocked' ||
@@ -80,9 +118,25 @@ export function createSkillContext(
             ? [...damageOptions.redirectedMomoDefeatedTargetIds]
             : undefined;
         }
+        if (damageOptions.redirectedByYuzu) {
+          options.redirectedByYuzu = true;
+          options.redirectedYuzuDamage = damageOptions.redirectedYuzuDamage ?? 0;
+          options.redirectedYuzuTargetIds = damageOptions.redirectedYuzuTargetIds
+            ? [...damageOptions.redirectedYuzuTargetIds]
+            : undefined;
+          options.redirectedYuzuDefeatedTargetIds = damageOptions.redirectedYuzuDefeatedTargetIds
+            ? [...damageOptions.redirectedYuzuDefeatedTargetIds]
+            : undefined;
+        }
         if (damageOptions.targetDefeatedDuringDamage) options.targetDefeatedDuringDamage = true;
         if (damageOptions.suppressOnHitStatuses) options.suppressOnHitStatuses = true;
         if (damageOptions.resolution) options.resolution = damageOptions.resolution;
+      }
+      if (isDamageRedirected(damageOptions)) {
+        runtime.log('system', `state-sync:${damageTarget.id}`, {
+          displayInFeed: false,
+          targetIds: [damageTarget.id],
+        });
       }
       context.suppressOnHitStatuses = !!damageOptions.suppressOnHitStatuses;
       if (damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
@@ -93,19 +147,32 @@ export function createSkillContext(
       }
       return actualDmg;
     },
-    markDefeated: (defeatTarget, options) => runtime.markDefeated(defeatTarget, options),
-    applyStatus: (statusTarget, type, duration, options) => {
+    markDefeated: (defeatTarget, options) => {
+      lastAffectedTargetId = defeatTarget.id;
+      return runtime.markDefeated(defeatTarget, options);
+    },
+    applyStatus: (statusTarget, application) => {
+      lastAffectedTargetId = statusTarget.id;
       if (
         context.suppressOnHitStatuses &&
         context.suppressOnHitStatusTargetId === statusTarget.id
       ) {
         return false;
       }
-      return runtime.applyStatus(statusTarget, type, duration, {
-        ...options,
-        applierId: options?.applierId ?? user.id,
-        applierName: options?.applierName ?? user.name,
+      return runtime.applyStatus(statusTarget, {
+        ...application,
+        attribution: {
+          ...application.attribution,
+          effectSourceId: application.attribution?.effectSourceId ?? application.identityId,
+          applierId: application.attribution?.applierId ?? user.id,
+          applierName: application.attribution?.applierName ?? user.name,
+          creditActorId: application.attribution?.creditActorId ?? user.id,
+        },
       });
+    },
+    dispelStatusEffects: (statusTarget, options) => {
+      lastAffectedTargetId = statusTarget.id;
+      return runtime.dispelStatusEffects(statusTarget, options);
     },
     handleWaitCounter: (counterTarget, counterUser, counterActionName) =>
       handleWaitCounter(runtime, counterTarget, counterUser, triggerDepth, counterActionName ?? actionName),
@@ -115,8 +182,8 @@ export function createSkillContext(
     queuePreResolutionLog,
     triggerDepth,
     executeSkillAction: (id, skillUser, skillTarget, depth) => runtime.executeSkillAction(id, skillUser, skillTarget, depth),
+    runReactionAction: (actor, descriptor, callback) => runtime.runReactionAction(actor, descriptor, callback),
     executeSummonSkill: (skill, skillUser, userTeamId) => runtime.executeSummonSkill(skill, skillUser, userTeamId),
-    STATUS_EFFECTS: runtime.statusEffects,
   };
   return context;
 }

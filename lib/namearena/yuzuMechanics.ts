@@ -1,8 +1,9 @@
-import type { Fighter, StatusApplicationOptions, StatusEntry } from './types';
+import type { BattleLogMetadata, Fighter, StatusApplication } from './types';
+import type { ReactionActionDescriptor } from './characterHooks';
 import { isSelectableTargetFor } from './targeting';
-import { withOriginiumStatShapeSuspended } from './puruisaishiMechanics';
-import { grantStatus } from './defenseStatus';
-import { withTimedStatModifiersSuspended } from './statModifiers';
+import { commitFormTransition } from './battlePresentation';
+
+import { consumeBarriers, getBarrierTotal, grantBarrier, removeBarriers, removeEffects, applyStatus, withPersistentStatusShapesSuspended } from './statusSystem';
 
 export type YuzuWeaponId =
   | 'sword'
@@ -22,7 +23,7 @@ export type YuzuWeapon = {
   weight: number;
   attackMultiplier: number;
   selfHealMaxHpRatio?: number;
-  bleedTurns?: number;
+  bleedCount?: number;
   evadeDownTurns?: number;
   defDownTurns?: number;
   shieldFromDamageRatio?: number;
@@ -34,22 +35,27 @@ export interface YuzuRuntime {
   largeRound?: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   syncHpPct?: (fighter: Fighter) => void;
-  applyStatus?: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
+  applyStatus?: (target: Fighter, application: StatusApplication) => boolean;
+  runReactionAction?: (
+    actor: Fighter,
+    descriptor: ReactionActionDescriptor,
+    callback: () => void,
+  ) => void;
 }
 
 export const YUZU_WEAPONS: Record<YuzuWeaponId, YuzuWeapon> = {
   sword: { id: 'sword', name: '剑', weight: 10, attackMultiplier: 1.15 },
-  knife: { id: 'knife', name: '刀', weight: 10, attackMultiplier: 1.15, bleedTurns: 3 },
+  knife: { id: 'knife', name: '刀', weight: 10, attackMultiplier: 1.15, bleedCount: 3 },
   greatsword: { id: 'greatsword', name: '巨剑', weight: 10, attackMultiplier: 1.35, evadeDownTurns: 2 },
   hammer: { id: 'hammer', name: '锤', weight: 10, attackMultiplier: 1.3, evadeDownTurns: 3, defDownTurns: 1 },
   shield: { id: 'shield', name: '盾牌', weight: 10, attackMultiplier: 1.05, shieldFromDamageRatio: 0.75 },
-  dagger: { id: 'dagger', name: '匕首', weight: 10, attackMultiplier: 1.1, bleedTurns: 2 },
-  whip: { id: 'whip', name: '鞭', weight: 10, attackMultiplier: 1.3, bleedTurns: 5 },
+  dagger: { id: 'dagger', name: '匕首', weight: 10, attackMultiplier: 1.1, bleedCount: 2 },
+  whip: { id: 'whip', name: '鞭', weight: 10, attackMultiplier: 1.3, bleedCount: 5 },
   spear: { id: 'spear', name: '长矛', weight: 10, attackMultiplier: 1.3, evadeDownTurns: 3 },
   spoon: { id: 'spoon', name: '勺子', weight: 1, attackMultiplier: 0.7, selfHealMaxHpRatio: 0.3 },
-  scythe: { id: 'scythe', name: '镰刀', weight: 9, attackMultiplier: 1.6, bleedTurns: 3, evadeDownTurns: 3, defDownTurns: 3 },
+  scythe: { id: 'scythe', name: '镰刀', weight: 9, attackMultiplier: 1.6, bleedCount: 3, evadeDownTurns: 3, defDownTurns: 3 },
 };
 
 export const YUZU_PHASE_ONE_REDUCTION = 0.15;
@@ -62,6 +68,7 @@ export const YUZU_UNMARKED_INCOMING_DAMAGE_MULTIPLIER = 0.23;
 export const YUZU_MARK_DAMAGE_BONUS = 0.2;
 export const YUZU_UNMARKED_DAMAGE_PENALTY = 0.2;
 export const YUZU_FURIOSO_COUNT = 9;
+export const YUZU_BARRIER_IDENTITY = 'YUZU_BARRIER';
 
 function scaleStat(value: number, multiplier: number, floor: number): number {
   return Math.max(floor, Math.floor(value * multiplier));
@@ -89,14 +96,6 @@ function rebuildYuzuPhaseThreeStats(yuzu: Fighter): void {
   yuzu.agl = scaleStat(yuzu.agl, 1.25, 130);
   yuzu.mag = scaleStat(yuzu.mag, 1.4, 95);
   yuzu.wis = scaleStat(yuzu.wis, 1.35, 220);
-}
-
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(fighter, type, duration, sourceId);
-}
-
-function removeStatus(fighter: Fighter, predicate: (status: StatusEntry) => boolean): void {
-  fighter.status = fighter.status.filter((status) => !predicate(status));
 }
 
 function sameTeam(runtime: Pick<YuzuRuntime, 'getTeamId'>, a: Fighter, b: Fighter): boolean {
@@ -178,40 +177,81 @@ export function drawYuzuWeapon(hasActiveTeammate: boolean, forcedWeapon?: YuzuWe
   return weightedPickWeapon(pool);
 }
 
-export function grantYuzuShield(target: Fighter, amount: number, sourceId?: string): number {
+export function grantYuzuShield(target: Fighter, amount: number, sourceId?: string, sourceName?: string): number {
   const gained = Math.max(0, Math.floor(amount));
   if (gained <= 0) return 0;
-  target.yuzuShield = Math.max(0, Math.floor(target.yuzuShield ?? 0)) + gained;
-  refreshStatus(target, 'YUZU_BARRIER', 999, sourceId);
+  const resolvedSourceName = sourceName ?? (sourceId === target.id ? target.name : undefined);
+  grantBarrier(target, gained, {
+    identityId: YUZU_BARRIER_IDENTITY,
+    sourceId: `yuzu:${sourceId ?? target.id}`,
+    displayName: '镜界护盾',
+    icon: '🛡️',
+    tickMode: 'permanent',
+    dispelTier: 'none',
+    stackMode: 'add',
+    attribution: {
+      effectSourceId: `yuzu:${sourceId ?? target.id}`,
+      effectSourceName: '镜界护盾',
+      applierId: sourceId ?? target.id,
+      applierName: resolvedSourceName,
+      creditActorId: sourceId ?? target.id,
+    },
+  });
   return gained;
 }
 
-export function setYuzuShield(target: Fighter, amount: number, sourceId?: string): void {
-  target.yuzuShield = Math.max(0, Math.floor(amount));
-  if ((target.yuzuShield ?? 0) > 0) refreshStatus(target, 'YUZU_BARRIER', 999, sourceId);
-  else clearYuzuShield(target);
+export function setYuzuShield(target: Fighter, amount: number, sourceId?: string, sourceName?: string): void {
+  removeBarriers(target, { identityIds: [YUZU_BARRIER_IDENTITY] });
+  const next = Math.max(0, Math.floor(amount));
+  if (next > 0) {
+    const resolvedSourceName = sourceName ?? (sourceId === target.id ? target.name : undefined);
+    grantBarrier(target, next, {
+      identityId: YUZU_BARRIER_IDENTITY,
+      sourceId: `yuzu:${sourceId ?? target.id}`,
+      displayName: '镜界护盾',
+      icon: '🛡️',
+      tickMode: 'permanent',
+      dispelTier: 'none',
+      stackMode: 'overwrite',
+      attribution: {
+        effectSourceId: `yuzu:${sourceId ?? target.id}`,
+        effectSourceName: '镜界护盾',
+        applierId: sourceId ?? target.id,
+        applierName: resolvedSourceName,
+        creditActorId: sourceId ?? target.id,
+      },
+    });
+  }
+  if (yuzuBarrierTotal(target) <= 0) clearYuzuShield(target);
 }
 
 export function clearYuzuShield(target: Fighter): void {
-  target.yuzuShield = 0;
-  removeStatus(target, (status) => status.type === 'YUZU_BARRIER');
+  removeBarriers(target, { identityIds: [YUZU_BARRIER_IDENTITY] });
+}
+
+export function isYuzuBarrier(barrier: NonNullable<Fighter['barriers']>[number]): boolean {
+  return barrier.identityId === YUZU_BARRIER_IDENTITY;
+}
+
+function yuzuBarrierTotal(target: Fighter): number {
+  return getBarrierTotal(target, { identityIds: [YUZU_BARRIER_IDENTITY] });
 }
 
 export function consumeYuzuShield(target: Fighter, incomingAmount: number): { absorbed: number; remaining: number; broke: boolean } {
-  const shield = Math.max(0, Math.floor(target.yuzuShield ?? 0));
   const incoming = Math.max(0, Math.floor(incomingAmount));
+  const shield = yuzuBarrierTotal(target);
   if (shield <= 0 || incoming <= 0) return { absorbed: 0, remaining: incoming, broke: false };
-
-  const absorbed = Math.min(shield, incoming);
-  const nextShield = shield - absorbed;
-  target.yuzuShield = nextShield;
-  if (nextShield <= 0) clearYuzuShield(target);
-  return { absorbed, remaining: incoming - absorbed, broke: shield > 0 && nextShield <= 0 };
+  const result = consumeBarriers(target, incoming, { identityIds: [YUZU_BARRIER_IDENTITY] });
+  const remainingShield = yuzuBarrierTotal(target);
+  return {
+    absorbed: result.absorbed,
+    remaining: result.remaining,
+    broke: shield > 0 && remainingShield <= 0,
+  };
 }
 
 export function ensureYuzuState(yuzu: Fighter): void {
   yuzu.yuzuPhase = Math.max(1, yuzu.yuzuPhase ?? 1);
-  yuzu.yuzuShield = Math.max(0, Math.floor(yuzu.yuzuShield ?? 0));
   yuzu.yuzuKnownTeammateIds = [...new Set((yuzu.yuzuKnownTeammateIds ?? []).filter((id) => id && id !== yuzu.id))];
   yuzu.yuzuMarkedHitCount = Math.max(0, yuzu.yuzuMarkedHitCount ?? 0);
   if (yuzu.yuzuFuriosoCountedTurn !== undefined) {
@@ -228,7 +268,7 @@ export function ensureYuzuOpeningShield(runtime: YuzuRuntime, yuzu: Fighter): bo
   const targets = activeYuzuFriendlyUnits(runtime, yuzu, true);
   if (targets.length === 0) return false;
   const shield = Math.max(1, Math.floor(yuzu.maxHp * YUZU_OPENING_SHIELD_RATIO));
-  targets.forEach((target) => grantYuzuShield(target, shield, yuzu.id));
+      targets.forEach((target) => grantYuzuShield(target, shield, yuzu.id, yuzu.name));
   runtime.log('buff', `🪞 【镜界开幕】${yuzu.name} 让镜世界展开，${targets.map((target) => target.name).join('、')} 获得 ${shield} 点镜界护盾。`);
   return true;
 }
@@ -237,25 +277,28 @@ export function enterYuzuPhaseTwo(runtime: YuzuRuntime, yuzu: Fighter, reason: s
   ensureYuzuState(yuzu);
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) >= 2 || !runtime.isActiveCombatant(yuzu)) return false;
 
-  yuzu.yuzuPhase = 2;
-  withTimedStatModifiersSuspended(yuzu, () => {
-    withOriginiumStatShapeSuspended(yuzu, () => rebuildYuzuPhaseTwoStats(yuzu));
+  let teamMode = false;
+  let shield = 0;
+  return commitFormTransition({
+    fighter: yuzu,
+    log: runtime.log,
+    message: () => `🪞 【一码归一码】${yuzu.name} ${reason}，进入二阶段：镜界肉体完成重构，生命恢复至 ${yuzu.currentHp}/${yuzu.maxHp}，${teamMode ? '为全体友方' : '为自己'}施加 ${shield} 点镜界护盾。`,
+    mutate: () => {
+      yuzu.yuzuPhase = 2;
+      withPersistentStatusShapesSuspended(yuzu, () => rebuildYuzuPhaseTwoStats(yuzu));
+      runtime.syncHpPct?.(yuzu);
+      teamMode = activeYuzuTeammates(runtime, yuzu).length > 0;
+      const targets = teamMode ? activeYuzuFriendlyUnits(runtime, yuzu, true) : [yuzu];
+      const shieldRatio = teamMode ? YUZU_PHASE_TWO_TEAM_SHIELD_RATIO : YUZU_PHASE_TWO_SOLO_SHIELD_RATIO;
+      shield = Math.max(1, Math.floor(yuzu.maxHp * shieldRatio));
+      targets.forEach((target) => grantYuzuShield(target, shield, yuzu.id, yuzu.name));
+    },
   });
-  runtime.syncHpPct?.(yuzu);
-  const teamMode = activeYuzuTeammates(runtime, yuzu).length > 0;
-  const targets = teamMode ? activeYuzuFriendlyUnits(runtime, yuzu, true) : [yuzu];
-  const shieldRatio = teamMode ? YUZU_PHASE_TWO_TEAM_SHIELD_RATIO : YUZU_PHASE_TWO_SOLO_SHIELD_RATIO;
-  const shield = Math.max(1, Math.floor(yuzu.maxHp * shieldRatio));
-  targets.forEach((target) => grantYuzuShield(target, shield, yuzu.id));
-  runtime.log('transform', `🪞 【一码归一码】${yuzu.name} ${reason}，进入二阶段：镜界肉体完成重构，生命恢复至 ${yuzu.currentHp}/${yuzu.maxHp}，${teamMode ? '为全体友方' : '为自己'}施加 ${shield} 点镜界护盾。`);
-  return true;
 }
 
 export function clearYuzuMark(runtime: YuzuRuntime, yuzu: Fighter): void {
   runtime.fighters.forEach((fighter) => {
-    fighter.status = fighter.status.filter((status) =>
-      !(status.type === 'YUZU_MARKED' && status.sourceId === yuzu.id),
-    );
+    removeEffects(fighter, { identityIds: ['YUZU_MARKED'], effectSourceIds: [yuzu.id], reason: 'scripted' });
   });
   yuzu.yuzuMarkedTargetId = undefined;
 }
@@ -264,16 +307,21 @@ export function enterYuzuPhaseThree(runtime: YuzuRuntime, yuzu: Fighter, reason:
   ensureYuzuState(yuzu);
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) >= 3 || !runtime.isActiveCombatant(yuzu)) return false;
 
-  yuzu.yuzuPhase = 3;
-  withTimedStatModifiersSuspended(yuzu, () => {
-    withOriginiumStatShapeSuspended(yuzu, () => rebuildYuzuPhaseThreeStats(yuzu));
+  const changed = commitFormTransition({
+    fighter: yuzu,
+    log: runtime.log,
+    message: () => `🪞 【苦痛啊，你是我的唯一】${yuzu.name} ${reason}，进入三阶段：属性再次重构，生命稳定在 ${yuzu.currentHp}/${yuzu.maxHp}，镜界开始定制唯一目标。`,
+    mutate: () => {
+      yuzu.yuzuPhase = 3;
+      withPersistentStatusShapesSuspended(yuzu, () => rebuildYuzuPhaseThreeStats(yuzu));
+      yuzu.yuzuMarkedHitCount = 0;
+      yuzu.yuzuFuriosoCountedTurn = undefined;
+      yuzu.yuzuFuriosoReady = false;
+      removeEffects(yuzu, { identityIds: ['YUZU_TAUNT'], reason: 'scripted' });
+      runtime.syncHpPct?.(yuzu);
+    },
   });
-  yuzu.yuzuMarkedHitCount = 0;
-  yuzu.yuzuFuriosoCountedTurn = undefined;
-  yuzu.yuzuFuriosoReady = false;
-  removeStatus(yuzu, (status) => status.type === 'YUZU_TAUNT');
-  runtime.syncHpPct?.(yuzu);
-  runtime.log('transform', `🪞 【苦痛啊，你是我的唯一】${yuzu.name} ${reason}，进入三阶段：属性再次重构，生命稳定在 ${yuzu.currentHp}/${yuzu.maxHp}，镜界开始定制唯一目标。`);
+  if (!changed) return false;
   ensureYuzuMarkedTarget(runtime, yuzu);
   return true;
 }
@@ -319,7 +367,7 @@ export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fig
     )
     : undefined;
   if (current) {
-    refreshStatus(current, 'YUZU_MARKED', 999, yuzu.id);
+    applyStatus(current, { identityId: 'YUZU_MARKED', attribution: { effectSourceId: yuzu.id } });
     return current;
   }
 
@@ -327,9 +375,28 @@ export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fig
   const enemies = activeYuzuMarkTargets(runtime, yuzu);
   const target = enemies[Math.floor(Math.random() * enemies.length)];
   if (!target) return undefined;
-  yuzu.yuzuMarkedTargetId = target.id;
-  refreshStatus(target, 'YUZU_MARKED', 999, yuzu.id);
-  runtime.log('debuff', `🎯 【镜界标记】${yuzu.name} 将 ${target.name} 定制为唯一目标。`);
+  const applyMark = () => {
+    yuzu.yuzuMarkedTargetId = target.id;
+    applyStatus(target, { identityId: 'YUZU_MARKED', attribution: { effectSourceId: yuzu.id } });
+    runtime.log('debuff', `🎯 【镜界标记】${yuzu.name} 将 ${target.name} 定制为唯一目标。`, {
+      actorId: yuzu.id,
+      actorName: yuzu.name,
+      targetIds: [target.id],
+      skillId: 'yuzu_mirror_mark',
+      skillName: '镜界标记',
+      presentation: 'skill',
+    });
+  };
+  if (runtime.runReactionAction) {
+    runtime.runReactionAction(yuzu, {
+      skillId: 'yuzu_mirror_mark',
+      skillName: '镜界标记',
+      presentation: 'skill',
+      targets: [target],
+    }, applyMark);
+  } else {
+    applyMark();
+  }
   return target;
 }
 
@@ -348,26 +415,38 @@ export function registerYuzuMarkedSkill(runtime: YuzuRuntime, yuzu: Fighter, tar
 export function applyYuzuWeaponEffects(runtime: YuzuRuntime, user: Fighter, target: Fighter, weapon: YuzuWeapon, actualDamage: number): void {
   if (actualDamage <= 0) return;
 
-  const applyHostileStatus = (type: string, duration: number) => {
+  const applyHostileStatus = (identityId: string, value: number) => {
     if (!runtime.isActiveCombatant(target)) return false;
-    if (runtime.applyStatus) return runtime.applyStatus(target, type, duration, {
-      sourceId: user.id,
-      applierId: user.id,
-      applierName: user.name,
+    if (runtime.applyStatus) return runtime.applyStatus(target, {
+      identityId,
+      ...(identityId === 'BLEED' ? { count: value } : { remainingTurns: value }),
+      attribution: {
+        effectSourceId: user.id,
+        applierId: user.id,
+        applierName: user.name,
+      },
     });
-    refreshStatus(target, type, duration, user.id);
+    applyStatus(target, {
+      identityId,
+      ...(identityId === 'BLEED' ? { count: value } : { remainingTurns: value }),
+      attribution: {
+        effectSourceId: user.id,
+        applierId: user.id,
+        applierName: user.name,
+      },
+    });
     return true;
   };
   const appliedEffects: string[] = [];
-  if (weapon.bleedTurns && applyHostileStatus('BLEED', weapon.bleedTurns)) appliedEffects.push(`${weapon.bleedTurns} 回合流血`);
+  if (weapon.bleedCount && applyHostileStatus('BLEED', weapon.bleedCount)) appliedEffects.push(`${weapon.bleedCount} 次流血`);
   if (weapon.evadeDownTurns && applyHostileStatus('YUZU_EVADE_DOWN', weapon.evadeDownTurns)) appliedEffects.push(`${weapon.evadeDownTurns} 回合闪避破坏`);
   if (weapon.defDownTurns && applyHostileStatus('YUZU_DEF_DOWN', weapon.defDownTurns)) appliedEffects.push(`${weapon.defDownTurns} 回合防御破坏`);
 
   if (weapon.shieldFromDamageRatio) {
-    refreshStatus(user, 'YUZU_TAUNT', 2, user.id);
+    applyStatus(user, { identityId: 'YUZU_TAUNT', remainingTurns: 2, attribution: { effectSourceId: user.id } });
     const shieldAmount = Math.max(1, Math.floor(actualDamage * weapon.shieldFromDamageRatio));
     const targets = activeYuzuFriendlyUnits(runtime, user, true);
-    targets.forEach((ally) => grantYuzuShield(ally, shieldAmount, user.id));
+    targets.forEach((ally) => grantYuzuShield(ally, shieldAmount, user.id, user.name));
     runtime.log('buff', `🛡️ 【盾牌】${user.name} 把 ${actualDamage} 点命中伤害折成镜界护盾，${targets.map((ally) => ally.name).join('、')} 获得 ${shieldAmount} 点护盾，并把嘲讽拉满。`);
   }
 
@@ -378,5 +457,5 @@ export function applyYuzuWeaponEffects(runtime: YuzuRuntime, user: Fighter, targ
 
 export function yuzuWeaponSummary(weapon: YuzuWeapon): string {
   const pct = Math.round((weapon.attackMultiplier - 1) * 100);
-  return pct >= 0 ? `${weapon.name}（伤害+${pct}%）` : `${weapon.name}（伤害${pct}%）`;
+  return pct >= 0 ? `${weapon.name}（武器倍率+${pct}%）` : `${weapon.name}（武器倍率${pct}%）`;
 }

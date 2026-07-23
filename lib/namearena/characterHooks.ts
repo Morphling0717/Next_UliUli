@@ -35,6 +35,7 @@ export type {
   CharacterHook,
   CharacterHookRuntime,
   CharacterReentryContext,
+  ReactionActionDescriptor,
   CharacterReviveContext,
   CharacterSkillSelectionContext,
   CharacterSkillSelectionPhase,

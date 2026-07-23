@@ -1,6 +1,7 @@
 import type { CharacterHook } from './types';
-import { grantStatus } from '../defenseStatus';
-import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
+
+import { applyStatus, hasIdentity } from '../statusSystem';
+import { getStatusIdentityIdsByTag } from '../statusRegistry';
 
 export const succubusHook: CharacterHook = {
   id: 'succubus',
@@ -9,7 +10,8 @@ export const succubusHook: CharacterHook = {
     if (phase !== 'postMechanics' || !actor.isSuccubus || !actor.transformed) return null;
 
     const hasInstall = actor.jobData.skills.includes('chimera_install');
-    const plugCount = actor.status.filter((status) => status.type.startsWith('PLUG_')).length;
+    const plugCount = getStatusIdentityIdsByTag('chimera_plug')
+      .filter((identityId) => hasIdentity(actor, identityId)).length;
     if (!hasInstall || plugCount >= 8) return null;
 
     const pluginSkills = actor.jobData.skills.filter((skill) =>
@@ -44,10 +46,11 @@ export const succubusHook: CharacterHook = {
       fighter.hasUltimateEvolved = false;
       fighter.chimeraMilestoneLevel = 0;
       fighter.chimeraInstantActionQueued = false;
-      fighter.status = fighter.status.filter((status) => !isStatusType(status.type, REVIVE_CLEAN_STATUS_TYPES));
-      grantStatus(fighter, 'BKB', 1, 'chimera_startup_core');
-      grantStatus(fighter, 'SPELL_BLOCK', 1, 'chimera_startup_core');
-      grantStatus(fighter, 'REGEN', 2);
+      applyStatus(fighter, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'chimera_startup_core' } });
+      applyStatus(fighter, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'chimera_startup_core' } });
+      applyStatus(fighter, { identityId: 'REGEN', remainingTurns: 2 });
+    }, () => {
+      runtime.dispelStatusEffects(fighter, { strength: 'strong', direction: 'negative' });
     });
     return true;
   },

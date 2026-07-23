@@ -4,18 +4,18 @@ import type {
   OwlSummonKind,
   OwlWarForm,
   StatKey,
-  StatusApplicationOptions,
+  StatusApplication,
+  DispelOptions,
+  DispelResolution,
+  BattleLogMetadata,
 } from './types';
-import { cloneJobDefinition, healFighter, setCurrentHp } from './combatState';
-import { grantStatus } from './defenseStatus';
-import { REVIVE_CLEAN_STATUS_TYPES } from './statusRules';
-import {
-  applyPermanentStatBuff,
-  applyTimedStatModifier,
-  makeTimedStatModifier,
-  removeTimedStatModifier,
-  withTimedStatModifiersSuspended,
-} from './statModifiers';
+import { applyPermanentStatBuff, cloneJobDefinition, resolveHealing, setCurrentHp } from './combatState';
+import { commitFormTransition } from './battlePresentation';
+
+import { hasIdentity, initializeEffectState, removeEffects, applyStatus, withPersistentStatusShapesSuspended } from './statusSystem';
+import { getEffectiveCombatStat, getPanelCombatStat } from './statusMechanics';
+import { generateUniqueRuntimeId } from './core';
+import { isDamageRedirected } from './damageRedirects';
 
 export interface OwlRuntime {
   fighters: Fighter[];
@@ -23,7 +23,7 @@ export interface OwlRuntime {
   turnCount: number;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   syncHpPct: (fighter: Fighter) => void;
   applyDamage?: (
     target: Fighter,
@@ -33,9 +33,10 @@ export interface OwlRuntime {
     attacker?: Fighter,
     options?: import('./types').DamageApplicationOptions,
   ) => number;
-  applyStatus?: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
+  applyStatus?: (target: Fighter, application: StatusApplication) => boolean;
+  dispelStatusEffects?: (target: Fighter, options: DispelOptions) => DispelResolution;
   markDefeated?: (target: Fighter, options?: import('./types').DefeatOptions) => boolean;
-  flushDeferredDamageEvents?: (fighter: Fighter) => void;
+  flushDeferredDamageEvents?: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
 }
 
 const OWL_FORM_STATUS: Record<OwlWarForm, string> = {
@@ -52,12 +53,6 @@ const OWL_FORM_NAMES: Record<OwlWarForm, string> = {
   sorrow: '哀兵',
 };
 
-const OWL_FORM_MODIFIER_ID = 'owl-war-form';
-const OWL_FORM_STAT_BUFFS: Partial<Record<OwlWarForm, Partial<Record<StatKey, number>>>> = {
-  victory: { atk: 1.08, def: 1.08, spd: 1.08, agl: 1.08, mag: 1.08, res: 1.08, wis: 1.08 },
-  pride: { def: 0.55, res: 0.55 },
-};
-
 export const OWL_HEAVEN_MAX = 7;
 export const OWL_WILD_MAX = 5;
 export const OWL_HEAVEN_INHERIT_RATIO = 0.085;
@@ -70,7 +65,11 @@ function uniqueSummonName(runtime: Pick<OwlRuntime, 'fighters'>, baseName: strin
 }
 
 function createId(kind: OwlSummonKind, runtime: Pick<OwlRuntime, 'turnCount' | 'fighters'>): string {
-  return `owl-${kind}-${runtime.turnCount}-${runtime.fighters.length}-${Math.random().toString(36).slice(2, 9)}`;
+  return generateUniqueRuntimeId(
+    runtime.fighters.map((fighter) => fighter.id),
+    () => `owl-${kind}-${runtime.turnCount}-${runtime.fighters.length}-${Math.random().toString(36).slice(2, 9)}`,
+    `owl-${kind}`,
+  );
 }
 
 type OwlSummonSpec = {
@@ -117,7 +116,7 @@ export function spawnOwlSummon(runtime: OwlRuntime, owl: Fighter, spec: OwlSummo
     color: owl.color,
     isDead: false,
     isDeadAnnounced: false,
-    status: [],
+    statuses: [],
     stats: { kills: 0, dmgDealt: 0, dmgTaken: 0 },
     teamId: owl.teamId,
     isSummon: true,
@@ -135,6 +134,7 @@ export function spawnOwlSummon(runtime: OwlRuntime, owl: Fighter, spec: OwlSummo
       wildStacks: spec.kind === 'emperor' ? 0 : undefined,
     },
   };
+  initializeEffectState(summon);
   runtime.fighters.push(summon);
   return summon;
 }
@@ -177,20 +177,18 @@ export function ensureOwlState(owl: Fighter, turnCount = 0): NonNullable<Fighter
     owl.owlState = normalized;
   }
   const formStatus = OWL_FORM_STATUS[warForm];
-  if (!owl.status.some((status) => status.type === formStatus)) {
-    const duration = warForm === 'defeat' || warForm === 'sorrow' ? 10 : 999;
-    grantStatus(owl, formStatus, duration, owl.id);
-  }
-  const statBuff = OWL_FORM_STAT_BUFFS[warForm];
-  if (statBuff && !owl.timedStatModifiers?.some((modifier) => modifier.id === OWL_FORM_MODIFIER_ID)) {
-    applyTimedStatModifier(owl, makeTimedStatModifier(OWL_FORM_MODIFIER_ID, formStatus, statBuff, owl.id));
+  if (!hasIdentity(owl, formStatus)) {
+    applyStatus(owl, {
+      identityId: formStatus,
+      ...(warForm === 'defeat' || warForm === 'sorrow' ? { remainingTurns: 10 } : {}),
+      attribution: { effectSourceId: owl.id, applierId: owl.id, applierName: owl.name },
+    });
   }
   return owl.owlState;
 }
 
 function clearOwlForm(owl: Fighter): void {
-  owl.status = owl.status.filter((status) => !Object.values(OWL_FORM_STATUS).includes(status.type));
-  removeTimedStatModifier(owl, OWL_FORM_MODIFIER_ID);
+  removeEffects(owl, { identityIds: Object.values(OWL_FORM_STATUS), reason: 'replaced' });
 }
 
 export function switchOwlWarForm(runtime: OwlRuntime, owl: Fighter, next: OwlWarForm, reason: string): boolean {
@@ -201,21 +199,29 @@ export function switchOwlWarForm(runtime: OwlRuntime, owl: Fighter, next: OwlWar
   state.warForm = next;
   state.warFormStartedTurn = runtime.turnCount;
   const statusType = OWL_FORM_STATUS[next];
-  grantStatus(owl, statusType, next === 'defeat' || next === 'sorrow' ? 10 : 999, owl.id);
-  const statBuff = OWL_FORM_STAT_BUFFS[next];
-  if (statBuff) {
-    applyTimedStatModifier(owl, makeTimedStatModifier(OWL_FORM_MODIFIER_ID, statusType, statBuff, owl.id));
-  }
-  if (next === 'sorrow') {
-    owl.status = owl.status.filter((status) =>
-      status.type === statusType || !REVIVE_CLEAN_STATUS_TYPES.includes(status.type),
-    );
-    const healed = healFighter(owl, Math.floor(owl.maxHp * 0.3), runtime.log);
-    runtime.log('heal', healed > 0
-      ? `🕯️ 【哀兵】${owl.name} 清除所有可驱散的异常与减益（矿石病等不可驱散状态保留），恢复 ${healed} 点生命！`
-      : `🕯️ 【哀兵】${owl.name} 清除所有可驱散的异常与减益（矿石病等不可驱散状态保留）；生命已经全满。`);
-  }
+  applyStatus(owl, {
+    identityId: statusType,
+    ...(next === 'defeat' || next === 'sorrow' ? { remainingTurns: 10 } : {}),
+    attribution: { effectSourceId: owl.id, applierId: owl.id, applierName: owl.name },
+  });
   runtime.log('buff', `🦉 【天意侵蚀】${owl.name} 由【${OWL_FORM_NAMES[previous]}】转入【${OWL_FORM_NAMES[next]}】：${reason}。`);
+  if (next === 'sorrow') {
+    runtime.dispelStatusEffects?.(owl, { strength: 'strong', direction: 'negative' });
+    // Strong-dispelling AIRBORNE settles landing damage immediately. If that
+    // landing is lethal, Sorrow recovery must not revive the defeated Owl.
+    if (!runtime.isActiveCombatant(owl)) return true;
+    const healing = resolveHealing(owl, Math.floor(owl.maxHp * 0.3), {
+      kind: 'direct',
+      sourceId: '哀兵',
+      healer: owl,
+    }, runtime.log);
+    const recoveryText = healing.actual > 0
+      ? `恢复 ${healing.actual} 点生命`
+      : healing.outcome === 'blocked'
+        ? '治疗被完全阻止'
+        : '生命已经全满';
+    runtime.log(healing.outcome === 'blocked' ? 'info' : 'heal', `🕯️ 【哀兵】${owl.name} 清除所有可驱散的异常与减益（矿石病等不可驱散状态保留）；${recoveryText}！`);
+  }
   return true;
 }
 
@@ -227,11 +233,16 @@ export function getOwlOutgoingMultiplier(attacker?: Fighter): number {
   return 1;
 }
 
+export function getOwlWarFormDisplayName(attacker?: Fighter): string | undefined {
+  if (!attacker?.isOwl) return undefined;
+  return OWL_FORM_NAMES[ensureOwlState(attacker).warForm];
+}
+
 export function getOwlIncomingMultiplier(target: Fighter): number {
   if (!target.isOwl) return 1;
   const state = ensureOwlState(target);
   let multiplier = state.warForm === 'defeat' ? 0.15 : state.phase === 2 ? 0.75 : 1;
-  if (target.status.some((status) => status.type === 'OWL_EAR_GUARD')) multiplier *= 0.75;
+  if (hasIdentity(target, 'OWL_EAR_GUARD')) multiplier *= 0.75;
   return multiplier;
 }
 
@@ -263,32 +274,56 @@ function scaleStat(value: number, multiplier: number, floor: number): number {
 }
 
 export function rebuildOwlPhaseTwoStats(owl: Fighter): void {
+  const state = ensureOwlState(owl);
   owl.maxHp = Math.max(3100, Math.min(3700, Math.floor(owl.maxHp * 6.3)));
   owl.currentHp = owl.maxHp;
-  withTimedStatModifiersSuspended(owl, () => {
-    owl.atk = scaleStat(owl.atk, 4.4, 190);
-    owl.def = scaleStat(owl.def, 5.5, 165);
-    owl.spd = scaleStat(owl.spd, 5.8, 135);
-    owl.agl = scaleStat(owl.agl, 5.0, 120);
-    owl.mag = scaleStat(owl.mag, 5.0, 210);
-    owl.res = scaleStat(owl.res, 5.5, 180) + 10;
-    owl.wis = scaleStat(owl.wis, 5.0, 195);
-  });
-  ensureOwlState(owl).phase = 2;
-  grantStatus(owl, 'OWL_ACID_FEARLESS', 999, owl.id);
+  owl.atk = scaleStat(owl.atk, 4.4, 190);
+  owl.def = scaleStat(owl.def, 5.5, 165);
+  owl.spd = scaleStat(owl.spd, 5.8, 135);
+  owl.agl = scaleStat(owl.agl, 5.0, 120);
+  owl.mag = scaleStat(owl.mag, 5.0, 210);
+  owl.res = scaleStat(owl.res, 5.5, 180) + 10;
+  owl.wis = scaleStat(owl.wis, 5.0, 195);
+  // The active war form also shapes the phase-two base once; the live form
+  // status remains independently queryable and can still change later.
+  if (state.warForm === 'victory') {
+    applyPermanentStatBuff(owl, { atk: 1.08, def: 1.08, spd: 1.08, agl: 1.08, mag: 1.08, res: 1.08, wis: 1.08 });
+  } else if (state.warForm === 'pride') {
+    applyPermanentStatBuff(owl, { def: 0.55, res: 0.55 });
+  }
+  applyStatus(owl, { identityId: 'OWL_ACID_FEARLESS', attribution: { effectSourceId: owl.id } });
+}
+
+export function getOwlPhaseTwoLightningTargets(runtime: OwlRuntime, owl: Fighter): Fighter[] {
+  return runtime.fighters.filter((target) =>
+    target.id !== owl.id &&
+    runtime.isActiveCombatant(target) &&
+    !hasIdentity(target, 'SYNERGY_SLACKING') &&
+    !(target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) &&
+    (target.untargetableUntilTurn ?? -1) < runtime.turnCount,
+  );
 }
 
 export function releaseOwlPhaseTwoLightning(runtime: OwlRuntime, owl: Fighter): void {
   if (!runtime.applyDamage) return;
-  const targets = runtime.fighters.filter((target) =>
-    target.id !== owl.id &&
-    runtime.isActiveCombatant(target) &&
-    !target.status.some((status) => status.type === 'SYNERGY_SLACKING') &&
-    !(target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) &&
-    (target.untargetableUntilTurn ?? -1) < runtime.turnCount,
-  );
-  const raw = Math.max(80, Math.floor(owl.mag * 0.72 + owl.wis * 0.28));
-  runtime.log('skill', `⚡ 【煮酒惊雷】${owl.name}：“这雷把我吓死了！”雷光席卷全场！`);
+  const targets = getOwlPhaseTwoLightningTargets(runtime, owl);
+  const effectiveMag = getEffectiveCombatStat(owl, 'mag', 'custom');
+  const effectiveWis = getEffectiveCombatStat(owl, 'wis', 'custom');
+  const raw = Math.max(80, Math.floor(effectiveMag * 0.72 + effectiveWis * 0.28));
+  runtime.log('skill', `⚡ 【煮酒惊雷】${owl.name}：“这雷把我吓死了！”雷光席卷全场！`, {
+    actorId: owl.id,
+    actorName: owl.name,
+    skillId: 'owl_phase_two_lightning',
+    skillName: '煮酒惊雷',
+    presentation: 'skill',
+    targetIds: targets.map((target) => target.id),
+    visualCue: {
+      kind: 'combat_action',
+      sourceId: owl.id,
+      targetIds: targets.map((target) => target.id),
+      presentation: 'skill',
+    },
+  });
   targets.forEach((target) => {
     if (!runtime.isActiveCombatant(target)) return;
     const damageOptions: import('./types').DamageApplicationOptions = {
@@ -298,12 +333,8 @@ export function releaseOwlPhaseTwoLightning(runtime: OwlRuntime, owl: Fighter): 
       deferTransform: true,
     };
     const actual = runtime.applyDamage?.(target, raw, 'skill', false, owl, damageOptions) ?? 0;
-    const redirected = !!(
-      damageOptions.redirectedByJoker ||
-      damageOptions.redirectedByOriginiumCore ||
-      damageOptions.redirectedByOwlEmperor ||
-      damageOptions.redirectedByMomo
-    );
+    const redirected = isDamageRedirected(damageOptions);
+    runtime.flushDeferredDamageEvents?.(target, 'mitigation');
     if (!redirected) {
       runtime.log(
         actual > 0 ? 'skill' : 'info',
@@ -379,9 +410,7 @@ export function addOwlWildStack(runtime: OwlRuntime, owl: Fighter): number {
   const next = before + 1;
   if (emperor.owlSummonState) emperor.owlSummonState.wildStacks = next;
   applyPermanentStatBuff(emperor, { atk: 1.08, spd: 1.06 });
-  grantStatus(emperor, 'OWL_WILD', 999, owl.id);
-  const wildStatus = emperor.status.find((status) => status.type === 'OWL_WILD' && status.sourceId === owl.id);
-  if (wildStatus) wildStatus.displayDesc = `撒野 ${next}/${OWL_WILD_MAX} 层：攻击与速度提高`;
+  applyStatus(emperor, { identityId: 'OWL_WILD', potency: 1, attribution: { effectSourceId: owl.id } });
   return next;
 }
 
@@ -391,34 +420,40 @@ export function enterOwlPhaseThree(runtime: OwlRuntime, owl: Fighter): boolean {
   const nextJob = runtime.jobs.OWL_DRAGON_SOVEREIGN;
   if (!nextJob) return false;
   const hpRatio = owl.maxHp > 0 ? owl.currentHp / owl.maxHp : 1;
-  withTimedStatModifiersSuspended(owl, () => {
-    owl.maxHp = Math.max(3950, Math.min(4750, Math.floor(owl.maxHp * 1.26)));
-    owl.currentHp = Math.max(1, Math.floor(owl.maxHp * Math.max(0.57, hpRatio)));
-    owl.atk = scaleStat(owl.atk, 1.35, 270);
-    owl.def = scaleStat(owl.def, 1.25, 205);
-    owl.spd = scaleStat(owl.spd, 1.2, 160);
-    owl.agl = scaleStat(owl.agl, 1.15, 138);
-    owl.mag = scaleStat(owl.mag, 1.3, 285);
-    owl.res = scaleStat(owl.res, 1.25, 220);
-    owl.wis = scaleStat(owl.wis, 1.3, 255);
+  let emperor: Fighter | undefined;
+  return commitFormTransition({
+    fighter: owl,
+    log: runtime.log,
+    message: () => `🐉 【天意七重】${owl.name}：“恭喜爹可以撑地了！”转入第三阶段【${nextJob.name}】，玉玺入手并召唤 ${emperor?.name ?? '帝王之征'}！`,
+    mutate: () => {
+      withPersistentStatusShapesSuspended(owl, () => {
+        owl.maxHp = Math.max(3950, Math.min(4750, Math.floor(owl.maxHp * 1.26)));
+        owl.currentHp = Math.max(1, Math.floor(owl.maxHp * Math.max(0.57, hpRatio)));
+        owl.atk = scaleStat(owl.atk, 1.35, 270);
+        owl.def = scaleStat(owl.def, 1.25, 205);
+        owl.spd = scaleStat(owl.spd, 1.2, 160);
+        owl.agl = scaleStat(owl.agl, 1.15, 138);
+        owl.mag = scaleStat(owl.mag, 1.3, 285);
+        owl.res = scaleStat(owl.res, 1.25, 220);
+        owl.wis = scaleStat(owl.wis, 1.3, 255);
+      });
+      owl.job = 'OWL_DRAGON_SOVEREIGN';
+      owl.jobData = cloneJobDefinition(nextJob);
+      owl.transformed = true;
+      state.phase = 3;
+      state.heavenStacks = OWL_HEAVEN_MAX;
+      if (state.riverMarkedTargetId) {
+        const marked = runtime.fighters.find((fighter) => fighter.id === state.riverMarkedTargetId);
+        if (marked) removeEffects(marked, { identityIds: ['OWL_RIVER_MARK'], effectSourceIds: [owl.id], reason: 'scripted' });
+      }
+      delete state.riverMarkedTargetId;
+      delete state.riverMarkExpiresTurn;
+      applyPermanentStatBuff(owl, { atk: 1.18 });
+      applyStatus(owl, { identityId: 'OWL_IMPERIAL_SEAL', attribution: { effectSourceId: owl.id } });
+      emperor = spawnOwlEmperor(runtime, owl);
+      runtime.syncHpPct(owl);
+    },
   });
-  owl.job = 'OWL_DRAGON_SOVEREIGN';
-  owl.jobData = cloneJobDefinition(nextJob);
-  owl.transformed = true;
-  state.phase = 3;
-  state.heavenStacks = OWL_HEAVEN_MAX;
-  if (state.riverMarkedTargetId) {
-    const marked = runtime.fighters.find((fighter) => fighter.id === state.riverMarkedTargetId);
-    if (marked) marked.status = marked.status.filter((status) => !(status.type === 'OWL_RIVER_MARK' && status.sourceId === owl.id));
-  }
-  delete state.riverMarkedTargetId;
-  delete state.riverMarkExpiresTurn;
-  applyPermanentStatBuff(owl, { atk: 1.18 });
-  grantStatus(owl, 'OWL_IMPERIAL_SEAL', 999, owl.id);
-  const emperor = spawnOwlEmperor(runtime, owl);
-  runtime.syncHpPct(owl);
-  runtime.log('transform', `🐉 【天意七重】${owl.name}：“恭喜爹可以撑地了！”转入第三阶段【${nextJob.name}】，玉玺入手并召唤 ${emperor.name}！`);
-  return true;
 }
 
 const INHERITED_STATS: StatKey[] = ['atk', 'def', 'spd', 'agl', 'mag', 'res', 'wis'];
@@ -436,16 +471,15 @@ export function grantOwlHeavenFromDeath(runtime: OwlRuntime, fallen: Fighter): v
     const state = ensureOwlState(owl, runtime.turnCount);
     if (state.phase !== 2) return;
     const gains: string[] = [];
-    withTimedStatModifiersSuspended(owl, () => {
-      const hpGain = Math.max(1, Math.floor(fallen.maxHp * OWL_HEAVEN_INHERIT_RATIO));
-      owl.maxHp += hpGain;
-      owl.currentHp += hpGain;
-      gains.push(`血+${hpGain}`);
-      INHERITED_STATS.forEach((key) => {
-        const gain = Math.max(1, Math.floor(fallen[key] * OWL_HEAVEN_INHERIT_RATIO));
-        owl[key] += gain;
-        gains.push(`${key}+${gain}`);
-      });
+    const hpGain = Math.max(1, Math.floor(fallen.maxHp * OWL_HEAVEN_INHERIT_RATIO));
+    owl.maxHp += hpGain;
+    owl.currentHp += hpGain;
+    gains.push(`血+${hpGain}`);
+    INHERITED_STATS.forEach((key) => {
+      const inheritedValue = getPanelCombatStat(fallen, key);
+      const gain = Math.max(1, Math.floor(inheritedValue * OWL_HEAVEN_INHERIT_RATIO));
+      owl[key] += gain;
+      gains.push(`${key}+${gain}`);
     });
     state.heavenStacks = Math.min(OWL_HEAVEN_MAX, state.heavenStacks + 1);
     runtime.syncHpPct(owl);
@@ -468,13 +502,20 @@ export function consumeOwlFoodForYuzu(
     .sort((a, b) => (a.owlSummonState?.spawnedTurn ?? 0) - (b.owlSummonState?.spawnedTurn ?? 0))[0];
   if (!food) return 0;
   const kindName = food.owlSummonState?.kind === 'rice' ? '被扒回碗里的米饭' : '一碗盖饭';
-  const healed = healFighter(yuzu, Math.floor(yuzu.maxHp * 0.1), log);
+  const healing = resolveHealing(yuzu, Math.floor(yuzu.maxHp * 0.1), {
+    kind: 'direct',
+    sourceId: '顺手加餐',
+    healer: yuzu,
+  }, log);
   const index = fighters.findIndex((fighter) => fighter.id === food.id);
   if (index >= 0) fighters.splice(index, 1);
-  log('heal', healed > 0
-    ? `🥄 【顺手加餐】${yuzu.name} 又吃掉 ${kindName}，额外恢复 ${healed} 点生命；这次消耗退场不计死亡。`
-    : `🥄 【顺手加餐】${yuzu.name} 又吃掉 ${kindName}；生命已满，这次消耗退场不计死亡。`);
-  return healed;
+  const recoveryText = healing.actual > 0
+    ? `额外恢复 ${healing.actual} 点生命`
+    : healing.outcome === 'blocked'
+      ? '治疗被完全阻止'
+      : '生命已满';
+  log(healing.outcome === 'blocked' ? 'info' : 'heal', `🥄 【顺手加餐】${yuzu.name} 又吃掉 ${kindName}；${recoveryText}，这次消耗退场不计死亡。`);
+  return healing.actual;
 }
 
 function processOwlSummonLifecycle(runtime: OwlRuntime, summon: Fighter): void {
@@ -493,10 +534,17 @@ function processOwlSummonLifecycle(runtime: OwlRuntime, summon: Fighter): void {
   if (state.kind === 'rice' && state.expiresAtTurn !== undefined && runtime.turnCount >= state.expiresAtTurn) {
     const owl = summon.summonerId ? runtime.fighters.find((fighter) => fighter.id === summon.summonerId) : undefined;
     if (owl && runtime.isActiveCombatant(owl)) {
-      const healed = healFighter(owl, Math.floor(owl.maxHp * 0.1), runtime.log);
-      runtime.log('heal', healed > 0
-        ? `🍚 【开饭】${owl.name} 吃掉 ${summon.name}，恢复 ${healed} 点生命；米饭作为消耗品退场。`
-        : `🍚 【开饭】${owl.name} 吃掉 ${summon.name}；生命已满，米饭作为消耗品退场。`);
+      const healing = resolveHealing(owl, Math.floor(owl.maxHp * 0.1), {
+        kind: 'direct',
+        sourceId: '开饭',
+        healer: owl,
+      }, runtime.log);
+      const recoveryText = healing.actual > 0
+        ? `恢复 ${healing.actual} 点生命`
+        : healing.outcome === 'blocked'
+          ? '治疗被完全阻止'
+          : '生命已满';
+      runtime.log(healing.outcome === 'blocked' ? 'info' : 'heal', `🍚 【开饭】${owl.name} 吃掉 ${summon.name}；${recoveryText}，米饭作为消耗品退场。`);
     }
     retireOwlSummon(runtime, summon);
     return;
@@ -507,21 +555,28 @@ function processOwlSummonLifecycle(runtime: OwlRuntime, summon: Fighter): void {
     return;
   }
   if (state.kind === 'spalter' && state.lockUntilTurn !== undefined && runtime.turnCount >= state.lockUntilTurn && state.dollUntilTurn === undefined) {
-    summon.status = summon.status.filter((status) => status.type !== 'OWL_SPALTER_LOCK');
+    removeEffects(summon, { identityIds: ['OWL_SPALTER_LOCK'], reason: 'expired' });
     delete state.lockUntilTurn;
     state.dollUntilTurn = runtime.turnCount + 3;
     summon.cannotAct = true;
-    const healed = healFighter(summon, Math.floor(summon.maxHp * 0.3), runtime.log);
-    grantStatus(summon, 'OWL_SPALTER_DOLL', 3, summon.summonerId);
-    runtime.log('heal', healed > 0
-      ? `🌊 【替身切换】${summon.name} 转入替身形态，恢复 ${healed} 点生命，三回合内无法行动。`
-      : `🌊 【替身切换】${summon.name} 转入替身形态；生命已满，三回合内无法行动。`);
+    const healing = resolveHealing(summon, Math.floor(summon.maxHp * 0.3), {
+      kind: 'direct',
+      sourceId: '替身切换',
+      healer: summon,
+    }, runtime.log);
+    applyStatus(summon, { identityId: 'OWL_SPALTER_DOLL', remainingTurns: 3, attribution: { effectSourceId: summon.summonerId } });
+    const recoveryText = healing.actual > 0
+      ? `恢复 ${healing.actual} 点生命`
+      : healing.outcome === 'blocked'
+        ? '治疗被完全阻止'
+        : '生命已满';
+    runtime.log(healing.outcome === 'blocked' ? 'info' : 'heal', `🌊 【替身切换】${summon.name} 转入替身形态；${recoveryText}，三回合内无法行动。`);
     return;
   }
   if (state.kind === 'spalter' && state.dollUntilTurn !== undefined && runtime.turnCount >= state.dollUntilTurn) {
     delete state.dollUntilTurn;
     summon.cannotAct = false;
-    summon.status = summon.status.filter((status) => status.type !== 'OWL_SPALTER_DOLL');
+    removeEffects(summon, { identityIds: ['OWL_SPALTER_DOLL'], reason: 'expired' });
     runtime.log('buff', `🌊 【归溟回归】${summon.name} 从替身形态回到战场，重新开始攻击。`);
   }
 }
@@ -539,7 +594,7 @@ export function processOwlGlobalTick(runtime: OwlRuntime): void {
       }
       if (state.riverMarkExpiresTurn !== undefined && runtime.turnCount >= state.riverMarkExpiresTurn) {
         const marked = runtime.fighters.find((candidate) => candidate.id === state.riverMarkedTargetId);
-        if (marked) marked.status = marked.status.filter((status) => !(status.type === 'OWL_RIVER_MARK' && status.sourceId === fighter.id));
+        if (marked) removeEffects(marked, { identityIds: ['OWL_RIVER_MARK'], effectSourceIds: [fighter.id], reason: 'expired' });
         if (state.riverMarkedTargetId) runtime.log('info', `🌊 【过江】${fighter.name} 的协同标记到期。`);
         delete state.riverMarkedTargetId;
         delete state.riverMarkExpiresTurn;
@@ -553,11 +608,11 @@ export function applyOwlRiverMark(runtime: OwlRuntime, owl: Fighter, target: Fig
   const state = ensureOwlState(owl, runtime.turnCount);
   if (state.riverMarkedTargetId) {
     const previous = runtime.fighters.find((fighter) => fighter.id === state.riverMarkedTargetId);
-    if (previous) previous.status = previous.status.filter((status) => !(status.type === 'OWL_RIVER_MARK' && status.sourceId === owl.id));
+    if (previous) removeEffects(previous, { identityIds: ['OWL_RIVER_MARK'], effectSourceIds: [owl.id], reason: 'replaced' });
   }
   state.riverMarkedTargetId = target.id;
   state.riverMarkExpiresTurn = runtime.turnCount + 5;
-  grantStatus(target, 'OWL_RIVER_MARK', 5, owl.id);
+  applyStatus(target, { identityId: 'OWL_RIVER_MARK', remainingTurns: 5, attribution: { effectSourceId: owl.id } });
 }
 
 export function markOwlSummonDeathSave(summon: Fighter, turnCount: number): 'specter' | 'spalter' | null {
@@ -566,7 +621,11 @@ export function markOwlSummonDeathSave(summon: Fighter, turnCount: number): 'spe
   if (state.kind !== 'specter' && state.kind !== 'spalter') return null;
   state.deathSaveUsed = true;
   state.lockUntilTurn = turnCount + 1;
-  grantStatus(summon, state.kind === 'specter' ? 'OWL_SPECTER_LOCK' : 'OWL_SPALTER_LOCK', 1, summon.summonerId);
+  applyStatus(summon, {
+    identityId: state.kind === 'specter' ? 'OWL_SPECTER_LOCK' : 'OWL_SPALTER_LOCK',
+    remainingTurns: 1,
+    attribution: { effectSourceId: summon.summonerId ?? summon.id, applierId: summon.summonerId },
+  });
   setCurrentHp(summon, 1);
   return state.kind;
 }

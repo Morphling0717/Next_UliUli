@@ -1,12 +1,15 @@
-import type { Fighter, StatusEffectsMap } from './types';
+import type { Fighter } from './types';
 import { canActNormally, isWinningCombatant } from './combatState';
-import { ACTION_BLOCKING_STATUS_TYPES, COUNTER_STANCE_STATUS_TYPES, isStatusType } from './statusRules';
 import type { CharacterHookRuntime } from './characterHooks';
 import { shouldCharacterPreventWin } from './characterHooks';
+import { getActionSpeedMultiplier, getEffectiveCombatStat } from './statusMechanics';
+import { buildStatusPresentationMember } from './statusPresentation';
+import { getStatusIdentityDefinition, getStatusIdentityIdsByTag } from './statusRegistry';
+import { formatTeamDisplayLabel } from './teamPresentation';
+import { findIdentity, hasIdentity, hasMechanic, queryMechanic } from './statusSystem';
 
 export interface TurnFlowRuntime {
   fighters: Fighter[];
-  statusEffects: StatusEffectsMap;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   createCharacterHookRuntime: () => CharacterHookRuntime;
@@ -18,10 +21,22 @@ function hasWaitingCounterStatus(
   fighter: Fighter,
   runtime: Pick<TurnFlowRuntime, 'isPassiveCharmCounter'>,
 ): boolean {
-  return fighter.status.some((status) =>
-    status.type === 'WAIT_COUNTER' ||
-    (isStatusType(status.type, COUNTER_STANCE_STATUS_TYPES) && !runtime.isPassiveCharmCounter(fighter, status.type)),
-  );
+  if (hasMechanic(fighter, 'STAGGERED')) return false;
+  if (hasIdentity(fighter, 'WAIT_COUNTER')) return true;
+  return getStatusesByIdentityTag(fighter, 'counter_stance')
+    .some((status) => !runtime.isPassiveCharmCounter(fighter, status.mechanicId));
+}
+
+function getStatusesByIdentityTag(
+  fighter: Fighter,
+  tag: Parameters<typeof getStatusIdentityIdsByTag>[0],
+) {
+  return getStatusIdentityIdsByTag(tag)
+    .flatMap((identityId) => {
+      const identity = getStatusIdentityDefinition(identityId);
+      return queryMechanic(fighter, identity.mechanicId, { identityIds: [identityId] }).entries;
+    })
+    .sort((a, b) => a.appliedSequence - b.appliedSequence);
 }
 
 export function determineActor(
@@ -32,7 +47,7 @@ export function determineActor(
   if (alive.length === 0) return null;
   const actionable = alive.filter((fighter) =>
     canActNormally(fighter) &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    !hasIdentity(fighter, 'SYNERGY_SLACKING'),
   );
   if (actionable.length === 0) return null;
   const priorityIds = new Set(priorityActorIds);
@@ -46,12 +61,8 @@ export function determineActor(
       ? candidates
       : actionable;
   const actionWeight = (fighter: Fighter) => {
-    let multiplier = 1;
-    if (fighter.status.some((status) => status.type === 'RABBIT_CALC_HASTE')) multiplier *= 1.13;
-    if (fighter.status.some((status) => status.type === 'RABBIT_ZERO_HASTE')) multiplier *= 1.26;
-    if (fighter.status.some((status) => status.type === 'YUZU_SLOW')) multiplier *= 0.75;
-    if (fighter.status.some((status) => status.type === 'OWL_DRAGON_SLOW')) multiplier *= 0.72;
-    return Math.max(1, Math.floor(fighter.spd * multiplier));
+    const multiplier = getActionSpeedMultiplier(fighter);
+    return Math.max(1, Math.floor(getEffectiveCombatStat(fighter, 'spd') * multiplier));
   };
   let ticket = Math.random() * actorPool.reduce((sum, fighter) => sum + actionWeight(fighter), 0);
   for (const fighter of actorPool) {
@@ -78,7 +89,10 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
       return runtime.fighters.find((candidate) => candidate.id === fighter.summonerId)?.name ?? fighter.name;
     });
     const winners = [...new Set(winnerNames)].join(' & ');
-    const winTeam = winningCombatants.length > 0 ? (winningCombatants[0].teamId ? `【${winningCombatants[0].teamId}】` : '') : '';
+    const visibleTeam = winningCombatants.length > 0
+      ? formatTeamDisplayLabel(winningCombatants[0].teamId)
+      : undefined;
+    const winTeam = visibleTeam ? `【${visibleTeam}】` : '';
     const winnerLabel = [winTeam, winners || '无（同归于尽）'].filter(Boolean).join(' ');
     runtime.log('win', `🏆 最终胜者：${winnerLabel}！`);
     return true;
@@ -87,43 +101,47 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
 }
 
 export function logUnableToAct(runtime: TurnFlowRuntime, actor: Fighter, priorBlockingStatusType?: string): void {
-  if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
+  if (hasIdentity(actor, 'SYNERGY_SLACKING')) {
     runtime.log('info', `⛺ ${actor.name} 正在场外OB摸鱼，暂时不参与战斗！`);
     return;
   }
 
-  if (priorBlockingStatusType === 'AIRBORNE' || priorBlockingStatusType === 'WT_AIRBORNE') {
-    runtime.log('info', `💫 ${actor.name} 处于【${runtime.statusEffects.AIRBORNE?.name ?? '击飞'}】状态，无法行动！`);
+  if (priorBlockingStatusType === 'AIRBORNE') {
+    runtime.log('info', `💫 ${actor.name} 处于【${getStatusIdentityDefinition('AIRBORNE').displayName}】状态，无法行动！`);
     return;
   }
 
-  const owlBlockingStatus = actor.status.find((status) =>
-    status.type === 'OWL_FORM_DEFEAT' ||
-    status.type === 'OWL_ENJOYING' ||
-    status.type === 'OWL_SPALTER_DOLL',
-  );
+  const owlBlockingStatus = ['OWL_FORM_DEFEAT', 'OWL_ENJOYING', 'OWL_SPALTER_DOLL']
+    .map((identityId) => findIdentity(actor, identityId))
+    .find((status) => !!status);
   if (owlBlockingStatus) {
-    runtime.log('info', `🦉 ${actor.name} 处于【${runtime.statusEffects[owlBlockingStatus.type]?.name ?? owlBlockingStatus.type}】状态，无法行动！`);
+    runtime.log('info', `🦉 ${actor.name} 处于【${buildStatusPresentationMember(owlBlockingStatus).name}】状态，无法行动！`);
     return;
   }
 
-  const blockingStatus = actor.status.find((status) =>
-    isStatusType(status.type, ACTION_BLOCKING_STATUS_TYPES),
-  );
-  const blockingStatusType = priorBlockingStatusType ?? blockingStatus?.type;
+  const blockingStatus = getStatusesByIdentityTag(actor, 'action_blocking')[0];
+  const blockingStatusType = priorBlockingStatusType ?? blockingStatus?.identityId;
   if (blockingStatusType) {
-    runtime.log('info', `💫 ${actor.name} 处于【${runtime.statusEffects[blockingStatusType]?.name ?? blockingStatusType}】状态，无法行动！`);
+    const displayName = blockingStatus && blockingStatus.identityId === blockingStatusType
+      ? buildStatusPresentationMember(blockingStatus).name
+      : getStatusIdentityDefinition(blockingStatusType).displayName;
+    runtime.log('info', `💫 ${actor.name} 处于【${displayName}】状态，无法行动！`);
   }
 }
 
 export function getWaitingCounterStatus(runtime: TurnFlowRuntime, actor: Fighter): string | null {
-  const waitingCounter = actor.status.find((status) =>
-    status.type === 'WAIT_COUNTER' ||
-    (isStatusType(status.type, COUNTER_STANCE_STATUS_TYPES) && !runtime.isPassiveCharmCounter(actor, status.type)),
-  );
-  return waitingCounter?.type ?? null;
+  if (hasMechanic(actor, 'STAGGERED')) return null;
+  const waitingCounter = [findIdentity(actor, 'WAIT_COUNTER'), ...getStatusesByIdentityTag(actor, 'counter_stance')]
+    .filter((status) => status !== undefined)
+    .filter((status) => status.identityId === 'WAIT_COUNTER' || !runtime.isPassiveCharmCounter(actor, status.mechanicId))
+    .sort((a, b) => a.appliedSequence - b.appliedSequence)[0];
+  return waitingCounter?.identityId ?? null;
 }
 
 export function logWaitingCounter(runtime: TurnFlowRuntime, actor: Fighter, statusType: string): void {
-  runtime.log('info', `🛡️ ${actor.name} 保持【${runtime.statusEffects[statusType]?.name ?? statusType}】姿态，等待对手出手！`);
+  const status = findIdentity(actor, statusType);
+  const displayName = status
+    ? buildStatusPresentationMember(status).name
+    : getStatusIdentityDefinition(statusType).displayName;
+  runtime.log('info', `🛡️ ${actor.name} 保持【${displayName}】姿态，等待对手出手！`);
 }

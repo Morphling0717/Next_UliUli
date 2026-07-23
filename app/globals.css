@@ -1,5 +1,5 @@
 /* Tailwind v4: keep import stable across dev/build. */
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 @source "../app/**/*.{js,ts,jsx,tsx,mdx}";
 @source "../components/**/*.{js,ts,jsx,tsx,mdx}";
 /* 扫描发信箱组件包里使用到的 Tailwind class 名，确保它们被编译进最终 CSS */
@@ -744,4 +744,54 @@ body {
   background-color: currentColor;
   -webkit-mask: var(--lucide-trash) no-repeat center / contain;
   mask: var(--lucide-trash) no-repeat center / contain;
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  .pwa-update-banner {
+    top: auto !important;
+    right: max(0.75rem, env(safe-area-inset-right)) !important;
+    bottom: max(0.75rem, env(safe-area-inset-bottom)) !important;
+    left: auto !important;
+    width: 210px !important;
+    margin-left: 0 !important;
+  }
+
+  .pwa-update-card {
+    padding: 0.5rem !important;
+  }
+
+  .pwa-update-icon,
+  .pwa-update-description {
+    display: none !important;
+  }
+}
+
+@media (max-width: 639px) and (orientation: portrait) {
+  .pwa-update-banner {
+    top: calc(env(safe-area-inset-top) + 4rem) !important;
+    right: 0.75rem !important;
+    bottom: auto !important;
+    left: auto !important;
+    width: 44px !important;
+    margin-left: 0 !important;
+  }
+
+  .pwa-update-card {
+    padding: 0.25rem !important;
+    border-radius: 0.75rem !important;
+  }
+
+  .pwa-update-copy,
+  .pwa-update-icon,
+  .pwa-update-description,
+  .pwa-update-button-label {
+    display: none !important;
+  }
+
+  .pwa-update-card button {
+    width: 34px;
+    height: 34px;
+    justify-content: center;
+    padding: 0;
+  }
 }

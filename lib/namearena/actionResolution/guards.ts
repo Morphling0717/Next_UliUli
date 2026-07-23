@@ -8,6 +8,16 @@ import {
   formatAttackInvul,
   formatDefenseBreak,
 } from '../defenseStatus';
+import {
+  consumeAccuracyCharge,
+  consumeParalysis,
+  getAccuracyAgilityMultiplier,
+  getAccuracyPointModifier,
+  getEffectiveCombatStat,
+  getEvasionMultiplier,
+  isParalyzedForAttack,
+} from '../statusMechanics';
+import { findIdentity, findMechanic, hasIdentity, hasMechanic, removeEffects } from '../statusSystem';
 
 export function missesSkill(
   user: Fighter,
@@ -15,33 +25,28 @@ export function missesSkill(
   skill: SkillDefinition,
   isIntercepted: boolean,
 ): boolean {
-  const userAgl = user.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(user.agl * 1.2) : user.agl;
-  const effectiveTargetAgl = target.status.some((status) =>
-    status.type === 'WT_SUPPRESS' ||
-    status.type === 'WT_TRACK_DAMAGED' ||
-    status.type === 'NEURAL_THEFT_DEBUFF' ||
-    status.type === 'GAMER_READ_INPUTS',
-  ) ? 0 : target.agl;
-  let targetAgl = target.status.some((status) => status.type === 'Q_BUNNY_IDOL_AGL') ? Math.floor(effectiveTargetAgl * 1.2) : effectiveTargetAgl;
-  if (target.status.some((status) => status.type === 'YUZU_EVADE_DOWN')) targetAgl = Math.floor(targetAgl * 0.55);
-  let hitChance = 0.95 + (userAgl - targetAgl) * 0.005;
+  const baseUserAgl = getEffectiveCombatStat(user, 'agl');
+  const userAgl = Math.floor(baseUserAgl * getAccuracyAgilityMultiplier(user));
+  const effectiveTargetAgl = getEffectiveCombatStat(target, 'agl');
+  const targetAgl = Math.floor(effectiveTargetAgl * getEvasionMultiplier(target));
+  let hitChance = 0.95 + (userAgl - targetAgl) * 0.005 + getAccuracyPointModifier(user);
   const guaranteedHit =
-    user.status.some((status) => status.type === 'AIM') ||
-    (user.isWT && target.status.some((status) => status.type === 'WT_SCOUTED')) ||
+    hasMechanic(user, 'AIM') ||
+    (user.isWT && hasIdentity(target, 'WT_SCOUTED')) ||
     isIntercepted ||
-    target.status.some((status) => status.type === 'NEURAL_THEFT_DEBUFF') ||
+    !!findMechanic(target, 'SURE_HIT_TAKEN') ||
     skill.alwaysHit ||
     skill.isGacha;
   if (guaranteedHit) {
     hitChance = 10.0;
   } else {
-    if (user.status.some((status) => status.type === 'BLIND')) hitChance -= 0.45;
-    if (user.status.some((status) => status.type === 'VALO_FLASH')) hitChance -= 0.55;
-    if (user.status.some((status) => status.type === 'VALO_AIM_PUNCH')) hitChance -= 0.8;
     hitChance = Math.max(0.05, Math.min(0.98, hitChance));
   }
-
-  return Math.random() > hitChance;
+  const missed = Math.random() > hitChance;
+  if (!guaranteedHit) consumeAccuracyCharge(user);
+  const isDamagingAttack = !skill.noDamage && skill.tag !== 'heal' && skill.tag !== 'buff';
+  if (missed && isDamagingAttack && isParalyzedForAttack(user)) consumeParalysis(user);
+  return missed;
 }
 
 export function canTriggerOwlEvadeOpening(
@@ -55,7 +60,7 @@ export function canTriggerOwlEvadeOpening(
     skill.tag === 'buff' ||
     (skill.mult ?? 0) <= 0
   ) return false;
-  return target.status.some((status) => status.type === 'OWL_EVADE_DOWN');
+  return hasIdentity(target, 'OWL_EVADE_DOWN');
 }
 
 export function consumeOwlEvadeOpening(
@@ -64,9 +69,9 @@ export function consumeOwlEvadeOpening(
   isIntercepted: boolean,
 ): boolean {
   if (!canTriggerOwlEvadeOpening(target, skill, isIntercepted)) return false;
-  const opening = target.status.find((status) => status.type === 'OWL_EVADE_DOWN');
+  const opening = findIdentity(target, 'OWL_EVADE_DOWN');
   if (!opening) return false;
-  target.status = target.status.filter((status) => status !== opening);
+  removeEffects(target, { instanceIds: [opening.instanceId], reason: 'consumed' });
   return true;
 }
 
@@ -76,9 +81,13 @@ export function breakAbsoluteDefense(
   user: Fighter,
   target: Fighter,
 ): boolean {
-  if (skillId === 'cosmic_slap' && target.status.some((status) => status.type === 'INVUL' || status.type === 'BKB')) {
-    const brokenStatuses = target.status.filter((status) => status.type === 'INVUL' || status.type === 'BKB');
-    target.status = target.status.filter((status) => status.type !== 'INVUL' && status.type !== 'BKB');
+  if (skillId === 'cosmic_slap' && (hasMechanic(target, 'INVUL') || hasMechanic(target, 'BKB'))) {
+    runtime.log('skill', `🌌 【神明压制】${user.name} 抬手压向 ${target.name}，开始撕开对方的绝对防御！`);
+    const brokenStatuses = runtime.dispelStatusEffects(target, {
+      strength: 'absolute',
+      direction: 'positive',
+      identityIds: ['INVUL', 'BKB'],
+    }).removed;
     runtime.log('skill', `🌌 所谓绝对防御，在神明眼中不过是层薄纸！${user.name} 强行捏碎了 ${formatDefenseBreak(brokenStatuses, target.name)}！`);
   }
   const invul = findDefenseStatus(target, 'INVUL');
@@ -112,11 +121,11 @@ export function canTouchDamagePlane(
   target: Fighter,
   skill: SkillDefinition,
 ): boolean {
-  if (user.status.some((status) => status.type === 'ETHEREAL') && skill.tag === runtime.skillTags.PHYS) {
+  if (hasIdentity(user, 'ETHEREAL') && skill.tag === runtime.skillTags.PHYS) {
     runtime.log('info', `👻 ${user.name} 处于虚无界，无法造成物理伤害！`);
     return false;
   }
-  if (target.status.some((status) => status.type === 'ETHEREAL') && skill.tag === runtime.skillTags.PHYS) {
+  if (hasIdentity(target, 'ETHEREAL') && skill.tag === runtime.skillTags.PHYS) {
     runtime.log('info', `👻 ${target.name} 处于虚无界，物理攻击无法触碰！`);
     return false;
   }

@@ -1,10 +1,10 @@
 import { cloneJobDefinition } from '../combatState';
-import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
+import { commitFormTransition } from '../battlePresentation';
+import { getStatusIdentityIdsByTag } from '../statusRegistry';
 import type { CharacterHook, CharacterHookRuntime } from './types';
-import { grantStatus } from '../defenseStatus';
+
 import { isSelectableTargetFor } from '../targeting';
-import { withOriginiumStatShapeSuspended } from '../puruisaishiMechanics';
-import { cleanupOrphanedTimedStatModifiers, withTimedStatModifiersSuspended } from '../statModifiers';
+import { applyStatus, hasIdentity, hasMechanic, queryDispellableStatuses, removeEffects, withPersistentStatusShapesSuspended } from '../statusSystem';
 import {
   addTokusatsuThroneResonance,
   clearTokusatsuThroneResonance,
@@ -14,12 +14,11 @@ import {
 const TOKUSATSU_MONSTER_ATK_MULTIPLIER = 1.445;
 const TOKUSATSU_MONSTER_MAG_MULTIPLIER = 1.495;
 
-function refreshStatus(target: Parameters<CharacterHookRuntime['syncHpPct']>[0], type: string, duration: number, sourceId?: string): void {
-  grantStatus(target, type, duration, sourceId);
-}
-
-function hasNegativeStatus(target: Parameters<CharacterHookRuntime['syncHpPct']>[0]): boolean {
-  return target.status.some((status) => isStatusType(status.type, REVIVE_CLEAN_STATUS_TYPES));
+function hasDispellableNegativeStatus(
+  target: Parameters<CharacterHookRuntime['syncHpPct']>[0],
+  strength: 'normal' | 'strong',
+): boolean {
+  return queryDispellableStatuses(target, { strength, direction: 'negative' }).length > 0;
 }
 
 function activeEnemies(runtime: CharacterHookRuntime, actor: Parameters<CharacterHookRuntime['syncHpPct']>[0]) {
@@ -46,60 +45,47 @@ export function enterTokusatsuMonsterForm(
   if (!target.isTokusatsu || target.job === 'MIRACLE_MONSTER_BUJIN') return false;
 
   const MIRACLE_MONSTER = runtime.jobs.MIRACLE_MONSTER_BUJIN;
-  const previousForm = {
-    jobKey: target.job,
-    jobName: target.jobData.name,
-    icon: target.jobData.icon,
-    phase: target.job === 'MIRACLE_BUJIN' ? 2 : 1,
-  };
   target.counterUsed = true;
-  target.status = target.status.filter((status) =>
-    status.type !== 'WAIT_COUNTER' && !isStatusType(status.type, REVIVE_CLEAN_STATUS_TYPES),
-  );
-  cleanupOrphanedTimedStatModifiers(target);
-
-  withTimedStatModifiersSuspended(target, () => {
-    withOriginiumStatShapeSuspended(target, () => {
-      const previousMaxHp = target.maxHp;
-      const monsterMaxHp = Math.max(3000, Math.min(4100, Math.floor(previousMaxHp * 1.2)));
-      target.maxHp = monsterMaxHp;
-      target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.67)));
-      target.atk = Math.max(180, Math.floor(target.atk * TOKUSATSU_MONSTER_ATK_MULTIPLIER));
-      target.def = Math.max(108, Math.floor(target.def * 1.44));
-      target.res = Math.max(128, Math.floor(target.res * 1.55));
-      target.mag = Math.max(100, Math.floor(target.mag * TOKUSATSU_MONSTER_MAG_MULTIPLIER));
-      target.spd = Math.max(128, Math.floor(target.spd * 1.15));
-      target.agl = Math.max(104, Math.floor(target.agl * 1.18));
-      target.wis = Math.max(220, Math.floor(target.wis * 1.15));
-      target.critRate = Math.min(0.41, target.critRate + 0.035);
-      if (MIRACLE_MONSTER) target.jobData = cloneJobDefinition(MIRACLE_MONSTER);
-      target.job = 'MIRACLE_MONSTER_BUJIN';
-      target.monsterTurns = 0;
-      delete target.savedStats;
-      target.hasUsedRainbowFever = false;
-    });
+  removeEffects(target, { identityIds: ['WAIT_COUNTER'], reason: 'consumed' });
+  const deferredDispelLogs: Array<{ type: string; text: string }> = [];
+  runtime.dispelStatusEffects(target, {
+    strength: 'strong',
+    direction: 'negative',
+    emitLog: (type, text) => deferredDispelLogs.push({ type, text }),
   });
-  clearTokusatsuThroneResonance(target);
-  refreshStatus(target, 'BKB', 1, 'tokusatsu_bujin_throne');
-  refreshStatus(target, 'SPELL_BLOCK', 1, 'tokusatsu_bujin_throne');
-  refreshStatus(target, 'REGEN', 2);
-  runtime.syncHpPct(target);
-
-  runtime.log('buff', `🦖 ${target.name} 受到攻击，触发【武神王座】反击！"DUAL ON！GREAT！MONSTER！Ready Fight." ${target.name} 永久进化为【奇迹怪兽武刃】，生命提升至 ${target.currentHp}/${target.maxHp}，抗性与怪兽力量全部重构！`, {
-    targetIds: [target.id],
-    visualCue: {
-      kind: 'transformation',
-      fighterId: target.id,
-      fighterName: target.name,
-      from: previousForm,
-      to: {
-        jobKey: 'MIRACLE_MONSTER_BUJIN',
-        jobName: MIRACLE_MONSTER?.name ?? '奇迹怪兽武刃',
-        icon: MIRACLE_MONSTER?.icon ?? '🦖',
-        phase: 3,
-      },
+  const changed = commitFormTransition({
+    fighter: target,
+    log: runtime.log,
+    logType: 'buff',
+    message: () => `🦖 ${target.name} 受到攻击，触发【武神王座】反击！"DUAL ON！GREAT！MONSTER！Ready Fight." ${target.name} 永久进化为【奇迹怪兽武刃】，生命提升至 ${target.currentHp}/${target.maxHp}，抗性与怪兽力量全部重构！`,
+    mutate: () => {
+      withPersistentStatusShapesSuspended(target, () => {
+        const previousMaxHp = target.maxHp;
+        const monsterMaxHp = Math.max(3000, Math.min(4100, Math.floor(previousMaxHp * 1.2)));
+        target.maxHp = monsterMaxHp;
+        target.currentHp = Math.min(monsterMaxHp, Math.max(target.currentHp, Math.floor(monsterMaxHp * 0.67)));
+        target.atk = Math.max(180, Math.floor(target.atk * TOKUSATSU_MONSTER_ATK_MULTIPLIER));
+        target.def = Math.max(108, Math.floor(target.def * 1.44));
+        target.res = Math.max(128, Math.floor(target.res * 1.55));
+        target.mag = Math.max(100, Math.floor(target.mag * TOKUSATSU_MONSTER_MAG_MULTIPLIER));
+        target.spd = Math.max(128, Math.floor(target.spd * 1.15));
+        target.agl = Math.max(104, Math.floor(target.agl * 1.18));
+        target.wis = Math.max(220, Math.floor(target.wis * 1.15));
+        target.critRate = Math.min(0.41, target.critRate + 0.035);
+        if (MIRACLE_MONSTER) target.jobData = cloneJobDefinition(MIRACLE_MONSTER);
+        target.job = 'MIRACLE_MONSTER_BUJIN';
+        target.monsterTurns = 0;
+        target.hasUsedRainbowFever = false;
+      });
+      clearTokusatsuThroneResonance(target);
+      applyStatus(target, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'tokusatsu_bujin_throne' } });
+      applyStatus(target, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'tokusatsu_bujin_throne' } });
+      applyStatus(target, { identityId: 'REGEN', remainingTurns: 2 });
+      runtime.syncHpPct(target);
     },
   });
+  if (!changed) return false;
+  deferredDispelLogs.forEach((entry) => runtime.log(entry.type, entry.text));
   if (user) {
     runtime.log('info', `🚫 ${user.name} 的攻势被 ${target.name} 的怪兽形态打断，王座余波会被大幅削弱！`);
     runtime.executeSkillAction('great_monster_victory', target, user, triggerDepth + 1);
@@ -117,7 +103,7 @@ export const tokusatsuHook: CharacterHook = {
     if (enemies.length === 0) return null;
 
     if (!actor.transformed) {
-      if ((actor.hpPct <= 0.72 || hasNegativeStatus(actor)) && ownsSkill(actor, 'tokusatsu_soul') && Math.random() < 0.65) {
+      if ((actor.hpPct <= 0.72 || hasDispellableNegativeStatus(actor, 'normal')) && ownsSkill(actor, 'tokusatsu_soul') && Math.random() < 0.65) {
         return 'tokusatsu_soul';
       }
       if (ownsSkill(actor, 'henshin_rehearsal') && Math.random() < 0.38) {
@@ -127,12 +113,12 @@ export const tokusatsuHook: CharacterHook = {
     }
 
     if (actor.job === 'MIRACLE_BUJIN') {
-      if (!actor.counterUsed && !actor.status.some((status) => status.type === 'WAIT_COUNTER') && ownsSkill(actor, 'bujin_chair')) {
+      if (!actor.counterUsed && !hasMechanic(actor, 'WAIT_COUNTER') && ownsSkill(actor, 'bujin_chair')) {
         const chairChance = getTokusatsuThroneChance(actor);
         if (Math.random() < chairChance) return 'bujin_chair';
         addTokusatsuThroneResonance(actor, 1);
       }
-      if ((hasNegativeStatus(actor) || actor.hpPct <= 0.44) && ownsSkill(actor, 'miracle_alchemy')) {
+      if ((hasDispellableNegativeStatus(actor, 'strong') || actor.hpPct <= 0.44) && ownsSkill(actor, 'miracle_alchemy')) {
         return 'miracle_alchemy';
       }
       if (actor.hpPct <= 0.62 && ownsSkill(actor, 'alchemy_armor') && Math.random() < 0.58) {
@@ -152,14 +138,18 @@ export const tokusatsuHook: CharacterHook = {
       if (!actor.hasUsedRainbowFever && ownsSkill(actor, 'rainbow_fever') && (enemies.length >= 2 || actor.hpPct <= 0.6) && Math.random() < 0.4) {
         return 'rainbow_fever';
       }
-      if ((hasNegativeStatus(actor) || actor.hpPct <= 0.45) && ownsSkill(actor, 'miracle_armor')) {
+      if ((hasDispellableNegativeStatus(actor, 'strong') || actor.hpPct <= 0.45) && ownsSkill(actor, 'miracle_armor')) {
         return 'miracle_armor';
       }
       if (enemies.length >= 3 && ownsSkill(actor, 'monster_roar') && Math.random() < 0.32) {
         return 'monster_roar';
       }
       const highBuffEnemy = enemies.some((enemy) =>
-        enemy.status.some((status) => status.type === 'INVUL' || status.type === 'BKB' || status.type === 'SPELL_BLOCK' || status.type.startsWith('CTR_') || status.type.startsWith('STYLE_')),
+        hasMechanic(enemy, 'INVUL') ||
+        hasMechanic(enemy, 'BKB') ||
+        hasMechanic(enemy, 'SPELL_BLOCK') ||
+        [...getStatusIdentityIdsByTag('counter_stance'), ...getStatusIdentityIdsByTag('rabbit_style')]
+          .some((identityId) => hasIdentity(enemy, identityId)),
       );
       if (highBuffEnemy && ownsSkill(actor, 'energy_crush') && Math.random() < 0.58) {
         return 'energy_crush';
@@ -193,10 +183,11 @@ export const tokusatsuHook: CharacterHook = {
       fighter.hasUsedTokusatsuDefiance = false;
       fighter.tokusatsuInstantActionQueued = false;
       clearTokusatsuThroneResonance(fighter);
-      fighter.status = fighter.status.filter((status) => !isStatusType(status.type, REVIVE_CLEAN_STATUS_TYPES));
-      refreshStatus(fighter, 'BKB', 1, 'tokusatsu_miracle_alchemy');
-      refreshStatus(fighter, 'SPELL_BLOCK', 1, 'tokusatsu_miracle_alchemy');
-      refreshStatus(fighter, 'REGEN', 3);
+      applyStatus(fighter, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'tokusatsu_miracle_alchemy' } });
+      applyStatus(fighter, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'tokusatsu_miracle_alchemy' } });
+      applyStatus(fighter, { identityId: 'REGEN', remainingTurns: 3 });
+    }, () => {
+      runtime.dispelStatusEffects(fighter, { strength: 'strong', direction: 'negative' });
     });
     return true;
   },

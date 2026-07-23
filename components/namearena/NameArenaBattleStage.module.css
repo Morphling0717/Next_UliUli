@@ -41,6 +41,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  overflow: clip;
   border-right: 1px solid var(--line-strong);
   background: #0b1014;
   isolation: isolate;
@@ -548,7 +549,7 @@
 
 .roundOrbit b {
   color: rgba(255, 255, 255, 0.42);
-  font-size: clamp(28px, 4vw, 54px);
+  font-size: 48px;
   line-height: 0.9;
 }
 
@@ -796,6 +797,27 @@
   white-space: nowrap;
 }
 
+.unitBadges span[data-tone="positive"] {
+  border-color: var(--lime);
+  color: #b5f3aa;
+}
+
+.unitBadges span[data-tone="negative"] {
+  border-color: var(--coral);
+  color: #ffaaa3;
+}
+
+.unitBadges span[data-tone="neutral"] {
+  border-color: #9aaab5;
+  color: #d6dde2;
+}
+
+.unitBadges span[data-tone="independent"],
+.unitBadges span[data-tone="resource"] {
+  border-color: var(--amber);
+  color: #ffda78;
+}
+
 .unitBadges .koBadge {
   border-color: var(--coral);
   color: #ffaca5;
@@ -940,7 +962,7 @@
   position: absolute;
   color: var(--coral);
   font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
-  font-size: clamp(28px, 4vw, 54px);
+  font-size: 48px;
   line-height: 1;
   text-shadow: 0 3px 0 #111, 0 0 14px rgba(0, 0, 0, 0.85);
   transform: translate(-50%, -50%);
@@ -967,7 +989,7 @@
 
 .popup.defeat {
   color: #fff;
-  font-size: clamp(34px, 5vw, 66px);
+  font-size: 58px;
   animation-duration: 1.45s;
 }
 
@@ -1010,6 +1032,44 @@
 .dossierHeading > div:first-child {
   display: grid;
   min-width: 0;
+}
+
+.dossierMetaRow {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.dossierMetaRow > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.resumeFollow {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--selected-accent) 58%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--selected-accent) 13%, rgba(8, 12, 15, 0.9));
+  color: #e9f8ff;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.resumeFollow:hover,
+.resumeFollow:focus-visible {
+  border-color: var(--selected-accent);
+  background: color-mix(in srgb, var(--selected-accent) 23%, rgba(8, 12, 15, 0.9));
+  outline: none;
 }
 
 .dossierHeading > div:first-child span {
@@ -1072,7 +1132,7 @@
   overflow-y: auto;
 }
 
-.dossierBadges > span {
+.dossierBadges > button {
   display: inline-flex;
   flex: 0 1 auto;
   align-items: center;
@@ -1087,30 +1147,208 @@
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
 }
 
-.dossierBadges > span[data-tone="damage"],
-.dossierBadges > span[data-tone="debuff"],
-.dossierBadges > span[data-tone="control"] {
+.dossierBadges > button[data-tone="negative"] {
   border-color: rgba(255, 93, 93, 0.36);
   color: #ffaaa3;
 }
 
-.dossierBadges > span[data-tone="defense"] {
-  border-color: rgba(70, 168, 255, 0.42);
-  color: #9ed0ff;
-}
-
-.dossierBadges > span[data-tone="recovery"],
-.dossierBadges > span[data-tone="buff"] {
+.dossierBadges > button[data-tone="positive"] {
   border-color: rgba(123, 227, 106, 0.38);
   color: #aef0a3;
 }
 
-.dossierBadges > span[data-tone="special"],
-.dossierBadges > span[data-tone="resource"] {
+.dossierBadges > button[data-tone="independent"],
+.dossierBadges > button[data-tone="resource"] {
   border-color: rgba(255, 200, 74, 0.4);
   color: #ffda78;
+}
+
+.dossierBadges > button[data-tone="neutral"] {
+  border-color: rgba(196, 210, 220, 0.38);
+  color: #d6dde2;
+}
+
+.dossierBadges > button:hover,
+.dossierBadges > button:focus-visible,
+.dossierBadges > button[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.14);
+  outline: none;
+}
+
+.dossierBadgeBackdrop {
+  position: fixed;
+  z-index: 1600;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(3px);
+}
+
+.dossierBadgeDetail {
+  position: relative;
+  width: min(430px, calc(100vw - 32px));
+  max-height: min(280px, 45vh);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid rgba(105, 220, 255, 0.34);
+  border-radius: 6px;
+  background: rgba(8, 12, 16, 0.97);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.48);
+  color: #e9f1f5;
+}
+
+.dossierBadgeDetail header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dossierBadgeDetail header div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.dossierBadgeDetail header span {
+  overflow: hidden;
+  color: #8ea0ab;
+  font-size: 10px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dossierBadgeDetail strong {
+  font-size: 12px;
+}
+
+.dossierBadgeDetail header button {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #dce5ea;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.dossierBadgeDetail p {
+  margin: 6px 0 0;
+  white-space: pre-line;
+  color: #b8c4cc;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.dossierBadgeEnded {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid #ffbd59;
+  background: rgba(255, 189, 89, 0.09);
+  color: #ffd79a;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+@media (min-width: 1121px) and (min-height: 621px) {
+  .root[data-density="compact"] .fighter {
+    left: clamp(92px, var(--x), calc(100% - 92px));
+    grid-template-columns: 48px 128px;
+    width: 176px;
+    min-width: 176px;
+  }
+
+  .root[data-density="compact"] .portrait {
+    width: 48px;
+    height: 58px;
+  }
+
+  .root[data-density="compact"] .unitHud {
+    grid-template-rows: 22px 8px 7px 17px;
+    height: 58px;
+    padding: 3px 6px;
+  }
+
+  .root[data-density="compact"] .unitName {
+    font-size: 12px;
+  }
+
+  .root[data-density="compact"] .unitName small,
+  .root[data-density="compact"] .unitBadges span {
+    font-size: 9px;
+  }
+
+  .root[data-density="dense"] .fighter {
+    left: clamp(74px, var(--x), calc(100% - 74px));
+    grid-template-columns: 44px 94px;
+    width: 138px;
+    min-width: 138px;
+  }
+
+  .root[data-density="dense"] .portrait {
+    width: 44px;
+    height: 54px;
+  }
+
+  .root[data-density="dense"] .unitHud {
+    grid-template-rows: 21px 7px 7px 15px;
+    height: 54px;
+    padding: 2px 5px;
+  }
+
+  .root[data-density="dense"] .unitName {
+    font-size: 11px;
+  }
+
+  .root[data-density="dense"] .unitName small,
+  .root[data-density="dense"] .unitBadges span {
+    font-size: 9px;
+  }
+
+  .root[data-density="crowded"] .fighter {
+    left: clamp(58px, var(--x), calc(100% - 58px));
+    grid-template-columns: 34px 78px;
+    width: 112px;
+    min-width: 112px;
+  }
+
+  .root[data-density="crowded"] .unitHud {
+    width: 78px;
+  }
+
+  .root[data-density="crowded"] .unitName {
+    font-size: 9.5px;
+  }
+
+  .dossierBadgeBackdrop {
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 0 0 160px 32px;
+    background: rgba(0, 0, 0, 0.2);
+    backdrop-filter: none;
+  }
+}
+
+@media (min-width: 901px) and (min-height: 621px) and (max-width: 1120px) {
+  .dossierBadgeBackdrop {
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 0 0 160px 32px;
+    background: rgba(0, 0, 0, 0.2);
+    backdrop-filter: none;
+  }
 }
 
 .dossierBadges small {
@@ -1767,7 +2005,7 @@
   border: 9px solid var(--cinematic-accent);
   border-radius: 50%;
   color: #fff;
-  font-size: clamp(92px, 17vw, 230px);
+  font-size: 210px;
   font-weight: 950;
   line-height: 1;
   box-shadow: 18px 18px 0 var(--coral), inset 0 0 0 18px rgba(255, 255, 255, 0.08);
@@ -1794,7 +2032,7 @@
   overflow-wrap: anywhere;
   margin: 8px 0 4px;
   color: #fff;
-  font-size: clamp(42px, 7vw, 108px);
+  font-size: 96px;
   font-weight: 950;
   line-height: 0.92;
   letter-spacing: 0;
@@ -1804,7 +2042,7 @@
 .cinematicCopy p {
   margin: 8px 0 0;
   color: var(--amber);
-  font-size: clamp(16px, 2vw, 31px);
+  font-size: 28px;
   font-weight: 900;
 }
 
@@ -1812,7 +2050,7 @@
   margin-top: 18px;
   color: rgba(255, 255, 255, 0.72);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: clamp(11px, 1.15vw, 15px);
+  font-size: 15px;
   font-weight: 850;
 }
 
@@ -2195,6 +2433,103 @@
   box-shadow: 0 0 15px var(--transform-accent);
   transform-origin: left center;
   animation: transformation-progress 3.2s linear both;
+}
+
+.formShift {
+  --transform-accent: var(--cyan);
+  position: absolute;
+  z-index: 72;
+  top: 50%;
+  left: 50%;
+  width: min(680px, calc(100% - 40px));
+  padding: 18px 22px;
+  border: 1px solid color-mix(in srgb, var(--transform-accent), white 18%);
+  background: rgba(5, 9, 13, 0.96);
+  box-shadow: 0 0 42px color-mix(in srgb, var(--transform-accent), transparent 62%);
+  color: var(--text);
+  pointer-events: none;
+  animation: form-shift-shell 1.5s cubic-bezier(0.16, 0.76, 0.28, 1) both;
+}
+
+.formShift header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.formShift header span {
+  color: var(--transform-accent);
+  font: 700 11px/1 var(--font-mono);
+}
+
+.formShift header strong {
+  overflow: hidden;
+  font-size: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formShiftTrack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.formShiftTrack > div {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 3px 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: #0a1117;
+}
+
+.formShiftTrack > div[data-active="true"] {
+  border-color: var(--transform-accent);
+}
+
+.formShiftTrack i {
+  grid-row: 1 / 3;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid currentColor;
+  color: var(--transform-accent);
+  font-style: normal;
+  font-size: 22px;
+}
+
+.formShiftTrack span {
+  color: #8fa0ad;
+  font: 700 10px/1.2 var(--font-mono);
+}
+
+.formShiftTrack b {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formShiftTrack em {
+  color: var(--transform-accent);
+  font: 900 19px/1 var(--font-mono);
+  font-style: normal;
+}
+
+.formShift > p {
+  overflow: hidden;
+  margin: 14px 0 0;
+  color: #dbe7ee;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .summonCinematic {
@@ -2810,6 +3145,12 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes form-shift-shell {
+  0% { opacity: 0; transform: translate(-50%, -42%) scale(0.94); }
+  18%, 78% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -56%) scale(1.02); }
+}
+
 @keyframes cinematic-in {
   0% { opacity: 0; clip-path: inset(48% 0 48% 0); }
   10% { opacity: 1; clip-path: inset(0); }
@@ -3359,11 +3700,57 @@
     grid-template-columns: repeat(5, minmax(36px, auto));
     justify-content: start;
   }
+
+  .roundOrbit b,
+  .popup {
+    font-size: 38px;
+  }
+
+  .popup.defeat {
+    font-size: 48px;
+  }
+
+  .cinematicEmblem {
+    font-size: 150px;
+  }
+
+  .cinematicCopy h2 {
+    font-size: 68px;
+  }
+
+  .cinematicCopy p {
+    font-size: 22px;
+  }
 }
 
 @media (max-height: 620px) and (orientation: landscape) {
   .root {
     grid-template-columns: minmax(0, 1fr) clamp(275px, 34vw, 340px);
+  }
+
+  .roundOrbit b,
+  .popup {
+    font-size: 32px;
+  }
+
+  .popup.defeat {
+    font-size: 40px;
+  }
+
+  .cinematicEmblem {
+    font-size: 120px;
+  }
+
+  .cinematicCopy h2 {
+    font-size: 52px;
+  }
+
+  .cinematicCopy p {
+    font-size: 18px;
+  }
+
+  .finisherTarget {
+    font-size: 12px;
   }
 
   .feed {
@@ -3484,11 +3871,23 @@
     font-size: 8px;
   }
 
+  .resumeFollow {
+    min-height: 17px;
+    gap: 2px;
+    padding: 1px 4px;
+    font-size: 8px;
+  }
+
+  .resumeFollow svg {
+    width: 9px;
+    height: 9px;
+  }
+
   .dossierHeading strong {
     font-size: 13px;
   }
 
-  .dossierBadges > span,
+  .dossierBadges > button,
   .dossierBadges small {
     height: 17px;
     font-size: 8px;
@@ -3555,6 +3954,12 @@
   .root[data-density="compact"] .unitBadges span {
     height: 12px;
     font-size: 7.5px;
+  }
+
+  .root[data-density="compact"] .fighter.active,
+  .root[data-density="compact"] .fighter.selected,
+  .root[data-density="compact"] .fighter:hover {
+    transform: translate(-50%, -50%);
   }
 
   .root[data-density="dense"] .fighter {
@@ -3928,6 +4333,31 @@
     font-size: 9px;
   }
 
+  .roundOrbit b,
+  .popup {
+    font-size: 30px;
+  }
+
+  .popup.defeat {
+    font-size: 38px;
+  }
+
+  .cinematicEmblem {
+    font-size: 104px;
+  }
+
+  .cinematicCopy h2 {
+    font-size: 44px;
+  }
+
+  .cinematicCopy p {
+    font-size: 18px;
+  }
+
+  .finisherTarget {
+    font-size: 12px;
+  }
+
   .actionBanner {
     width: calc(100% - 32px);
   }
@@ -4226,6 +4656,41 @@
 
   .exodiaResultCard {
     width: 112px;
+  }
+}
+
+@media (max-width: 520px) {
+  .formShift {
+    width: calc(100% - 20px);
+    padding: 14px 12px;
+  }
+
+  .formShift header strong {
+    font-size: 16px;
+  }
+
+  .formShiftTrack {
+    gap: 7px;
+  }
+
+  .formShiftTrack > div {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 2px 6px;
+    padding: 7px;
+  }
+
+  .formShiftTrack i {
+    width: 32px;
+    height: 32px;
+    font-size: 17px;
+  }
+
+  .formShiftTrack b {
+    font-size: 12px;
+  }
+
+  .formShiftTrack em {
+    font-size: 14px;
   }
 }
 

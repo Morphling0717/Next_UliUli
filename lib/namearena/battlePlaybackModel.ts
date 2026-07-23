@@ -20,6 +20,33 @@ export type BattlePlaybackCommit<TLog extends StageLogEntry = StageLogEntry> = {
   log?: TLog;
 };
 
+/**
+ * Queues an atomic playback frame. Hidden state checkpoints belonging to the
+ * preceding visible action are folded into that frame so the stage mutation
+ * and the log that explains it are presented together.
+ */
+export function enqueueBattlePlaybackCommit<TLog extends StageLogEntry>(
+  queue: BattlePlaybackCommit<TLog>[],
+  commit: BattlePlaybackCommit<TLog>,
+): void {
+  const log = commit.log;
+  if (log?.displayInFeed === false) {
+    const previous = queue[queue.length - 1];
+    const checkpointKey = log.actionId ?? log.rootEventId;
+    const previousKey = previous?.log?.actionId ?? previous?.log?.rootEventId;
+    if (previous && checkpointKey && previousKey === checkpointKey) {
+      queue[queue.length - 1] = {
+        ...previous,
+        fighters: commit.fighters,
+        battleTurn: commit.battleTurn,
+        battleState: commit.battleState,
+      };
+      return;
+    }
+  }
+  queue.push(commit);
+}
+
 export function createBattleFeedSnapshot<TLog extends StageLogEntry>(): BattleFeedSnapshot<TLog> {
   return { logs: [], groups: [] };
 }

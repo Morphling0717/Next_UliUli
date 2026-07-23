@@ -39,6 +39,7 @@ function asYuzuRuntime(runtime: CharacterHookRuntime): YuzuRuntime {
     isActiveCombatant: runtime.isActiveCombatant,
     log: runtime.log,
     syncHpPct: runtime.syncHpPct,
+    runReactionAction: runtime.runReactionAction,
   };
 }
 

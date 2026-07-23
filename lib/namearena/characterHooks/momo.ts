@@ -10,6 +10,7 @@ import {
   type MomoRuntime,
 } from '../momoMechanics';
 import { isSelectableTargetFor } from '../targeting';
+import { hasIdentity, queryMechanic } from '../statusSystem';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 
 function asMomoRuntime(runtime: CharacterHookRuntime): MomoRuntime {
@@ -23,6 +24,7 @@ function asMomoRuntime(runtime: CharacterHookRuntime): MomoRuntime {
     syncHpPct: runtime.syncHpPct,
     applyDamage: runtime.applyDamage,
     applyStatus: runtime.applyStatus,
+    dispelStatusEffects: runtime.dispelStatusEffects,
     markDefeated: runtime.markDefeated,
     flushDeferredDamageEvents: runtime.flushDeferredDamageEvents,
   };
@@ -82,10 +84,10 @@ function selectDragonSkill(dragon: Fighter, runtime: CharacterHookRuntime): stri
     ? runtime.fighters.find((fighter) => fighter.id === dragon.summonerId && fighter.isMomo && runtime.isActiveCombatant(fighter))
     : undefined;
   if (!owner || activeEnemies(runtime, dragon).length === 0) return 'momo_dragon_strike';
-  const hasSword = owner.status.some((status) =>
-    status.sourceId === owner.id && (status.type === 'MOMO_VILLAGE_SWORD' || status.type === 'MOMO_AWAKENED_SWORD'),
+  const hasSword = hasIdentity(owner, 'MOMO_VILLAGE_SWORD') || hasIdentity(owner, 'MOMO_AWAKENED_SWORD');
+  const hasGuard = queryMechanic(owner, 'SPELL_BLOCK').entries.some((status) =>
+    status.attribution.effectSourceId === 'momo_guard_vent',
   );
-  const hasGuard = owner.status.some((status) => status.type === 'SPELL_BLOCK' && status.sourceId === 'momo_guard_vent');
   return weightedPick([
     ['momo_sword_vent', hasSword ? 0 : 22],
     ['momo_guard_vent', hasGuard ? 0 : 18],
@@ -116,7 +118,10 @@ export const momoHook: CharacterHook = {
       state.waterDaughter
         ? `💗 ${fighter.name}：“我有两个可爱，一个是我非常可爱，另一个是我可爱你辣！”以【水人的大女儿】身份觉醒二阶段力量！`
         : `💗 ${fighter.name}：“我有两个可爱，一个是我非常可爱，另一个是我可爱你辣！”进入二阶段【${phaseTwo.name}】！`,
-      () => applyMomoPhaseTwoStats(fighter),
+      () => {
+        applyMomoPhaseTwoStats(fighter);
+        ensureMomoState(fighter).phase = 2;
+      },
     );
     return true;
   },

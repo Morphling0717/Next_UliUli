@@ -10,7 +10,11 @@ import {
   spawnOwlMeal,
 } from '../../../lib/namearena/owlMechanics';
 import { consumeOwlEvadeOpening, missesSkill } from '../../../lib/namearena/actionResolution/guards';
+import { getEffectiveCombatStat } from '../../../lib/namearena/statusMechanics';
+import { ensureMomoState } from '../../../lib/namearena/momoMechanics';
+import { clearYuzuShield, setYuzuShield } from '../../../lib/namearena/yuzuMechanics';
 import {
+  applyTestStatus,
   assert,
   localProject,
   makeFighter,
@@ -23,6 +27,10 @@ function enterPhaseTwo(engine: ReturnType<typeof makeDeathEngine>['engine'], owl
   engine.handleTransformations(owl);
   assert(owl.owlState?.phase === 2, `Owl should enter phase 2, got ${owl.owlState?.phase}`);
   assert(owl.job === 'OWL_BOILED_HERO', `Owl phase 2 job should be OWL_BOILED_HERO, got ${owl.job}`);
+  const cues = engine.events.filter((event) => event.visualCue?.kind === 'transformation' && event.visualCue.fighterId === owl.id);
+  assert(cues.length === 1, `Owl phase 2 should publish exactly one transformation cue, got ${cues.length}`);
+  const cue = cues[0]?.visualCue;
+  assert(cue?.kind === 'transformation' && cue.from.phase === 1 && cue.to.phase === 2, 'Owl phase-2 cue should atomically describe phase 1 -> 2');
 }
 
 export function runOwlCases(): string[] {
@@ -44,6 +52,10 @@ export function runOwlCases(): string[] {
     assert(engineOwl.maxHp > originalMaxHp, 'Owl phase 2 should receive transformed stats');
     assert(engineOwl.owlState?.phase === 2, 'Owl lethal phase-1 hit should enter phase 2');
     assert(logs.some((entry) => entry.text.includes('这雷把我吓死了')), 'Owl phase 2 should retain its transformation quote');
+    const cues = engine.events.filter((event) => event.visualCue?.kind === 'transformation' && event.visualCue.fighterId === engineOwl.id);
+    assert(cues.length === 1, `Owl lethal phase transition should emit exactly one cue, got ${cues.length}`);
+    const cue = cues[0]?.visualCue;
+    assert(cue?.kind === 'transformation' && cue.from.phase === 1 && cue.to.phase === 2, 'Owl lethal transition cue should not split job and phase changes');
     cases.push('Owl phase-1 lethal hit locks at one HP and transforms');
   }
 
@@ -55,14 +67,31 @@ export function runOwlCases(): string[] {
     const { engine } = makeDeathEngine([owl, victim]);
     const engineOwl = engine.fighters[0];
     enterPhaseTwo(engine, engineOwl);
-    const phaseTwoBaseAtk = engineOwl.timedStatBase?.atk ?? engineOwl.atk;
-    const phaseTwoBaseDef = engineOwl.timedStatBase?.def ?? engineOwl.def;
+    const phaseTwoBaseAtk = engineOwl.atk;
+    const phaseTwoBaseDef = engineOwl.def;
 
     engine.markDefeated(engine.fighters[1], { killer: engineOwl, message: '二阶段击杀测试' });
     assert(engineOwl.owlState?.warForm === 'pride', 'A phase-2 kill should move Owl from Victory into Pride');
-    assert(engineOwl.atk >= phaseTwoBaseAtk, `Pride should retain at least phase-2 base ATK ${phaseTwoBaseAtk}, got ${engineOwl.atk}`);
-    assert(engineOwl.def >= Math.max(1, Math.floor(phaseTwoBaseDef * 0.55)), 'Pride should reduce the phase-2 DEF layer instead of restoring phase-1 stats');
+    assert(getEffectiveCombatStat(engineOwl, 'atk') >= phaseTwoBaseAtk, `Pride should retain at least phase-2 base ATK ${phaseTwoBaseAtk}, got ${getEffectiveCombatStat(engineOwl, 'atk')}`);
+    assert(getEffectiveCombatStat(engineOwl, 'def') >= Math.max(1, Math.floor(phaseTwoBaseDef * 0.55)), 'Pride should reduce the phase-2 DEF layer instead of restoring phase-1 stats');
     cases.push('Owl phase-2 stats survive Victory-to-Pride modifier changes');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
+    const emote = makeFighter('表情@B');
+    emote.maxHp = 10000;
+    localProject.setCurrentHp(emote, 10000);
+    applyTestStatus(emote, { identityId: 'EMOTE_ADAPT', remainingTurns: 2 });
+    const { engine, logs } = makeDeathEngine([owl, emote]);
+
+    enterPhaseTwo(engine, engine.fighters[0]);
+
+    const mitigationIndex = logs.findIndex((entry) => entry.text.includes('【适应转轮】') && entry.text.includes('记录'));
+    const resultIndex = logs.findIndex((entry) => entry.text.includes('雷击命中 表情'));
+    assert(mitigationIndex >= 0, 'Owl phase-two lightning should flush Emote adaptation mitigation');
+    assert(resultIndex > mitigationIndex, 'Owl lightning must explain mitigation before logging final HP damage');
+    cases.push('Owl phase-two lightning logs mitigation before its final damage result');
   }
 
   {
@@ -158,7 +187,7 @@ export function runOwlCases(): string[] {
     const earHpBefore = engineOwl.currentHp;
     engine.applyDamage(emperor, 100, 'skill', true, engine.fighters[1], { actionName: '直接打龙', respectDefenses: true });
     assert(engineOwl.currentHp === earHpBefore - 10, 'Directly attacking 帝王之征 should cost Owl 10 HP');
-    assert(engineOwl.status.some((status) => status.type === 'OWL_EAR_GUARD'), 'Direct dragon attack should grant Owl one-turn ear guard');
+    assert(engineOwl.statuses.some((status) => status.identityId === 'OWL_EAR_GUARD'), 'Direct dragon attack should grant Owl one-turn ear guard');
     cases.push('帝王之征 redirects Owl damage and direct hits trigger ear cost');
   }
 
@@ -166,7 +195,7 @@ export function runOwlCases(): string[] {
     const owl = makeFighter('鸮@A');
     const morphling = makeFighter('水人@B');
     morphling.agl = 10000;
-    morphling.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(morphling, { identityId: 'AIM', charges: 1 });
     const { engine, logs } = makeDeathEngine([owl, morphling]);
     const engineOwl = engine.fighters[0];
     enterPhaseTwo(engine, engineOwl);
@@ -177,7 +206,7 @@ export function runOwlCases(): string[] {
 
     engine.executeSkillAction('abyssal_prison', engine.fighters[1], engineOwl);
     assert(emperor.currentHp < emperorHpBefore, '深渊水牢 damage should be redirected into 帝王之征');
-    assert(!engineOwl.status.some((status) => status.type === 'WATER_PRISON'), 'A redirected hit must not apply its afterExecute debuff to Owl');
+    assert(!engineOwl.statuses.some((status) => status.identityId === 'WATER_PRISON'), 'A redirected hit must not apply its afterExecute debuff to Owl');
     assert(!logs.some((entry) => entry.text.includes(`${engineOwl.name} 实际承受 0`)), 'Emperor redirect logs must not claim that Owl took zero damage as a separate result');
     cases.push('帝王之征 redirect suppresses primary-target afterExecute debuffs');
   }
@@ -216,7 +245,7 @@ export function runOwlCases(): string[] {
     const engineOwl = engine.fighters[0];
     enterPhaseTwo(engine, engineOwl);
     engineOwl.agl = 10000;
-    engineOwl.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineOwl, { identityId: 'AIM', charges: 1 });
     applyOwlRiverMark(engine.createOwlRuntime(), engineOwl, engine.fighters[1]);
 
     engine.executeSkillAction('triple_dragon_head', engine.fighters[1], engine.fighters[2]);
@@ -227,16 +256,48 @@ export function runOwlCases(): string[] {
 
   {
     const owl = makeFighter('鸮@A');
+    const markedAttacker = makeFighter('过江转阶段触发者@B');
+    const yuzu = makeFighter('柚子@C');
+    const { engine, logs } = makeDeathEngine([owl, markedAttacker, yuzu]);
+    const [engineOwl, engineMarkedAttacker, engineYuzu] = engine.fighters;
+    enterPhaseTwo(engine, engineOwl);
+    engineOwl.agl = 10000;
+    applyTestStatus(engineOwl, { identityId: 'AIM', charges: 1 });
+    applyOwlRiverMark(engine.createOwlRuntime(), engineOwl, engineMarkedAttacker);
+    clearYuzuShield(engineYuzu);
+    engineYuzu.maxHp = 1000;
+    localProject.setCurrentHp(engineYuzu, 600);
+
+    engine.resolveOwlCrossingAssists({
+      id: 'owl-crossing-transform-order',
+      actorId: engineMarkedAttacker.id,
+      actorName: engineMarkedAttacker.name,
+      skillId: 'test_attack',
+      skillName: '测试攻击',
+      presentation: 'skill',
+      triggerDepth: 0,
+      primaryTargetId: engineYuzu.id,
+      primaryPreDefenseDamage: 300,
+    });
+
+    const resultIndex = logs.findIndex((entry) => entry.text.includes('【过江协同】') && entry.text.includes(`${engineYuzu.name} 实际承受`));
+    const transformIndex = logs.findIndex((entry) => entry.type === 'transform' && entry.text.includes(engineYuzu.name));
+    assert(resultIndex >= 0 && transformIndex > resultIndex, 'Crossing damage must report its concrete hit before the victim transformation');
+    cases.push('Crossing assist reports damage before a transformation caused by that hit');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
     const markedAttacker = makeFighter('过江反击触发者@B');
     const counterTarget = makeFighter('过江反击持有者@C');
     counterTarget.maxHp = 50000;
     localProject.setCurrentHp(counterTarget, 50000);
-    counterTarget.status.push({ type: 'CTR_STUN', duration: 2 });
+    applyTestStatus(counterTarget, { identityId: 'CTR_STUN', remainingTurns: 2 });
     const { engine, logs } = makeDeathEngine([owl, markedAttacker, counterTarget]);
     const engineOwl = engine.fighters[0];
     enterPhaseTwo(engine, engineOwl);
     engineOwl.agl = 10000;
-    engineOwl.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineOwl, { identityId: 'AIM', charges: 1 });
     applyOwlRiverMark(engine.createOwlRuntime(), engineOwl, engine.fighters[1]);
 
     engine.resolveOwlCrossingAssists({
@@ -298,6 +359,42 @@ export function runOwlCases(): string[] {
   }
 
   {
+    const owl = makeFighter('鸮@A');
+    const victim = makeFighter('哀兵击杀锨点@B');
+    const warThunder = makeFighter('M1A2_abrams_sep@B');
+    const { engine, logs } = makeDeathEngine([owl, victim, warThunder]);
+    const engineOwl = engine.fighters[0];
+    const engineWarThunder = engine.fighters[2];
+    enterPhaseTwo(engine, engineOwl);
+    engine.markDefeated(engine.fighters[1], { killer: engineOwl });
+    engine.applyStatus(engineOwl, {
+      identityId: 'AIRBORNE',
+      remainingTurns: 1,
+      attribution: {
+        effectSourceId: 'war_thunder_airborne',
+        applierId: engineWarThunder.id,
+        applierName: engineWarThunder.name,
+      },
+    });
+    localProject.setCurrentHp(engineOwl, Math.floor(engineOwl.maxHp * 0.4));
+    processOwlGlobalTick(engine.createOwlRuntime());
+    assert(engineOwl.owlState?.warForm === 'defeat', 'Owl should enter Defeat before testing lethal Sorrow cleanse');
+
+    engine.turnCount += 10;
+    localProject.setCurrentHp(engineOwl, 1);
+    processOwlGlobalTick(engine.createOwlRuntime());
+
+    assert(
+      engineOwl.isDeadAnnounced && engineOwl.currentHp === 0,
+      `Lethal landing caused by Sorrow strong dispel must leave Owl defeated at zero HP; got hp=${engineOwl.currentHp}, dead=${engineOwl.isDead}, announced=${engineOwl.isDeadAnnounced}, form=${engineOwl.owlState?.warForm}, logs=${logs.slice(-8).map((entry) => entry.text).join(' | ')}`,
+    );
+    const deathIndex = logs.findIndex((entry) => entry.text.includes('击飞坠地') && entry.text.includes('倒下'));
+    const recoveryAfterDeath = logs.findIndex((entry, index) => index > deathIndex && entry.text.includes('【哀兵】') && entry.text.includes('恢复'));
+    assert(deathIndex >= 0 && recoveryAfterDeath < 0, 'Sorrow recovery must stop when its own strong-dispel landing is lethal');
+    cases.push('lethal Sorrow airborne cleanse cannot revive Owl');
+  }
+
+  {
     const attacker = makeFighter('大风闪避测试攻击者@A');
     const target = makeFighter('大风闪避测试目标@B');
     attacker.agl = 50;
@@ -307,10 +404,10 @@ export function runOwlCases(): string[] {
     try {
       Math.random = () => 0.8;
       assert(missesSkill(attacker, target, skill, false), 'The test hit should miss before Owl opening is applied');
-      target.status.push({ type: 'OWL_EVADE_DOWN', duration: 2 });
+      applyTestStatus(target, { identityId: 'OWL_EVADE_DOWN', remainingTurns: 2 });
       assert(missesSkill(attacker, target, skill, false), 'OWL_EVADE_DOWN should no longer alter agility');
       assert(consumeOwlEvadeOpening(target, skill, false), 'OWL_EVADE_DOWN should guarantee the next direct single-target hit');
-      assert(!target.status.some((status) => status.type === 'OWL_EVADE_DOWN'), 'OWL_EVADE_DOWN should be consumed by that hit');
+      assert(!target.statuses.some((status) => status.identityId === 'OWL_EVADE_DOWN'), 'OWL_EVADE_DOWN should be consumed by that hit');
     } finally {
       Math.random = originalRandom;
     }
@@ -340,6 +437,36 @@ export function runOwlCases(): string[] {
     processOwlGlobalTick(engine.createOwlRuntime());
     assert(!spalter.cannotAct, '归溟幽灵鲨 must not re-enter doll form without another death save');
     cases.push('归溟幽灵鲨 performs one lock-doll-return lifecycle');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
+    const enemy = makeFighter('锁血日志顺序攻击者@B');
+    enemy.maxHp = 50000;
+    localProject.setCurrentHp(enemy, 50000);
+    const { engine, logs } = makeDeathEngine([owl, enemy]);
+    const engineOwl = engine.fighters[0];
+    enterPhaseTwo(engine, engineOwl);
+    const squad = spawnOwlFurrySquad(engine.createOwlRuntime(), engineOwl);
+    const spalter = squad.find((fighter) => fighter.owlSummonState?.kind === 'spalter');
+    assert(spalter, '锁血日志顺序测试需要归溟幽灵鲨');
+    localProject.setCurrentHp(spalter, 1);
+    const options: DamageApplicationOptions = {
+      actionName: '锁血日志顺序测试',
+      deferTransform: true,
+    };
+    const actual = engine.applyDamage(spalter, 100, 'skill', true, engine.fighters[1], options);
+    engine.flushDeferredDamageEvents(spalter, 'mitigation');
+    engine.log('info', actual > 0
+      ? `测试结果：${spalter.name} 实际承受 ${actual} 点伤害。`
+      : `测试结果：${spalter.name} 没有承受实际伤害。`);
+    engine.flushDeferredDamageEvents(spalter);
+
+    const lockIndex = logs.findIndex((entry) => entry.text.includes('【濒死锁血】'));
+    const resultIndex = logs.findIndex((entry) => entry.text.includes('测试结果'));
+    assert(actual === 0, '已在 1 点生命的归溟幽灵鲨应由锁血阻止本次入血');
+    assert(lockIndex >= 0 && resultIndex > lockIndex, '濒死锁血原因必须早于零伤害结果日志');
+    cases.push('召唤物濒死锁血在零伤害结果之前说明原因');
   }
 
   {
@@ -375,24 +502,65 @@ export function runOwlCases(): string[] {
 
   {
     const owl = makeFighter('鸮@A');
+    const enemy = makeFighter('刮骨禁疗日志目标@B');
+    enemy.maxHp = 50000;
+    localProject.setCurrentHp(enemy, 50000);
+    const { engine, logs } = makeDeathEngine([owl, enemy]);
+    const engineOwl = engine.fighters[0];
+    enterPhaseTwo(engine, engineOwl);
+    assert(enterOwlPhaseThree(engine.createOwlRuntime(), engineOwl), 'Bone Scrape healing log test requires Owl phase 3');
+    const emperor = engine.fighters.find((fighter) => fighter.owlSummonState?.kind === 'emperor');
+    assert(emperor, 'Bone Scrape healing log test requires an active emperor');
+    localProject.setCurrentHp(emperor, Math.floor(emperor.maxHp * 0.5));
+    applyTestStatus(emperor, { identityId: 'NO_HEAL', remainingTurns: 2 });
+
+    engine.executeSkillAction('owl_bone_scrape', engineOwl, enemy);
+
+    assert(logs.some((entry) => entry.text.includes('【枯竭】') && entry.text.includes(emperor.name)), 'Bone Scrape should expose the emperor healing block');
+    assert(logs.some((entry) => entry.text.includes('【刮骨】') && entry.text.includes('治疗被完全阻止')), 'Bone Scrape result should preserve the blocked-healing cause');
+    assert(!logs.some((entry) => entry.text.includes('【刮骨】') && entry.text.includes(`${emperor.name} 生命已满`)), 'Bone Scrape must not describe a blocked heal as full health');
+    cases.push('Owl Bone Scrape distinguishes blocked healing from full health');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
     const yuzu = makeFighter('柚子@B');
     const teammate = makeFighter('镜界分摊队友@B');
-    const { engine } = makeDeathEngine([owl, yuzu, teammate]);
+    const { engine, logs } = makeDeathEngine([owl, yuzu, teammate]);
     const [engineOwl, engineYuzu, engineTeammate] = engine.fighters;
     engineYuzu.yuzuPhase = 2;
     engineYuzu.transformed = true;
-    engineYuzu.yuzuShield = 0;
-    engineYuzu.status = engineYuzu.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    clearYuzuShield(engineYuzu);
     engineTeammate.maxHp = 10000;
     localProject.setCurrentHp(engineTeammate, 10000);
-    engineTeammate.yuzuShield = 0;
-    engineTeammate.status = engineTeammate.status.filter((status) => status.type !== 'YUZU_BARRIER');
+    clearYuzuShield(engineTeammate);
     const hpBefore = engineTeammate.currentHp;
 
     engine.applyDamage(engineYuzu, 100, 'skill', true, engineOwl, { actionName: '鸮倍率分摊测试' });
 
     assert(hpBefore - engineTeammate.currentHp === 135, `Owl's 1.35 outgoing multiplier must apply once before Yuzu sharing, got ${hpBefore - engineTeammate.currentHp}`);
+    assert(logs.some((entry) => entry.text.includes('【胜兵】') && entry.text.includes('由 100 调整为 135')), 'Owl outgoing formation multiplier should explain predicted-to-actual damage changes');
     cases.push('Owl outgoing multiplier applies once through Yuzu sharing');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
+    const yuzu = makeFighter('柚子@B');
+    const { engine, logs } = makeDeathEngine([owl, yuzu]);
+    const [engineOwl, engineYuzu] = engine.fighters;
+    setYuzuShield(engineYuzu, 500, engineYuzu.id, engineYuzu.name);
+
+    engine.applyDamage(engineYuzu, 100, 'skill', true, engineOwl, {
+      actionName: '鸮倍率护盾时序测试',
+      deferTransform: true,
+    });
+    engine.flushDeferredDamageEvents(engineYuzu);
+
+    const formationIndex = logs.findIndex((entry) => entry.text.includes('【胜兵】') && entry.text.includes('由 100 调整为 135'));
+    const reductionIndex = logs.findIndex((entry) => entry.text.includes('【镜界减伤】'));
+    const barrierIndex = logs.findIndex((entry) => entry.text.includes('【镜界护盾】') && entry.text.includes('挡下'));
+    assert(formationIndex >= 0 && reductionIndex > formationIndex && barrierIndex > reductionIndex, 'Owl formation, Yuzu reduction, and barrier logs must follow damage-pipeline order');
+    cases.push('Owl formation modifier is logged before Yuzu mitigation and barrier absorption');
   }
 
   {
@@ -421,16 +589,52 @@ export function runOwlCases(): string[] {
 
   {
     const owl = makeFighter('鸮@A');
+    const joker = makeFighter('屑@B');
+    const momo = makeFighter('萌月沫沫@A');
+    const captain = makeFighter('鸮转移分摊舰长@A');
+    const { engine, logs } = makeDeathEngine([owl, joker, momo, captain]);
+    const [engineOwl, engineJoker, engineMomo] = engine.fighters;
+    const jokerJob = localProject.jobs.GOD_OF_TROLLS;
+    assert(jokerJob, 'Nested Owl redirect ordering test requires GOD_OF_TROLLS');
+    engineJoker.job = 'GOD_OF_TROLLS';
+    engineJoker.jobData = { ...jokerJob, skills: [...jokerJob.skills] };
+    engineJoker.transformed = true;
+    engine.initializeMomoTeams();
+    ensureMomoState(engineMomo).phase = 2;
+    engineMomo.transformed = true;
+    const logStart = logs.length;
+
+    withRandomSequence([0, 0.5], () => {
+      engine.applyDamage(engineJoker, 100, 'skill', true, engineOwl, {
+        actionName: '鸮增幅转移分摊时序测试',
+        deferTransform: true,
+      });
+    });
+    const causalLogs = logs.slice(logStart);
+    const formationIndex = causalLogs.findIndex((entry) => entry.text.includes('【胜兵】') && entry.text.includes('由 100 调整为 135'));
+    const jokerIndex = causalLogs.findIndex((entry) => entry.text.includes('【随机恶作剧】'));
+    const momoIndex = causalLogs.findIndex((entry) => entry.text.includes('【|OMO】') && entry.text.includes('均摊给'));
+    const summaryIndex = causalLogs.findIndex((entry) => entry.text.includes('转移伤害落在') && entry.text.includes('触发【|OMO】'));
+
+    assert(formationIndex >= 0, 'Owl formation adjustment must be visible in the nested redirect chain');
+    assert(jokerIndex > formationIndex, 'Owl formation adjustment must precede Joker redirection');
+    assert(momoIndex > jokerIndex, 'Momo sharing must follow the Joker redirection that selected Momo');
+    assert(summaryIndex > momoIndex, 'The nested transfer summary must follow the concrete Momo sharing settlement');
+    cases.push('Owl modifier, Joker redirect, and Momo sharing logs preserve causal order');
+  }
+
+  {
+    const owl = makeFighter('鸮@A');
     const markedEnemy = makeFighter('过江施法抵挡靶@B');
     const { engine } = makeDeathEngine([owl, markedEnemy]);
     const [engineOwl, engineEnemy] = engine.fighters;
     enterPhaseTwo(engine, engineOwl);
-    engineEnemy.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'test_spell_block' });
+    applyTestStatus(engineEnemy, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'test_spell_block' } });
 
     engine.executeSkillAction('owl_crossing_mark', engineOwl, engineEnemy);
 
-    assert(!engineEnemy.status.some((status) => status.type === 'SPELL_BLOCK'), 'Crossing Mark should consume the target spell block');
-    assert(!engineEnemy.status.some((status) => status.type === 'OWL_RIVER_MARK'), 'A spell-blocked Crossing Mark must not apply its mark');
+    assert(!engineEnemy.statuses.some((status) => status.identityId === 'SPELL_BLOCK'), 'Crossing Mark should consume the target spell block');
+    assert(!engineEnemy.statuses.some((status) => status.identityId === 'OWL_RIVER_MARK'), 'A spell-blocked Crossing Mark must not apply its mark');
     cases.push('Crossing Mark respects spell block before applying');
   }
 
@@ -441,7 +645,7 @@ export function runOwlCases(): string[] {
     const [engineOwl, engineEnemy] = engine.fighters;
     enterPhaseTwo(engine, engineOwl);
     applyOwlRiverMark(engine.createOwlRuntime(), engineOwl, engineEnemy);
-    engineEnemy.status.push({ type: 'AIM', duration: 1 });
+    applyTestStatus(engineEnemy, { identityId: 'AIM', charges: 1 });
 
     engine.executeSkillAction('serious_punch', engineEnemy, engineOwl);
 

@@ -1,4 +1,12 @@
-import type { BattleLogMetadata, DamageApplicationOptions, DefeatOptions, Fighter, JobDefinition, SpinalSwordRef, StatusApplicationOptions } from '../types';
+import type { BattleLogMetadata, DamageApplicationOptions, DefeatOptions, DispelOptions, DispelResolution, Fighter, JobDefinition, SkillPresentation, SpinalSwordRef, StatusApplication } from '../types';
+
+export interface ReactionActionDescriptor {
+  skillId: string;
+  skillName: string;
+  presentation?: SkillPresentation;
+  targets?: readonly Fighter[];
+  triggerDepth?: number;
+}
 
 export interface CharacterHookRuntime {
   fighters: Fighter[];
@@ -16,11 +24,13 @@ export interface CharacterHookRuntime {
     attacker?: Fighter,
     options?: DamageApplicationOptions,
   ) => number;
-  applyStatus: (target: Fighter, type: string, duration: number, options?: StatusApplicationOptions) => boolean;
+  applyStatus: (target: Fighter, application: StatusApplication) => boolean;
+  dispelStatusEffects: (target: Fighter, options: DispelOptions) => DispelResolution;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   handleTransformations: (fighter: Fighter) => void;
-  flushDeferredDamageEvents: (fighter: Fighter) => void;
+  flushDeferredDamageEvents: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
   executeSkillAction: (id: string | null, user: Fighter, target: Fighter | null, depth: number) => void;
+  runReactionAction: (actor: Fighter, descriptor: ReactionActionDescriptor, callback: () => void) => void;
   finalizeFighterDeath: (
     fighter: Fighter,
     spinalSwordRef: SpinalSwordRef,
@@ -32,7 +42,12 @@ export interface CharacterHookRuntime {
 export interface CharacterTransformContext {
   fighter: Fighter;
   runtime: CharacterHookRuntime;
-  transform: (jobKey: string, message: string, applyStats: () => void) => void;
+  transform: (
+    jobKey: string,
+    message: string,
+    applyForm: () => void,
+    afterCommit?: () => void,
+  ) => void;
 }
 
 export interface CharacterDefeatContext {

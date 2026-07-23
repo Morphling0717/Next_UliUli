@@ -1,8 +1,11 @@
 import { cloneJobDefinition } from '../combatState';
+import { commitFormTransition } from '../battlePresentation';
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
-import { grantStatus } from '../defenseStatus';
+
 import { isSelectableTargetFor } from '../targeting';
+import { applyStatus, hasIdentity, removeBarriers, removeEffects } from '../statusSystem';
+import { getStatusIdentityIdsByTag } from '../statusRegistry';
 
 const WT_BACKUP_COST = 7;
 const WT_CAS_COST = 5;
@@ -19,7 +22,6 @@ const WT_REPAIR_STATUS_TYPES = new Set([
   'EMBARRASSED',
   'CHARMED',
   'WT_SUPPRESS',
-  'WT_AIRBORNE',
   'AIRBORNE',
   'VALO_AIM_PUNCH',
   'VALO_CYPHER_REVEALED',
@@ -28,18 +30,17 @@ const WT_REPAIR_STATUS_TYPES = new Set([
   'WT_BREECH_DAMAGED',
   'WT_TRACK_DAMAGED',
   'WT_AMMO_EXPOSED',
+  'WT_ORIGINIUM_BREECH_DAMAGED',
+  'WT_ORIGINIUM_TRACK_DAMAGED',
+  'WT_ORIGINIUM_AMMO_EXPOSED',
   'ZEROED',
   'WEAK',
   'NO_HEAL',
   'BLEED',
 ]);
 
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(fighter, type, duration, sourceId);
-}
-
 function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((status) => status.type === type);
+  return hasIdentity(fighter, type);
 }
 
 function activeEnemies(runtime: CharacterHookRuntime, actor: Fighter): Fighter[] {
@@ -55,7 +56,8 @@ function ownsSkill(actor: Fighter, skillId: string): boolean {
 function hasRepairNeed(actor: Fighter): boolean {
   const hasBurnWithFpe = hasStatus(actor, 'BURN') && (actor.wtFpeCharges ?? 0) > 0;
   const hasPoisonWithNbcs = hasStatus(actor, 'POISON') && (actor.wtNbcsCharges ?? 0) > 0;
-  return actor.hpPct < 0.42 || hasBurnWithFpe || hasPoisonWithNbcs || (actor.hpPct < 0.55 && actor.status.some((status) => WT_REPAIR_STATUS_TYPES.has(status.type)));
+  return actor.hpPct < 0.42 || hasBurnWithFpe || hasPoisonWithNbcs ||
+    (actor.hpPct < 0.55 && [...WT_REPAIR_STATUS_TYPES].some((identityId) => hasIdentity(actor, identityId)));
 }
 
 function hasMarkedLiveTarget(actor: Fighter, runtime: CharacterHookRuntime): boolean {
@@ -67,7 +69,7 @@ function hasMarkedLiveTarget(actor: Fighter, runtime: CharacterHookRuntime): boo
 
 function woundedEnemy(enemies: Fighter[]): Fighter | undefined {
   return enemies
-    .filter((enemy) => enemy.hpPct < 0.38 || hasStatus(enemy, 'WT_AMMO_EXPOSED') || hasStatus(enemy, 'WT_SCOUTED'))
+    .filter((enemy) => enemy.hpPct < 0.38 || hasStatus(enemy, 'WT_AMMO_EXPOSED') || hasStatus(enemy, 'WT_ORIGINIUM_AMMO_EXPOSED') || hasStatus(enemy, 'WT_SCOUTED'))
     .sort((a, b) => a.hpPct - b.hpPct)[0];
 }
 
@@ -94,7 +96,7 @@ function selectTopTierSkill(actor: Fighter, runtime: CharacterHookRuntime): stri
   const enemyHasCounter = enemies.some((enemy) =>
     hasStatus(enemy, 'COUNTER') ||
     hasStatus(enemy, 'WAIT_COUNTER') ||
-    enemy.status.some((status) => status.type.startsWith('CTR_')),
+    getStatusIdentityIdsByTag('counter_stance').some((identityId) => hasIdentity(enemy, identityId)),
   );
 
   if (ownsSkill(actor, 'wt_repair_premium') && hasRepairNeed(actor)) return 'wt_repair_premium';
@@ -168,8 +170,8 @@ export const warThunderHook: CharacterHook = {
       fighter.wtBackupUsed = false;
       fighter.wtKillStreak = 0;
       fighter.wtMarkedTargetId = undefined;
-      refreshStatus(fighter, 'WT_ERA', 999);
-      refreshStatus(fighter, 'SPELL_BLOCK', 1, 'war_thunder_top_tier_spawn');
+      applyStatus(fighter, { identityId: 'WT_ERA' });
+      applyStatus(fighter, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'war_thunder_top_tier_spawn' } });
     });
     return true;
   },
@@ -179,33 +181,46 @@ export const warThunderHook: CharacterHook = {
     if ((fighter.wtSpawnPoints ?? 0) < WT_BACKUP_COST) return false;
 
     const WT_TOP_TIER = runtime.jobs.WT_TOP_TIER;
-    fighter.wtSpawnPoints = Math.max(0, (fighter.wtSpawnPoints ?? 0) - WT_BACKUP_COST);
-    fighter.wtBackupUsed = true;
-    fighter.isDead = false;
-    fighter.isDeadAnnounced = false;
-    fighter.defeatHooksResolved = false;
-    fighter.job = 'WT_TOP_TIER';
-    if (WT_TOP_TIER) fighter.jobData = cloneJobDefinition(WT_TOP_TIER);
-    fighter.maxHp = WT_TOP_TIER_MAX_HP;
-    fighter.currentHp = Math.floor(fighter.maxHp * 0.45);
-    fighter.atk = 275;
-    fighter.def = WT_TOP_TIER_DEF;
-    fighter.res = WT_TOP_TIER_RES;
-    fighter.spd = 120;
-    fighter.agl = 90;
-    fighter.wis = 180;
-    fighter.mag = 50;
-    fighter.status = [];
-    refreshStatus(fighter, 'WT_ERA', 999);
-    refreshStatus(fighter, 'INVUL', 1, 'war_thunder_backup_vehicle');
-    refreshStatus(fighter, 'BKB', 1, 'war_thunder_backup_vehicle');
-    refreshStatus(fighter, 'SPELL_BLOCK', 1, 'war_thunder_backup_vehicle');
-    refreshStatus(fighter, 'REGEN', 2);
-    fighter.wtFpeCharges = Math.max(fighter.wtFpeCharges ?? 0, 1);
-    fighter.wtNbcsCharges = Math.max(fighter.wtNbcsCharges ?? 0, 1);
-
-    runtime.syncHpPct(fighter);
-    runtime.log('buff', `🚜 【备用载具】${fighter.name} 消耗 ${WT_BACKUP_COST} SP 重新部署顶级备用载具，带着入场保护、烟幕与临时作战抗性回到战场！（当前 SP ${fighter.wtSpawnPoints ?? 0}/${WT_SP_MAX}）`);
+    runtime.log('buff', `🚜 【备用载具】${fighter.name} 消耗 ${WT_BACKUP_COST} SP 呼叫顶级备用载具，开始重新部署！`);
+    commitFormTransition({
+      fighter,
+      kind: 'form_shift',
+      cause: 'redeploy',
+      force: true,
+      log: runtime.log,
+      logType: 'buff',
+      message: () => `🚜 【重新部署完成】${fighter.name} 驾驶顶级备用载具回到战场，生命恢复至 ${fighter.currentHp}/${fighter.maxHp}！（当前 SP ${fighter.wtSpawnPoints ?? 0}/${WT_SP_MAX}）`,
+      mutate: () => {
+        fighter.wtSpawnPoints = Math.max(0, (fighter.wtSpawnPoints ?? 0) - WT_BACKUP_COST);
+        fighter.wtBackupUsed = true;
+        fighter.isDead = false;
+        fighter.isDeadAnnounced = false;
+        fighter.defeatHooksResolved = false;
+        if (WT_TOP_TIER) {
+          fighter.job = 'WT_TOP_TIER';
+          fighter.jobData = cloneJobDefinition(WT_TOP_TIER);
+        }
+        fighter.maxHp = WT_TOP_TIER_MAX_HP;
+        fighter.currentHp = Math.floor(fighter.maxHp * 0.45);
+        fighter.atk = 275;
+        fighter.def = WT_TOP_TIER_DEF;
+        fighter.res = WT_TOP_TIER_RES;
+        fighter.spd = 120;
+        fighter.agl = 90;
+        fighter.wis = 180;
+        fighter.mag = 50;
+        fighter.wtFpeCharges = Math.max(fighter.wtFpeCharges ?? 0, 1);
+        fighter.wtNbcsCharges = Math.max(fighter.wtNbcsCharges ?? 0, 1);
+        runtime.syncHpPct(fighter);
+      },
+    });
+    removeEffects(fighter, { reason: 'revive' });
+    removeBarriers(fighter);
+    applyStatus(fighter, { identityId: 'WT_ERA' });
+    applyStatus(fighter, { identityId: 'INVUL', remainingTurns: 1, attribution: { effectSourceId: 'war_thunder_backup_vehicle' } });
+    applyStatus(fighter, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'war_thunder_backup_vehicle' } });
+    applyStatus(fighter, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'war_thunder_backup_vehicle' } });
+    applyStatus(fighter, { identityId: 'REGEN', remainingTurns: 2 });
 
     const revengeTarget = runtime.fighters.find((candidate) =>
       candidate.id === fighter.lastDamage?.attackerId &&
@@ -213,7 +228,7 @@ export const warThunderHook: CharacterHook = {
     );
     if (revengeTarget) {
       fighter.wtMarkedTargetId = revengeTarget.id;
-      refreshStatus(revengeTarget, 'WT_SCOUTED', 3);
+      applyStatus(revengeTarget, { identityId: 'WT_SCOUTED', remainingTurns: 3 });
       runtime.log('info', `🔭 【复仇标记】${fighter.name} 的新车刚出出生点就锁定了 ${revengeTarget.name} 的方位！`);
     }
     return true;

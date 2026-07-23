@@ -1,7 +1,9 @@
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
-import { grantStatus } from '../defenseStatus';
+
 import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
+import { hasIdentity, removeEffects, applyStatus } from '../statusSystem';
+import { getEffectiveCombatStat } from '../statusMechanics';
 
 const VALO_ULT_THRESHOLD = 4;
 const VALO_CLUTCH_ULT_THRESHOLD = 4;
@@ -33,11 +35,7 @@ const VALO_ULT_DISPLAY_NAMES: Record<string, string> = {
 type ValorantRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant' | 'log'>;
 
 function hasStatus(actor: Fighter, type: string): boolean {
-  return actor.status.some((status) => status.type === type);
-}
-
-function refreshStatus(actor: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(actor, type, duration, sourceId);
+  return hasIdentity(actor, type);
 }
 
 function activeEnemies(actor: Fighter, runtime: ValorantRuntime): Fighter[] {
@@ -58,25 +56,15 @@ function spendFocus(actor: Fighter, amount: number, runtime: ValorantRuntime, re
 }
 
 function restoreOperatorMobility(actor: Fighter, runtime: ValorantRuntime, reason: string): void {
-  if (!actor.savedSpd) return;
-  actor.spd = actor.savedSpd;
-  actor.agl = actor.savedAgl ?? actor.agl;
-  delete actor.savedSpd;
-  delete actor.savedAgl;
-  actor.status = actor.status.filter((status) => status.type !== 'VALO_OPERATOR_PENALTY');
+  if (!hasStatus(actor, 'VALO_OPERATOR_PENALTY')) return;
+  removeEffects(actor, { identityIds: ['VALO_OPERATOR_PENALTY'], reason: 'scripted' });
   runtime.log('info', `🧭 【身位重置】${actor.name} ${reason}，摆脱冥驹笨重，速度与闪避恢复！`);
-}
-
-function restoreExpiredOperatorPenalty(actor: Fighter, runtime: ValorantRuntime): void {
-  if (!actor.savedSpd) return;
-  if (hasStatus(actor, 'VALO_OPERATOR_PENALTY')) return;
-  restoreOperatorMobility(actor, runtime, '完成转点');
 }
 
 function enterClutch(actor: Fighter, runtime: ValorantRuntime, reason: string, protectedEntry = false): void {
   const wasClutching = hasStatus(actor, 'VALO_CLUTCH');
-  refreshStatus(actor, 'VALO_CLUTCH', 3);
-  if (protectedEntry && !wasClutching) refreshStatus(actor, 'SPELL_BLOCK', 1, 'valo_reposition');
+  applyStatus(actor, { identityId: 'VALO_CLUTCH', remainingTurns: 3 });
+  if (protectedEntry && !wasClutching) applyStatus(actor, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'valo_reposition' } });
   restoreOperatorMobility(actor, runtime, '进入残局重新拉枪线');
   if (!wasClutching) {
     runtime.log('buff', `🎯 【残局模式】${actor.name} ${reason}，进入 clutch 状态，准星专注与战术选择全面收紧！`);
@@ -84,13 +72,14 @@ function enterClutch(actor: Fighter, runtime: ValorantRuntime, reason: string, p
 }
 
 function hasDangerousStatus(actor: Fighter): boolean {
-  return actor.status.some((status) =>
-    ['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'NO_HEAL'].includes(status.type),
-  );
+  return ['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK', 'NO_HEAL']
+    .some((identityId) => hasIdentity(actor, identityId));
 }
 
 function highEvasionEnemy(actor: Fighter, enemies: Fighter[]): Fighter | undefined {
-  return enemies.find((enemy) => enemy.agl >= Math.max(160, actor.agl * 0.75));
+  return enemies.find((enemy) =>
+    getEffectiveCombatStat(enemy, 'agl') >= Math.max(160, getEffectiveCombatStat(actor, 'agl') * 0.75),
+  );
 }
 
 function lowHealthEnemy(enemies: Fighter[]): Fighter | undefined {
@@ -166,14 +155,10 @@ function chooseTacticalUltimate(actor: Fighter, runtime: ValorantRuntime, enemie
 }
 
 function applyOperatorPenalty(actor: Fighter, runtime: ValorantRuntime): void {
-  if (!actor.savedSpd) {
-    actor.savedSpd = actor.spd;
-    actor.savedAgl = actor.agl;
-    actor.spd = Math.max(80, Math.floor(actor.spd * 0.78));
-    actor.agl = Math.max(90, Math.floor(actor.agl * 0.68));
+  if (!hasStatus(actor, 'VALO_OPERATOR_PENALTY')) {
     runtime.log('skill', `🔭 资金充足！${actor.name} 起了一把【冥驹 (Operator)】！本轮架枪暴露身位，速度与闪避短暂下降。`);
   }
-  refreshStatus(actor, 'VALO_OPERATOR_PENALTY', 1);
+  applyStatus(actor, { identityId: 'VALO_OPERATOR_PENALTY', remainingTurns: 1 });
 }
 
 function chooseGunRound(actor: Fighter, runtime: ValorantRuntime, enemies: Fighter[], isClutching: boolean): string {
@@ -190,7 +175,7 @@ function chooseGunRound(actor: Fighter, runtime: ValorantRuntime, enemies: Fight
   }
 
   if (evasiveEnemy && (actor.crosshairFocus ?? 0) >= 3 && spendFocus(actor, 3, runtime, '锁定高机动目标')) {
-    grantStatus(actor, 'AIM', 1);
+    applyStatus(actor, { identityId: 'AIM', charges: 1 });
     return (actor.economy ?? 0) >= VALO_OPERATOR_ECONOMY ? 'valo_operator_shot' : 'valo_vandal_shot';
   }
 
@@ -204,8 +189,6 @@ function chooseGunRound(actor: Fighter, runtime: ValorantRuntime, enemies: Fight
 }
 
 export function selectValorantSkill(actor: Fighter, runtime: ValorantRuntime): string {
-  restoreExpiredOperatorPenalty(actor, runtime);
-
   actor.ultPoints = (actor.ultPoints ?? 0) + 1;
   actor.economy = Math.min(12, (actor.economy ?? 0) + 1);
   gainFocus(actor, 1);

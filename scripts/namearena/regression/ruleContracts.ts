@@ -2,10 +2,12 @@ import type {
   GachaEntry,
   JobDefinition,
   SkillDefinition,
+  SkillStatusApplication,
   SkillTag,
   StatKey,
   SummonStats,
 } from '../../../lib/namearena/types';
+import { getStatusIdentityDefinition } from '../../../lib/namearena/statusRegistry';
 import {
   assert,
   localProject,
@@ -17,10 +19,8 @@ const JOB_NUMERIC_FIELDS = ['hp', ...STAT_KEYS] as const;
 const SUMMON_STAT_KEYS = ['hp', ...STAT_KEYS] as const;
 const SUMMON_STAT_KEY_SET = new Set<string>(SUMMON_STAT_KEYS);
 const NUMERIC_SKILL_FIELDS = ['rate', 'mult', 'hits', 'minDamagePct', 'lifesteal', 'selfDmgPct', 'tributes', 'triggerAgain'] as const;
-const VALID_STAT_BUFF_KEYS = new Set<string>([...STAT_KEYS, 'crit']);
 const VALID_SPELL_BLOCK_MODES = new Set(['precast', 'afterSetup', 'perHit']);
 
-type StatBuff = Partial<Record<StatKey | 'crit', number>>;
 type NumericSkillField = typeof NUMERIC_SKILL_FIELDS[number];
 type SkillOrGachaEntry = SkillDefinition | GachaEntry;
 
@@ -34,18 +34,24 @@ function assertFiniteNumber(value: unknown, owner: string, field: string): asser
 
 function assertStatusExists(status: string | undefined, owner: string): void {
   if (!status) return;
-  assert(localProject.data.STATUS_EFFECTS[status], `${owner} references unknown status ${status}`);
+  try {
+    getStatusIdentityDefinition(status);
+  } catch {
+    assert(false, `${owner} references unknown status ${status}`);
+  }
 }
 
 function assertTagExists(tag: SkillTag | string | undefined, owner: string): void {
   assert(tag && Object.values(localProject.data.SKILL_TAGS).includes(tag), `${owner} references unknown skill tag ${tag}`);
 }
 
-function assertStatBuff(statBuff: StatBuff | undefined, owner: string): void {
-  if (!statBuff) return;
-  Object.entries(statBuff).forEach(([key, value]) => {
-    assert(VALID_STAT_BUFF_KEYS.has(key), `${owner}.statBuff references unknown stat ${key}`);
-    assertFiniteNumber(value, owner, `statBuff.${key}`);
+function assertStatusApplications(applications: readonly SkillStatusApplication[] | undefined, owner: string): void {
+  applications?.forEach((application, index) => {
+    assertStatusExists(application.identityId, `${owner}.statusApplications[${index}]`);
+    ['potency', 'count', 'charges', 'remainingTurns'].forEach((field) => {
+      const value = application[field as keyof SkillStatusApplication];
+      if (value !== undefined) assertFiniteNumber(value, `${owner}.statusApplications[${index}]`, field);
+    });
   });
 }
 
@@ -60,8 +66,7 @@ function assertSummonStats(stats: SummonStats | undefined, owner: string): void 
 function assertGachaEntry(entry: GachaEntry, owner: string): void {
   assert(typeof entry.text === 'string' && entry.text.length > 0, `${owner}.text must be a non-empty string`);
   if (entry.tag) assertTagExists(entry.tag, owner);
-  assertStatusExists(entry.status, owner);
-  assertStatBuff(entry.statBuff, owner);
+  assertStatusApplications(entry.statusApplications, owner);
   assertSummonStats(entry.stats, owner);
   if (entry.spellBlockMode) assert(VALID_SPELL_BLOCK_MODES.has(entry.spellBlockMode), `${owner}.spellBlockMode is invalid`);
   NUMERIC_SKILL_FIELDS.forEach((field) => {
@@ -80,8 +85,7 @@ function assertSkillDefinition(skillId: string, skill: SkillDefinition): void {
   const owner = `skill ${skillId}`;
   assert(typeof skill.name === 'string' && skill.name.length > 0, `${owner} must have a display name`);
   assertTagExists(skill.tag, owner);
-  assertStatusExists(skill.status, owner);
-  assertStatBuff(skill.statBuff, owner);
+  assertStatusApplications(skill.statusApplications, owner);
   assertSummonStats(skill.stats, owner);
   if (skill.spellBlockMode) assert(VALID_SPELL_BLOCK_MODES.has(skill.spellBlockMode), `${owner}.spellBlockMode is invalid`);
   NUMERIC_SKILL_FIELDS.forEach((field) => {
@@ -139,12 +143,12 @@ function assertDataPools(): void {
 function assertStatusOwnership(): void {
   const chimeraPluginStatuses = new Set(
     (localProject.data.CHIMERA_PLUGIN_POOL ?? [])
-      .map((entry) => entry.status)
+      .flatMap((entry) => entry.statusApplications?.map((application) => application.identityId) ?? [])
       .filter((status): status is string => !!status),
   );
   const succubusCounterStatuses = new Set(
     (localProject.data.SUCCUBUS_COUNTER_POOL ?? [])
-      .map((entry) => entry.status)
+      .flatMap((entry) => entry.statusApplications?.map((application) => application.identityId) ?? [])
       .filter((status): status is string => !!status),
   );
 
@@ -156,9 +160,6 @@ function assertStatusOwnership(): void {
     if (status.startsWith('CTR_')) {
       assert(succubusCounterStatuses.has(status), `${owner} uses counter stance ${status} outside SUCCUBUS_COUNTER_POOL`);
     }
-    if (status === 'WT_AIRBORNE') {
-      assert(owner.includes('warThunder') || owner.includes('WT_') || owner.includes('wt_'), `${owner} uses WT_AIRBORNE outside War Thunder; use AIRBORNE for generic knock-up`);
-    }
   };
 
   Object.entries(localProject.data).forEach(([key, value]) => {
@@ -167,18 +168,18 @@ function assertStatusOwnership(): void {
       if (!isGachaEntryLike(entry)) return;
       const owner = `data.${key}[${index}]`;
       if (key === 'CHIMERA_PLUGIN_POOL' || key === 'SUCCUBUS_COUNTER_POOL') return;
-      assertOwnedStatus(entry.status, owner);
+      entry.statusApplications?.forEach((application) => assertOwnedStatus(application.identityId, owner));
     });
   });
 
   Object.entries(localProject.skills).forEach(([skillId, skill]) => {
     const owner = `skill ${skillId}`;
     if (skillId === 'chimera_install' || skillId === 'succubus_counter') return;
-    assertOwnedStatus(skill.status, owner);
+    skill.statusApplications?.forEach((application) => assertOwnedStatus(application.identityId, owner));
     if (Array.isArray(skill.pool)) {
       skill.pool.forEach((entry, index) => {
         if (typeof entry === 'string') return;
-        assertOwnedStatus(entry.status, `${owner}.pool[${index}]`);
+        entry.statusApplications?.forEach((application) => assertOwnedStatus(application.identityId, `${owner}.pool[${index}]`));
       });
     }
   });

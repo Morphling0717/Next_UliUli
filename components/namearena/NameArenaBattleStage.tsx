@@ -9,7 +9,9 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
+import { Crosshair } from "lucide-react";
 import {
   createCombatActorMotionPlan,
   getCombatActorMotionTiming,
@@ -30,9 +32,9 @@ import {
   createStagePositionMap,
   getStageFinisherImage,
   getStageFighterImage,
-  getStageFocusCycleKey,
   resolveStageManualFocusId,
   shouldRenderFighterOnStage,
+  toggleStageManualFocus,
   type StageManualFocus,
   type StageLogGroup,
   type StagePosition,
@@ -43,6 +45,11 @@ import {
   orderExodiaMaterials,
 } from "@/lib/namearena/summonCardArt";
 import { StageAnimationScheduler } from "@/lib/namearena/stageAnimationScheduler";
+import { BATTLE_CINEMATIC_DURATION_MS } from "@/lib/namearena/battleVisualTiming";
+import { getEffectiveCombatStat } from "@/lib/namearena/statusMechanics";
+import type { StatusPresentationDetail } from "@/lib/namearena/statusPresentation";
+import { getBarrierTotal } from "@/lib/namearena/statusSystem";
+import { formatTeamDisplayLabel } from "@/lib/namearena/teamPresentation";
 import {
   getTokusatsuFormAvatar,
   getTokusatsuFullBodyForJob,
@@ -57,10 +64,12 @@ import type {
   BattleEvent,
   BattleCombatEffectId,
   BattleFormIdentity,
+  BattleVisualCue,
   Fighter,
   SummonCinematicKind,
 } from "@/lib/namearena/types";
 import styles from "./NameArenaBattleStage.module.css";
+import { StatusDetailContent } from "./StatusDetailContent";
 import {
   createTingCombatFx,
   drawTingCombatFx,
@@ -86,7 +95,8 @@ export type NameArenaStageBadge = {
   icon: string;
   label: string;
   detail: string;
-  tone: "control" | "defense" | "counter" | "damage" | "recovery" | "special" | "buff" | "debuff" | "unknown" | "resource";
+  statusDetail?: StatusPresentationDetail;
+  tone: "positive" | "negative" | "neutral" | "independent" | "resource";
 };
 
 type RoundProgress = {
@@ -102,6 +112,7 @@ type NameArenaBattleStageProps = {
   logGroups: StageLogGroup[];
   battleTurn: number;
   battleRunId: number;
+  claimVisualEvent: (battleRunId: number, eventKey: string) => boolean;
   roundProgress: RoundProgress;
   aliveCount: number;
   gameState: "FIGHTING" | "END";
@@ -151,6 +162,15 @@ type TransformationCinematic = {
   beltImage?: string;
   propImage?: string;
 };
+type FormShiftCinematic = {
+  kind: "form_shift";
+  fighterId?: string;
+  name: string;
+  kicker: string;
+  title: string;
+  from: BattleFormIdentity;
+  to: BattleFormIdentity;
+};
 type SummonCardCinematic = {
   kind: "summon_card";
   summonKind: SummonCinematicKind;
@@ -160,7 +180,12 @@ type SummonCardCinematic = {
   materials: string[];
   cardImage?: string;
 };
-type Cinematic = FinisherCinematic | TransformationCinematic | SummonCardCinematic;
+type Cinematic = FinisherCinematic | TransformationCinematic | FormShiftCinematic | SummonCardCinematic;
+type QueuedCinematic = {
+  key: string;
+  cinematic: Cinematic;
+  duration: number;
+};
 type Particle = {
   x: number;
   y: number;
@@ -218,7 +243,7 @@ const TYPE_LABELS: Record<string, string> = {
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function getShield(fighter: Fighter) {
-  return Math.max(0, Math.floor((fighter.yuzuShield ?? 0) + (fighter.puruisaishiShield ?? 0)));
+  return Math.max(0, Math.floor(getBarrierTotal(fighter)));
 }
 
 function getFighterAccent(fighter?: Fighter) {
@@ -265,12 +290,13 @@ function getActionTitle(log?: ArenaBattleLogEntry) {
   return TYPE_LABELS[log.type] ?? "战斗事件";
 }
 
-function getTransformationTitle(log: ArenaBattleLogEntry, nextForm: BattleFormIdentity) {
-  const namedForm = log.text.match(/(?:转职为(?:专属辅助)?|变身(?:为|——)?|显露出|展现出|进化为)【([^】]+)】/);
-  if (namedForm?.[1]) return `转职为 ${namedForm[1]}`;
-  const phase = log.text.match(/进入([二三四五六七八九十]+)阶段/);
-  if (phase?.[1]) return `进入${phase[1]}阶段`;
-  return `形态进阶：${nextForm.jobName}`;
+function getTransformationTitle(cue: Extract<BattleVisualCue, { kind: "transformation" | "form_shift" }>) {
+  if (cue.kind === "transformation") {
+    return `${getPhaseName(cue.from.phase)} → ${getPhaseName(cue.to.phase)} · ${cue.to.jobName}`;
+  }
+  if (cue.cause === "revival") return `复活换形态：${cue.to.jobName}`;
+  if (cue.cause === "redeploy") return `重新部署：${cue.to.jobName}`;
+  return `${cue.from.jobName} → ${cue.to.jobName}`;
 }
 
 function withTokusatsuTransformationArt(
@@ -644,6 +670,7 @@ const StageFighterCard = React.memo(function StageFighterCard({
   const statusBadges = allStatusBadges.slice(0, visibleStatusCount);
   const hiddenStatusCount = Math.max(0, allStatusBadges.length - statusBadges.length);
   const image = getStageFighterImage(fighter);
+  const teamLabel = formatTeamDisplayLabel(fighter.teamId);
 
   return (
     <button
@@ -657,7 +684,7 @@ const StageFighterCard = React.memo(function StageFighterCard({
     >
       <span className={styles.portrait}>
         {image ? <Image src={image} alt="" fill sizes="54px" unoptimized={image.startsWith("/namearena/")} /> : <span className={styles.emblem}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>}
-        {fighter.teamId ? <span className={styles.teamBadge} style={{ "--team-color": fighter.color } as CSSProperties}>{fighter.teamId}</span> : null}
+        {teamLabel ? <span className={styles.teamBadge} style={{ "--team-color": fighter.color } as CSSProperties}>{teamLabel}</span> : null}
         <span className={styles.phase}>{getPhaseLabel(fighter)}</span>
       </span>
       <span className={styles.unitHud}>
@@ -668,7 +695,7 @@ const StageFighterCard = React.memo(function StageFighterCard({
         <span className={styles.hpBar} style={{ "--bar-value": `${hpPercent}%` } as CSSProperties}><i /></span>
         <span className={styles.shieldBar} style={{ "--bar-value": `${shieldPercent}%` } as CSSProperties}><i /></span>
         <span className={styles.unitBadges}>
-          {statusBadges.map((badge) => <span key={badge.key} title={badge.detail}>{badge.icon} {badge.label}</span>)}
+          {statusBadges.map((badge) => <span key={badge.key} data-tone={badge.tone} title={badge.detail}>{badge.icon} {badge.label}</span>)}
           {hiddenStatusCount > 0 ? (
             <span className={styles.moreBadge} title={allStatusBadges.slice(visibleStatusCount).map((badge) => badge.label).join("、")}>+{hiddenStatusCount}</span>
           ) : null}
@@ -802,51 +829,150 @@ const StageDossier = React.memo(function StageDossier({
   resources,
   accent,
   isManualFocus,
-  focusCycleKey,
+  onPinFocus,
+  onResumeFollow,
 }: {
   fighter?: Fighter;
   statuses: NameArenaStageBadge[];
   resources: NameArenaStageBadge[];
   accent: string;
   isManualFocus: boolean;
-  focusCycleKey: string;
+  onPinFocus: (fighterId: string) => void;
+  onResumeFollow: () => void;
 }) {
+  const [selectedBadge, setSelectedBadge] = useState<{
+    fighterId: string;
+    fighterName: string;
+    badge: NameArenaStageBadge;
+  } | null>(null);
+  const badges = [...statuses, ...resources];
+  const selectedBadgeBelongsToFighter = Boolean(
+    selectedBadge && selectedBadge.fighterId === fighter?.id,
+  );
+  const liveSelectedBadge = selectedBadgeBelongsToFighter && selectedBadge
+    ? badges.find((badge) => badge.key === selectedBadge.badge.key)
+    : undefined;
+  const selectedBadgeKey = selectedBadgeBelongsToFighter && selectedBadge
+    ? selectedBadge.badge.key
+    : null;
+  const selectedBadgeItem = selectedBadgeBelongsToFighter && selectedBadge
+    ? liveSelectedBadge ?? selectedBadge.badge
+    : null;
+  const selectedBadgeEnded = Boolean(
+    selectedBadgeBelongsToFighter &&
+    !liveSelectedBadge,
+  );
+
+  const closeBadgeDetail = useCallback(() => {
+    setSelectedBadge(null);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedBadge) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeBadgeDetail();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [closeBadgeDetail, selectedBadge]);
+
   if (!fighter) return null;
+  const fighterName = fighter.displayName ?? fighter.name;
+  const badgeDetailDialog = selectedBadgeItem && selectedBadge && typeof document !== "undefined"
+    ? createPortal(
+        <div className={styles.dossierBadgeBackdrop} onClick={closeBadgeDetail}>
+          <section
+            className={styles.dossierBadgeDetail}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selectedBadge.fighterName}的${selectedBadgeItem.label}详情`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span>{selectedBadge.fighterName}</span>
+                <strong>{selectedBadgeItem.icon} {selectedBadgeItem.label}</strong>
+              </div>
+              <button type="button" aria-label="关闭状态详情" onClick={closeBadgeDetail}>×</button>
+            </header>
+            {selectedBadgeItem.statusDetail ? (
+              <StatusDetailContent detail={selectedBadgeItem.statusDetail} />
+            ) : (
+              <p>{selectedBadgeItem.detail}</p>
+            )}
+            {selectedBadgeEnded ? (
+              <div className={styles.dossierBadgeEnded} role="status">该状态或资源已结束</div>
+            ) : null}
+          </section>
+        </div>,
+        document.body,
+      )
+    : null;
   return (
     <div
       className={styles.dossier}
       style={{ "--selected-accent": accent } as CSSProperties}
       data-focus-mode={isManualFocus ? "manual" : "actor"}
-      data-focus-cycle={focusCycleKey}
       data-focused-fighter-id={fighter.id}
     >
       <i />
       <div className={styles.dossierBody}>
         <div className={styles.dossierHeading}>
           <div>
-            <span>{fighter.jobData?.name ?? "未知职业"}</span>
+            <div className={styles.dossierMetaRow}>
+              <span>{fighter.jobData?.name ?? "未知职业"}</span>
+              {isManualFocus ? (
+                <button
+                  type="button"
+                  className={styles.resumeFollow}
+                  onClick={onResumeFollow}
+                  title="解除手动查看并恢复跟随当前行动者"
+                >
+                  <Crosshair size={12} aria-hidden="true" />
+                  恢复跟随
+                </button>
+              ) : null}
+            </div>
             <strong>{fighter.displayName ?? fighter.name}</strong>
             <small className={styles.dossierVital}>生命 {fighter.currentHp.toLocaleString()} / {fighter.maxHp.toLocaleString()}</small>
           </div>
           <dl>
-            <div><dt>攻</dt><dd>{fighter.atk}</dd></div>
-            <div><dt>防</dt><dd>{fighter.def}</dd></div>
-            <div><dt>速</dt><dd>{fighter.spd}</dd></div>
-            <div><dt>敏</dt><dd>{fighter.agl}</dd></div>
-            <div><dt>魔</dt><dd>{fighter.mag}</dd></div>
-            <div><dt>抗</dt><dd>{fighter.res}</dd></div>
-            <div><dt>智</dt><dd>{fighter.wis}</dd></div>
+            <div><dt>攻</dt><dd>{getEffectiveCombatStat(fighter, 'atk')}</dd></div>
+            <div><dt>防</dt><dd>{getEffectiveCombatStat(fighter, 'def')}</dd></div>
+            <div><dt>速</dt><dd>{getEffectiveCombatStat(fighter, 'spd')}</dd></div>
+            <div><dt>敏</dt><dd>{getEffectiveCombatStat(fighter, 'agl')}</dd></div>
+            <div><dt>魔</dt><dd>{getEffectiveCombatStat(fighter, 'mag')}</dd></div>
+            <div><dt>抗</dt><dd>{getEffectiveCombatStat(fighter, 'res')}</dd></div>
+            <div><dt>智</dt><dd>{getEffectiveCombatStat(fighter, 'wis')}</dd></div>
             <div><dt>暴</dt><dd>{Math.round(fighter.critRate * 100)}%</dd></div>
             <div><dt>盾</dt><dd>{getShield(fighter)}</dd></div>
           </dl>
         </div>
         <div className={styles.dossierBadges}>
-          {[...statuses, ...resources].map((badge) => (
-            <span key={badge.key} data-tone={badge.tone} title={badge.detail}>{badge.icon} {badge.label}</span>
+          {badges.map((badge) => (
+            <button
+              type="button"
+              key={badge.key}
+              data-tone={badge.tone}
+              title={badge.detail}
+              aria-expanded={selectedBadgeKey === badge.key}
+              onClick={() => {
+                onPinFocus(fighter.id);
+                setSelectedBadge((current) => (
+                  current?.fighterId === fighter.id &&
+                  current.badge.key === badge.key
+                    ? null
+                    : { fighterId: fighter.id, fighterName, badge }
+                ));
+              }}
+            >
+              {badge.icon} {badge.label}
+            </button>
           ))}
           {statuses.length + resources.length === 0 ? <small>当前没有额外状态或资源</small> : null}
         </div>
       </div>
+      {badgeDetailDialog}
     </div>
   );
 });
@@ -1065,6 +1191,7 @@ export function NameArenaBattleStage({
   logGroups,
   battleTurn,
   battleRunId,
+  claimVisualEvent,
   roundProgress,
   aliveCount,
   gameState,
@@ -1105,12 +1232,14 @@ export function NameArenaBattleStage({
   const stopFxLoopRef = useRef<() => void>(() => {});
   const stageFxSuspendedRef = useRef(false);
   const cinematicEndsAtRef = useRef(0);
+  const cinematicQueueRef = useRef<QueuedCinematic[]>([]);
+  const activeCinematicKeyRef = useRef<string | null>(null);
+  const launchNextCinematicRef = useRef<() => void>(() => {});
+  const cinematicSequenceRef = useRef(0);
   const [animationScheduler] = useState(() => new StageAnimationScheduler());
   const combatFxSequenceRef = useRef(0);
   const popupSequenceRef = useRef(0);
   const fighterMotionAnimationsRef = useRef(new Map<string, FighterMotionRuntime>());
-  const lastProcessedVisualEventKeyRef = useRef<string | null>(null);
-  const lastVisualActionKeyRef = useRef<string | null>(null);
   const animatedAttackActionKeysRef = useRef(new Set<string>());
   const lastFinisherKeyRef = useRef<string | null>(null);
   const developmentSummonPreviewRef = useRef<SummonCardCinematic | null>(null);
@@ -1126,7 +1255,7 @@ export function NameArenaBattleStage({
   const hasTokusatsuFighter = stageFighters.some((fighter) => fighter.isTokusatsu);
   const stageRosterKey = stageFighters.map((fighter) => fighter.id).join("\u001f");
   const densityPopulation = stageFighters.length;
-  const stageDensity = densityPopulation > 18 ? "crowded" : densityPopulation > 12 ? "dense" : densityPopulation > 6 ? "compact" : "normal";
+  const stageDensity = densityPopulation > 18 ? "crowded" : densityPopulation > 14 ? "dense" : densityPopulation > 6 ? "compact" : "normal";
   const positionById = useMemo(
     () => createStagePositionMap(stageRosterKey ? stageRosterKey.split("\u001f") : [], arenaSize.width, arenaSize.height),
     [arenaSize.height, arenaSize.width, stageRosterKey],
@@ -1137,23 +1266,18 @@ export function NameArenaBattleStage({
 
   const actor = useMemo(() => {
     if (activeLog?.actorId) return fighterById.get(activeLog.actorId);
-    return fighters.find((fighter) => fighter.isActing) ?? fighters.find((fighter) => activeLog?.text.includes(fighter.name));
+    return fighters.find((fighter) => fighter.isActing);
   }, [activeLog, fighterById, fighters]);
   const activeActorId = actor?.id;
   const targetIds = useMemo(() => {
     if (!activeLog) return [];
     const explicitTargets = (activeLog.targetIds ?? []).filter((id) => fighterById.has(id));
-    const hitTargets = fighters.filter((fighter) => fighter.isHit && fighter.id !== activeActorId).map((fighter) => fighter.id);
-    const namedTargets = fighters
-      .filter((fighter) => fighter.id !== activeActorId && activeLog.text.includes(fighter.name))
-      .map((fighter) => fighter.id);
-    return [...new Set(explicitTargets.length > 0 ? explicitTargets : hitTargets.length > 0 ? hitTargets : namedTargets)];
-  }, [activeActorId, activeLog, fighterById, fighters]);
+    return [...new Set(explicitTargets)];
+  }, [activeLog, fighterById]);
   const targetIdSet = useMemo(() => new Set(targetIds), [targetIds]);
-  const focusCycleKey = getStageFocusCycleKey(activeLog, battleRunId, battleTurn, activeActorId);
-  const focusCycleKeyRef = useRef(focusCycleKey);
-  const selectedId = resolveStageManualFocusId(manualFocus, focusCycleKey);
-  const selectedFighter = stageFighterById.get(selectedId ?? "")
+  const selectedId = resolveStageManualFocusId(manualFocus, battleRunId);
+  const manuallySelectedFighter = stageFighterById.get(selectedId ?? "");
+  const selectedFighter = manuallySelectedFighter
     ?? (actor && stageFighterById.has(actor.id) ? actor : undefined)
     ?? stageFighters.find((fighter) => !fighter.isDead)
     ?? stageFighters[0];
@@ -1185,27 +1309,40 @@ export function NameArenaBattleStage({
   const stageFxSuspended = !isPageVisible || mobileView === "logs" || cinematic !== null;
 
   useEffect(() => {
-    focusCycleKeyRef.current = focusCycleKey;
-  }, [focusCycleKey]);
-
-  useEffect(() => {
     stageFxSuspendedRef.current = stageFxSuspended;
   }, [stageFxSuspended]);
 
-  const selectFighterForCurrentAction = useCallback((fighterId: string) => {
-    const currentFocusCycleKey = focusCycleKeyRef.current;
-    setManualFocus((current) => (
-      current?.fighterId === fighterId && current.focusCycleKey === currentFocusCycleKey
-        ? null
-        : { fighterId, focusCycleKey: currentFocusCycleKey }
-    ));
-  }, []);
+  useEffect(() => {
+    if (
+      !manualFocus ||
+      (
+        manualFocus.battleRunId === battleRunId &&
+        stageFighterById.has(manualFocus.fighterId)
+      )
+    ) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setManualFocus((current) => (
+        current === manualFocus ? null : current
+      ));
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [battleRunId, manualFocus, stageFighterById]);
+
+  const selectFighter = useCallback((fighterId: string) => {
+    setManualFocus((current) => toggleStageManualFocus(current, fighterId, battleRunId));
+  }, [battleRunId]);
+
+  const pinFighter = useCallback((fighterId: string) => {
+    setManualFocus({ fighterId, battleRunId });
+  }, [battleRunId]);
 
   const clearManualFocus = useCallback(() => setManualFocus(null), []);
   const selectFighterFromFeed = useCallback((fighterId: string) => {
-    selectFighterForCurrentAction(fighterId);
+    selectFighter(fighterId);
     setMobileView("arena");
-  }, [selectFighterForCurrentAction, setMobileView]);
+  }, [selectFighter, setMobileView]);
 
   const registerFighterNode = useCallback((fighterId: string, node: HTMLButtonElement | null) => {
     if (node) nodeRefs.current.set(fighterId, node);
@@ -1257,8 +1394,6 @@ export function NameArenaBattleStage({
   useEffect(() => {
     animationScheduler.reset();
     previousSnapshotRef.current.clear();
-    lastProcessedVisualEventKeyRef.current = null;
-    lastVisualActionKeyRef.current = null;
     animatedAttackActionKeysRef.current.clear();
     lastFinisherKeyRef.current = null;
     clearImpactTimers();
@@ -1277,9 +1412,13 @@ export function NameArenaBattleStage({
     developmentTokusatsuPreviewRef.current = readDevelopmentTokusatsuPreview();
     developmentTokusatsuPreviewPlayedRef.current = false;
     developmentFinisherPreviewRef.current = readDevelopmentFinisherPreview();
+    cinematicQueueRef.current = [];
+    activeCinematicKeyRef.current = null;
     cinematicEndsAtRef.current = 0;
     const generation = animationScheduler.begin("battle-init");
     animationScheduler.after("battle-init", 0, () => {
+      setManualFocus(null);
+      setPopups([]);
       setCinematic(developmentSummonPreviewRef.current ?? developmentFinisherPreviewRef.current);
       setShowImpact(false);
       setImpactTheme("generic");
@@ -1292,35 +1431,48 @@ export function NameArenaBattleStage({
     if (hasTokusatsuFighter) preloadTokusatsuCombatFxAssets();
   }, [hasTokusatsuFighter]);
 
-  const playCinematic = useCallback((next: Cinematic, duration: number) => {
-    const effectiveDuration = prefersReducedMotion ? 80 : duration;
-    const launch = () => {
-      const generation = animationScheduler.begin("cinematic");
-      cinematicEndsAtRef.current = Date.now() + effectiveDuration;
-      stageFxSuspendedRef.current = true;
-      setShowImpact(false);
-      setCinematic(next);
-      animationScheduler.after("cinematic", effectiveDuration, () => {
-        cinematicEndsAtRef.current = 0;
-        setCinematic((current) => current === next ? null : current);
-      }, generation);
-    };
-    const queueDelay = cinematicEndsAtRef.current - Date.now();
-    if (queueDelay > 40) {
-      const queueGeneration = animationScheduler.begin("cinematic:queue");
-      animationScheduler.after("cinematic:queue", queueDelay + 60, launch, queueGeneration);
-      return;
-    }
-    animationScheduler.cancel("cinematic:queue");
-    launch();
+  const launchNextCinematic = useCallback(() => {
+    if (activeCinematicKeyRef.current) return;
+    const queued = cinematicQueueRef.current.shift();
+    if (!queued) return;
+    const effectiveDuration = prefersReducedMotion ? 80 : queued.duration;
+    const generation = animationScheduler.begin("cinematic");
+    activeCinematicKeyRef.current = queued.key;
+    cinematicEndsAtRef.current = Date.now() + effectiveDuration;
+    stageFxSuspendedRef.current = true;
+    setShowImpact(false);
+    setCinematic(queued.cinematic);
+    animationScheduler.after("cinematic", effectiveDuration, () => {
+      cinematicEndsAtRef.current = 0;
+      activeCinematicKeyRef.current = null;
+      setCinematic((current) => current === queued.cinematic ? null : current);
+      const drainGeneration = animationScheduler.begin("cinematic:drain");
+      animationScheduler.after("cinematic:drain", 60, () => launchNextCinematicRef.current(), drainGeneration);
+    }, generation);
   }, [animationScheduler, prefersReducedMotion]);
+
+  useEffect(() => {
+    launchNextCinematicRef.current = launchNextCinematic;
+  }, [launchNextCinematic]);
+
+  const playCinematic = useCallback((next: Cinematic, duration: number, requestedKey?: string) => {
+    const key = requestedKey ?? `cinematic-${++cinematicSequenceRef.current}`;
+    if (activeCinematicKeyRef.current === key || cinematicQueueRef.current.some((entry) => entry.key === key)) return;
+    cinematicQueueRef.current.push({ key, cinematic: next, duration });
+    launchNextCinematicRef.current();
+  }, []);
+
+  const clearCinematicFollowups = useCallback(() => {
+    animationScheduler.cancelPrefix("cinematic-followup:");
+  }, [animationScheduler]);
 
   const queueAfterCinematics = useCallback((key: string, followup: () => void) => {
     const scope = `cinematic-followup:${key}`;
     const generation = animationScheduler.begin(scope);
     const attempt = () => {
       const remaining = cinematicEndsAtRef.current - Date.now();
-      if (stageFxSuspendedRef.current || document.hidden || remaining > 40) {
+      const hasQueuedCinematic = activeCinematicKeyRef.current !== null || cinematicQueueRef.current.length > 0;
+      if (stageFxSuspendedRef.current || document.hidden || remaining > 40 || hasQueuedCinematic) {
         animationScheduler.after(scope, Math.max(120, remaining + 120), attempt, generation);
         return;
       }
@@ -1338,10 +1490,13 @@ export function NameArenaBattleStage({
 
   const stopCinematic = useCallback(() => {
     animationScheduler.cancel("cinematic");
-    animationScheduler.cancel("cinematic:queue");
+    animationScheduler.cancel("cinematic:drain");
+    clearCinematicFollowups();
+    cinematicQueueRef.current = [];
+    activeCinematicKeyRef.current = null;
     cinematicEndsAtRef.current = 0;
     setCinematic(null);
-  }, [animationScheduler]);
+  }, [animationScheduler, clearCinematicFollowups]);
 
   useEffect(() => () => {
     animationScheduler.reset();
@@ -1358,11 +1513,15 @@ export function NameArenaBattleStage({
   }, []);
 
   useEffect(() => {
-    const update = () => setIsPageVisible(!document.hidden);
+    const update = () => {
+      const visible = !document.hidden;
+      setIsPageVisible(visible);
+      if (!visible) stopCinematic();
+    };
     update();
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
-  }, []);
+  }, [stopCinematic]);
 
   useEffect(() => {
     const generation = animationScheduler.begin("suspension");
@@ -1470,11 +1629,9 @@ export function NameArenaBattleStage({
       callback();
       return;
     }
-    void runtime.animation.finished
-      .catch(() => undefined)
-      .then(() => {
+    void runtime.animation.finished.then(() => {
         if (runtime.node.isConnected) callback();
-      });
+      }, () => undefined);
   }, []);
 
   const spawnBurst = useCallback((fighterId: string, color: string, amount = 30, force = 4.5) => {
@@ -2117,24 +2274,25 @@ export function NameArenaBattleStage({
   }, [animationScheduler, fighterById, fighters, prefersReducedMotion, runAfterSelfDestructReturn, spawnBurst]);
 
   useEffect(() => {
-    if (!activeLog || mobileView === "logs" || developmentSummonPreviewRef.current || developmentTingPreviewRef.current || developmentGachaPreviewRef.current || developmentTokusatsuPreviewRef.current || developmentFinisherPreviewRef.current) return;
-    const eventKey = activeLog.id ?? `event-${activeLog.sequence ?? battleTurn}`;
-    if (lastProcessedVisualEventKeyRef.current === eventKey) return;
-    lastProcessedVisualEventKeyRef.current = eventKey;
+    if (!activeLog || developmentSummonPreviewRef.current || developmentTingPreviewRef.current || developmentGachaPreviewRef.current || developmentTokusatsuPreviewRef.current || developmentFinisherPreviewRef.current) return;
+    const eventKey = activeLog.visualCueId ?? activeLog.id ?? `event-${activeLog.sequence ?? battleTurn}`;
+    if (!claimVisualEvent(battleRunId, eventKey)) return;
+    if (mobileView === "logs" || !isPageVisible) return;
 
     const currentActor = activeLog.actorId ? fighterById.get(activeLog.actorId) : actor;
-    const explicitCombatCue = activeLog.visualCue?.kind === "combat_fx" ? activeLog.visualCue : null;
+    const explicitCombatCue = activeLog.visualCue?.kind === "combat_fx" || activeLog.visualCue?.kind === "combat_action" || activeLog.visualCue?.kind === "reaction_fx"
+      ? activeLog.visualCue
+      : null;
     const effectSource = explicitCombatCue
       ? fighterById.get(explicitCombatCue.sourceId)
       : currentActor;
     const effectTargetIds = explicitCombatCue
       ? explicitCombatCue.targetIds.filter((id) => fighterById.has(id))
       : targetIds;
-    const visualActionKey = activeLog.actionId ?? `turn-${activeLog.turn ?? battleTurn}-actor-${currentActor?.id ?? "global"}`;
     let actionGeneration = animationScheduler.generation("action");
-    if (lastVisualActionKeyRef.current !== visualActionKey || explicitCombatCue) {
+    if (activeLog.visualCue) {
+      clearCinematicFollowups();
       actionGeneration = animationScheduler.begin("action");
-      lastVisualActionKeyRef.current = visualActionKey;
       clearFighterMotions();
       beamsRef.current = [];
       particlesRef.current = [];
@@ -2145,26 +2303,21 @@ export function NameArenaBattleStage({
       animationScheduler.frame("action", () => setShowImpact(false), actionGeneration);
     }
 
-    const namedTargets = fighters
-      .filter((fighter) => fighter.id !== effectSource?.id && activeLog.text.includes(fighter.name))
-      .map((fighter) => fighter.id);
-
     const accent = getFighterAccent(effectSource ?? currentActor);
     const combatEffect = resolveCombatEffect(activeLog, effectSource);
-    const attackLogType = activeLog.type === "skill" || activeLog.type === "crit" || activeLog.type === "death" || activeLog.type === "poison";
+    const combatPresentation = explicitCombatCue?.kind === "combat_action"
+      ? explicitCombatCue.presentation
+      : activeLog.presentation;
     const shouldAttack = Boolean(
+      explicitCombatCue &&
       effectSource &&
-      effectTargetIds.length > 0 &&
-      activeLog.visualCue?.kind !== "summon_card" &&
-      (activeLog.presentation === "basic" || (attackLogType && (activeLog.presentation === "skill" || activeLog.presentation === "finisher"))),
+      effectTargetIds.some((targetId) => targetId !== effectSource.id) &&
+      (combatPresentation === "basic" || combatPresentation === "skill" || combatPresentation === "finisher") &&
+      activeLog.type !== "buff" &&
+      activeLog.type !== "heal",
     );
-    const shouldPlayActorEffect = Boolean(
-      combatEffect?.targetMode === "actor" &&
-      effectSource &&
-      (activeLog.type === "skill" || activeLog.type === "crit" || activeLog.type === "buff" || activeLog.type === "heal"),
-    );
-    const shouldPlayActionEffect = Boolean(explicitCombatCue) || shouldAttack || shouldPlayActorEffect;
-    const effectPlaybackKey = explicitCombatCue ? eventKey : visualActionKey;
+    const shouldPlayActionEffect = Boolean(explicitCombatCue);
+    const effectPlaybackKey = eventKey;
     if (shouldPlayActionEffect && effectSource && !animatedAttackActionKeysRef.current.has(effectPlaybackKey)) {
       animatedAttackActionKeysRef.current.add(effectPlaybackKey);
       keepNewestSet(animatedAttackActionKeysRef.current, 256);
@@ -2175,17 +2328,22 @@ export function NameArenaBattleStage({
             spawnTingEffect(combatEffect, effectSource.id, effectTargetIds);
           } else if (combatEffect.theme === "gacha") {
             spawnGachaEffect(combatEffect, effectSource.id, effectTargetIds, {
-              label: explicitCombatCue?.label,
-              count: explicitCombatCue?.count,
+              label: explicitCombatCue?.kind === "combat_fx" || explicitCombatCue?.kind === "reaction_fx" ? explicitCombatCue.label : undefined,
+              count: explicitCombatCue?.kind === "combat_fx" || explicitCombatCue?.kind === "reaction_fx" ? explicitCombatCue.count : undefined,
             });
           } else {
             spawnTokusatsuEffect(combatEffect, effectSource.id, effectTargetIds);
           }
         } else {
-          effectTargetIds.forEach((targetId) => {
-            spawnBeam(effectSource.id, targetId, accent);
-            spawnBurst(targetId, accent, activeLog.type === "crit" || activeLog.type === "death" ? 58 : 28, activeLog.type === "crit" ? 7 : 4.5);
-          });
+          const isSelfEffect = activeLog.type === "heal" || activeLog.type === "buff" || effectTargetIds.every((targetId) => targetId === effectSource.id);
+          if (isSelfEffect) {
+            spawnBurst(effectSource.id, activeLog.type === "heal" ? "#7be36a" : accent, 36, 4);
+          } else {
+            effectTargetIds.forEach((targetId) => {
+              spawnBeam(effectSource.id, targetId, accent);
+              spawnBurst(targetId, accent, activeLog.type === "crit" || activeLog.type === "death" ? 58 : 28, activeLog.type === "crit" ? 7 : 4.5);
+            });
+          }
         }
         const impactDuration = combatEffect?.impact === "ting_detonation"
           ? 1180
@@ -2203,7 +2361,7 @@ export function NameArenaBattleStage({
           playCombatImpact(combatEffect?.impact ?? "generic", impactDuration, impactDelay);
         }
       };
-      if (combatEffect?.theme === "tokusatsu" && activeLog.presentation === "finisher") {
+      if (combatEffect?.theme === "tokusatsu" && combatPresentation === "finisher") {
         queueAfterCinematics(effectPlaybackKey, () => {
           clearFighterMotions();
           tokusatsuCombatFxRef.current = [];
@@ -2211,17 +2369,6 @@ export function NameArenaBattleStage({
         });
       } else {
         animationScheduler.frame("action", playActionVisual, actionGeneration);
-      }
-    } else if (activeLog.type === "heal" || activeLog.type === "buff") {
-      const beneficiary = namedTargets[0] ?? effectSource?.id ?? currentActor?.id;
-      if (beneficiary) {
-        const present = () => animationScheduler.frame(
-          "action",
-          () => spawnBurst(beneficiary, activeLog.type === "heal" ? "#7be36a" : accent, 36, 4),
-          actionGeneration,
-        );
-        if (activeLog.type === "heal") runAfterSelfDestructReturn(beneficiary, present);
-        else present();
       }
     }
 
@@ -2233,16 +2380,41 @@ export function NameArenaBattleStage({
         fighterId: visualCue.fighterId,
         name: visualCue.fighterName,
         kicker: `PHASE SHIFT // TURN ${activeLog.turn ?? battleTurn}`,
-        title: getTransformationTitle(activeLog, visualCue.to),
+        title: getTransformationTitle(visualCue),
         from: visualCue.from,
         to: visualCue.to,
       });
-      animationScheduler.frame("action", () => playCinematic(nextCinematic, nextCinematic.theme === "tokusatsu" ? 3600 : 3200), actionGeneration);
+      animationScheduler.frame("action", () => playCinematic(
+        nextCinematic,
+        nextCinematic.theme === "tokusatsu"
+          ? BATTLE_CINEMATIC_DURATION_MS.tokusatsuTransformation
+          : BATTLE_CINEMATIC_DURATION_MS.transformation,
+        eventKey,
+      ), actionGeneration);
       if (transformed) animationScheduler.frame("action", () => spawnBurst(transformed.id, getFighterAccent(transformed), 86, 7), actionGeneration);
+    } else if (visualCue?.kind === "form_shift") {
+      const shifted = fighterById.get(visualCue.fighterId);
+      const nextCinematic: FormShiftCinematic = {
+        kind: "form_shift",
+        fighterId: visualCue.fighterId,
+        name: visualCue.fighterName,
+        kicker: `FORM SHIFT // TURN ${activeLog.turn ?? battleTurn}`,
+        title: getTransformationTitle(visualCue),
+        from: visualCue.from,
+        to: visualCue.to,
+      };
+      animationScheduler.frame("action", () => playCinematic(nextCinematic, BATTLE_CINEMATIC_DURATION_MS.formShift, eventKey), actionGeneration);
+      if (shifted) animationScheduler.frame("action", () => spawnBurst(shifted.id, getFighterAccent(shifted), 52, 5), actionGeneration);
     } else if (visualCue?.kind === "summon_card") {
-      animationScheduler.frame("action", () => playCinematic({ ...visualCue }, visualCue.summonKind === "reveal" ? 2800 : 4400), actionGeneration);
-    } else if (activeLog.presentation === "finisher" && shouldAttack) {
-      const finisherKey = activeLog.actionId ?? activeLog.id ?? `event-${activeLog.sequence ?? battleTurn}`;
+      animationScheduler.frame("action", () => playCinematic(
+        { ...visualCue },
+        visualCue.summonKind === "reveal"
+          ? BATTLE_CINEMATIC_DURATION_MS.summonReveal
+          : BATTLE_CINEMATIC_DURATION_MS.summonSequence,
+        eventKey,
+      ), actionGeneration);
+    } else if (combatPresentation === "finisher" && shouldAttack) {
+      const finisherKey = eventKey;
       if (lastFinisherKeyRef.current !== finisherKey) {
         lastFinisherKeyRef.current = finisherKey;
         const finisher = currentActor;
@@ -2268,7 +2440,15 @@ export function NameArenaBattleStage({
                     : undefined,
           targetName: effectTargetIds[0] ? fighterById.get(effectTargetIds[0])?.name : undefined,
         };
-        animationScheduler.frame("action", () => playCinematic(nextCinematic, nextCinematic.theme?.startsWith("tokusatsu_") ? 2600 : nextCinematic.theme ? 2100 : 1900), actionGeneration);
+        animationScheduler.frame("action", () => playCinematic(
+          nextCinematic,
+          nextCinematic.theme?.startsWith("tokusatsu_")
+            ? BATTLE_CINEMATIC_DURATION_MS.tokusatsuFinisher
+            : nextCinematic.theme
+              ? BATTLE_CINEMATIC_DURATION_MS.themedFinisher
+              : BATTLE_CINEMATIC_DURATION_MS.finisher,
+          `finisher:${eventKey}`,
+        ), actionGeneration);
       }
     }
 
@@ -2279,7 +2459,7 @@ export function NameArenaBattleStage({
         setIsGlitching(false);
       }, glitchGeneration);
     }
-  }, [activeLog, actor, animationScheduler, battleTurn, clearFighterMotions, clearImpactTimers, fighterById, fighters, mobileView, playCinematic, playCombatActorMotion, playCombatImpact, prefersReducedMotion, queueAfterCinematics, runAfterSelfDestructReturn, spawnBeam, spawnBurst, spawnGachaEffect, spawnTingEffect, spawnTokusatsuEffect, targetIds]);
+  }, [activeLog, actor, animationScheduler, battleRunId, battleTurn, claimVisualEvent, clearCinematicFollowups, clearFighterMotions, clearImpactTimers, fighterById, fighters, isPageVisible, mobileView, playCinematic, playCombatActorMotion, playCombatImpact, prefersReducedMotion, queueAfterCinematics, runAfterSelfDestructReturn, spawnBeam, spawnBurst, spawnGachaEffect, spawnTingEffect, spawnTokusatsuEffect, targetIds]);
 
   useEffect(() => {
     if (!isAutoScroll) return;
@@ -2344,18 +2524,20 @@ export function NameArenaBattleStage({
           selectedFighterId={selectedFighter?.id}
           visibleStatusCount={visibleStatusCount}
           getStatusBadges={getStatusBadges}
-          onSelect={selectFighterForCurrentAction}
+          onSelect={selectFighter}
           onClearFocus={clearManualFocus}
           registerNode={registerFighterNode}
         />
         <StagePopupLayer popups={popups} positionById={positionById} />
         <StageDossier
+          key={`dossier-${battleRunId}`}
           fighter={selectedFighter}
           statuses={selectedStatuses}
           resources={selectedResources}
           accent={selectedAccent}
-          isManualFocus={Boolean(selectedId)}
-          focusCycleKey={focusCycleKey}
+          isManualFocus={Boolean(manuallySelectedFighter)}
+          onPinFocus={pinFighter}
+          onResumeFollow={clearManualFocus}
         />
         <StageArenaFooter
           threat={threat}
@@ -2473,6 +2655,33 @@ export function NameArenaBattleStage({
             </div>
             <p className={styles.transformationTitle}>【{cinematic.title}】</p>
             <div className={styles.transformationProgress} aria-hidden="true"><i /></div>
+          </div>
+        ) : null}
+
+        {cinematic?.kind === "form_shift" ? (
+          <div
+            className={styles.formShift}
+            style={{ "--transform-accent": getFighterAccent(fighterById.get(cinematic.fighterId ?? "")) } as CSSProperties}
+            aria-live="assertive"
+          >
+            <header>
+              <span>{cinematic.kicker}</span>
+              <strong>{cinematic.name}</strong>
+            </header>
+            <div className={styles.formShiftTrack}>
+              <div>
+                <i>{cinematic.from.icon}</i>
+                <span>{getPhaseName(cinematic.from.phase)}</span>
+                <b>{cinematic.from.jobName}</b>
+              </div>
+              <em aria-hidden="true">›››</em>
+              <div data-active="true">
+                <i>{cinematic.to.icon}</i>
+                <span>{getPhaseName(cinematic.to.phase)}</span>
+                <b>{cinematic.to.jobName}</b>
+              </div>
+            </div>
+            <p>【{cinematic.title}】</p>
           </div>
         ) : null}
 

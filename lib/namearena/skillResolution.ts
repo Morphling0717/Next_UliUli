@@ -4,6 +4,7 @@ import {
   isLuckEmperor,
   resolveLuckEmperorSsrDraw,
 } from './gachaMechanics';
+import { getEffectiveCombatStat } from './statusMechanics';
 
 export interface SkillResolutionRuntime {
   skills: Record<string, SkillDefinition>;
@@ -34,7 +35,10 @@ export function resolveSkillDefinition(
   }
 
   if (!skill) {
-    skill = (user.mag > user.atk && Math.random() < (0.5 + user.wis * 0.002))
+    skill = (
+      getEffectiveCombatStat(user, 'mag') > getEffectiveCombatStat(user, 'atk') &&
+      Math.random() < (0.5 + getEffectiveCombatStat(user, 'wis') * 0.002)
+    )
       ? { name: '魔力攻击', tag: 'magical', mult: 1.0, text: '{USER} 凝聚魔力攻击 {TARGET}，造成 {VAL} 魔法伤害。' }
       : { name: '普通攻击', tag: 'physical', mult: 1.0, text: '{USER} 攻击了 {TARGET}，造成 {VAL} 伤害。' };
   }

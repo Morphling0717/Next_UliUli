@@ -4,6 +4,7 @@ import {
   ensureOwlState,
   enterOwlPrideAfterKill,
   findOwlEmperor,
+  getOwlPhaseTwoLightningTargets,
   grantOwlHeavenFromDeath,
   OWL_WILD_MAX,
   processOwlGlobalTick,
@@ -25,6 +26,7 @@ function asOwlRuntime(runtime: CharacterHookRuntime): OwlRuntime {
     syncHpPct: runtime.syncHpPct,
     applyDamage: runtime.applyDamage,
     applyStatus: runtime.applyStatus,
+    dispelStatusEffects: runtime.dispelStatusEffects,
     markDefeated: runtime.markDefeated,
     flushDeferredDamageEvents: runtime.flushDeferredDamageEvents,
   };
@@ -108,8 +110,15 @@ export const owlHook: CharacterHook = {
     if (!phaseTwoJob) return false;
     transform('OWL_BOILED_HERO', `⚡ ${fighter.name}：“这雷把我吓死了！”转入第二阶段【${phaseTwoJob.name}】！`, () => {
       rebuildOwlPhaseTwoStats(fighter);
+      ensureOwlState(fighter, runtime.turnCount).phase = 2;
     });
-    releaseOwlPhaseTwoLightning(asOwlRuntime(runtime), fighter);
+    const targets = getOwlPhaseTwoLightningTargets(asOwlRuntime(runtime), fighter);
+    runtime.runReactionAction(fighter, {
+      skillId: 'owl_phase_two_lightning',
+      skillName: '煮酒惊雷',
+      presentation: 'skill',
+      targets,
+    }, () => releaseOwlPhaseTwoLightning(asOwlRuntime(runtime), fighter));
     return true;
   },
 

@@ -1,13 +1,14 @@
-import type { DamageApplicationOptions, DefeatOptions, Fighter, SpinalSwordRef, StatusEffectsMap, StatusEntry } from './types';
+import type {
+  BarrierEntry,
+  DamageApplicationOptions,
+  DefeatOptions,
+  DispelOptions,
+  DispelResolution,
+  Fighter,
+  SpinalSwordRef,
+  StatusInstance,
+} from './types';
 import { healFighter } from './combatState';
-import {
-  ACTION_BLOCKING_STATUS_TYPES,
-  BKB_BLOCKED_STATUS_TYPES,
-  CONTROL_STATUS_TYPES,
-  DOT_STATUS_TYPES,
-  WT_REPAIRING_PROFILE,
-  isStatusType,
-} from './statusRules';
 import {
   findDefenseStatus,
   formatControlCleanse,
@@ -20,17 +21,28 @@ import {
   TOKUSATSU_THRONE_RESONANCE_MAX,
 } from './tokusatsuMechanics';
 import {
-  createLifecycleStatus,
-  normalizeStatusEntry,
-  tickStatusTurn,
-} from './statusLifecycle';
-import { cleanupOrphanedTimedStatModifiers, withTimedStatModifiersSuspended } from './statModifiers';
-
-const SINGLE_INSTANCE_STATUS_TYPES = ['BURN', 'POISON', 'BLEED', 'CHARMED', 'OWL_EVADE_DOWN'] as const;
+  advanceEffects,
+  applyStatus,
+  findMechanic,
+  hasIdentity,
+  hasMechanic,
+  removeEffects,
+} from './statusSystem';
+import {
+  buildBarrierPresentationItem,
+  buildStatusPresentationMember,
+  statusPresentationGroupKey,
+} from './statusPresentation';
+import {
+  getStatusIdentityIdsByTag,
+  getStatusMechanicDefinition,
+  getStatusMechanicId,
+  statusHasTag,
+} from './statusRegistry';
+import { WT_REPAIRING_PROFILE } from './statusMechanics';
 
 export interface StatusProcessingRuntime {
   fighters: Fighter[];
-  statusEffects: StatusEffectsMap;
   turnCount: number;
   log: (type: string, text: string) => void;
   applyDamage: (
@@ -41,6 +53,7 @@ export interface StatusProcessingRuntime {
     attacker?: Fighter,
     options?: DamageApplicationOptions,
   ) => number;
+  dispelStatusEffects: (target: Fighter, options: DispelOptions) => DispelResolution;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   flushDeferredDamageEvents: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
   syncHpPct: (fighter: Fighter) => void;
@@ -52,18 +65,23 @@ export interface StatusTurnResult {
   confused: boolean;
   embarrassed: boolean;
   blockingStatusType?: string;
-  pendingAirborneLanding?: StatusEntry;
-  pendingActionBlockExpiry?: StatusEntry;
+  /** Statuses that existed when this opportunity began and tick after it ends. */
+  selfOpportunityStatuses: StatusInstance[];
+  /** Timed barriers that existed when this opportunity began. */
+  selfOpportunityBarriers: BarrierEntry[];
+  selfOpportunityStatusVersions: Record<string, number>;
+  selfOpportunityBarrierVersions: Record<string, number>;
 }
 
 export interface StatusTurnOptions {
-  deferAirborneLanding?: boolean;
-  deferActionBlockExpiry?: boolean;
+  /** Battle steps defer expiry until the action or skipped opportunity is logged. */
+  deferSelfOpportunitySettlement?: boolean;
 }
 
-function findStatusApplier(runtime: StatusProcessingRuntime, status: StatusEntry): Fighter | undefined {
-  return status.applierId
-    ? runtime.fighters.find((fighter) => fighter.id === status.applierId)
+function findStatusApplier(runtime: StatusProcessingRuntime, status: StatusInstance): Fighter | undefined {
+  const applierId = status.attribution.creditActorId ?? status.attribution.applierId;
+  return applierId
+    ? runtime.fighters.find((fighter) => fighter.id === applierId)
     : undefined;
 }
 
@@ -78,94 +96,141 @@ const STATUS_SETTLEMENT_ORDER = new Map<string, number>([
   ['PLUG_HEART', 13],
 ]);
 
-function statusSettlementPriority(status: StatusEntry): number {
-  return STATUS_SETTLEMENT_ORDER.get(status.type) ?? 100;
-}
-
-function normalizeLegacyAirborne(actor: Fighter): void {
-  const entries = actor.status.filter((status) => status.type === 'AIRBORNE' || status.type === 'WT_AIRBORNE');
-  if (entries.length === 0) return;
-
-  const hadLegacyAirborne = entries.some((status) => status.type === 'WT_AIRBORNE');
-  const primary = entries[0];
-  primary.type = 'AIRBORNE';
-  primary.duration = 1;
-  primary.remainingTurns = 1;
-  primary.tickMode = 'self';
-  primary.expiresOn = 'self_turn_end';
-  if (hadLegacyAirborne) {
-    primary.sourceId = primary.sourceId ?? 'war_thunder_airborne';
-  }
-  for (const duplicate of entries.slice(1)) {
-    if (duplicate.applierId) {
-      primary.applierId = duplicate.applierId;
-      primary.applierName = duplicate.applierName;
-    }
-  }
-  actor.status = actor.status.filter((status) => !entries.includes(status) || status === primary);
-}
-
-function normalizeSingleInstanceStatuses(actor: Fighter): void {
-  for (const type of SINGLE_INSTANCE_STATUS_TYPES) {
-    const entries = actor.status.filter((status) => status.type === type);
-    if (entries.length <= 1) continue;
-    const primary = entries[entries.length - 1];
-    const rawLongest = Math.max(...entries.map((status) => status.remainingTurns ?? status.duration));
-    const longest = type === 'OWL_EVADE_DOWN' ? Math.min(2, rawLongest) : rawLongest;
-    primary.duration = longest;
-    primary.remainingTurns = longest;
-    if (type === 'POISON') {
-      primary.stacks = Math.min(3, entries.reduce((sum, status) => sum + Math.max(1, status.stacks ?? 1), 0));
-    }
-    actor.status = actor.status.filter((status) => !entries.includes(status) || status === primary);
-  }
+function statusSettlementPriority(status: StatusInstance): number {
+  return STATUS_SETTLEMENT_ORDER.get(status.identityId) ?? 100;
 }
 
 function removeExpiredCharmSource(runtime: StatusProcessingRuntime, actor: Fighter): void {
-  const staleCharms = actor.status.filter((status) => {
-    if (status.type !== 'CHARMED' || !status.applierId) return false;
+  const staleCharms = actor.statuses.filter((status) => {
+    if (status.identityId !== 'CHARMED' || !status.attribution.applierId) return false;
     const source = findStatusApplier(runtime, status);
-    return !source || !runtime.isActiveCombatant(source) || source.status.some((entry) => entry.type === 'SYNERGY_SLACKING');
+    return !source || !runtime.isActiveCombatant(source) || hasIdentity(source, 'SYNERGY_SLACKING');
   });
   if (staleCharms.length === 0) return;
-  actor.status = actor.status.filter((status) => !staleCharms.includes(status));
+  staleCharms.forEach((status) => removeEffects(actor, { instanceIds: [status.instanceId], reason: 'scripted' }).length > 0);
   staleCharms.forEach((status) => {
-    runtime.log('info', `💔 【魅惑解除】${status.applierName ?? '魅惑来源'} 已经离开战场，${actor.name} 恢复了清醒！`);
+    runtime.log('info', `💔 【魅惑解除】${status.attribution.applierName ?? '魅惑来源'} 已经离开战场，${actor.name} 恢复了清醒！`);
   });
+}
+
+function statusMechanicChangeLabel(status: StatusInstance): string {
+  if (status.identityId === 'WAIT_COUNTER') return '等待反击';
+  return getStatusMechanicDefinition(getStatusMechanicId(status)).displayName;
+}
+
+function logNaturalStatusExpiryGroup(
+  log: StatusProcessingRuntime['log'],
+  fighter: Fighter,
+  expiredStatuses: readonly StatusInstance[],
+): void {
+  const slackingTheme = expiredStatuses.find((status) =>
+    status.identityId === 'SYNERGY_SLACKING' &&
+    (status.groupId === 'slacking_off_field' || status.attribution.effectSourceId === 'slacking_off_field'),
+  );
+  if (slackingTheme) {
+    log('info', `⛺ 【状态结束】${fighter.name} 的【场外OB】自然结束。`);
+    return;
+  }
+  const status = [...expiredStatuses].sort((a, b) => b.appliedSequence - a.appliedSequence)[0];
+  if (!status) return;
+  const presentation = buildStatusPresentationMember(status);
+  if (status.groupId === 'slacking_off_field' || status.attribution.effectSourceId === 'slacking_off_field') {
+    return;
+  }
+  const groupKey = statusPresentationGroupKey(status);
+  const remainingGroup = fighter.statuses.filter((entry) => statusPresentationGroupKey(entry) === groupKey);
+  if (remainingGroup.length === 0) {
+    log('info', `${presentation.icon} 【状态结束】${fighter.name} 的【${presentation.name}】自然结束。`);
+    return;
+  }
+
+  const allMechanics = new Set([
+    ...expiredStatuses.map((entry) => getStatusMechanicId(entry)),
+    ...remainingGroup.map((entry) => getStatusMechanicId(entry)),
+  ]);
+  if (allMechanics.size > 1) {
+    const expiredComponents = [...new Set(expiredStatuses.map((entry) =>
+      statusMechanicChangeLabel(entry),
+    ))];
+    const activeComponents = [...new Set(remainingGroup.map((entry) =>
+      statusMechanicChangeLabel(entry),
+    ))];
+    log(
+      'info',
+      `${presentation.icon} 【状态变化】${fighter.name} 的【${presentation.name}】失去【${expiredComponents.join('】、【')}】效果；【${activeComponents.join('】、【')}】仍在生效。`,
+    );
+    return;
+  }
+
+  const sourceName = status.attribution.applierName;
+  const sourceText = sourceName ? `来自 ${sourceName} 的一份` : '其中一份';
+  log(
+    'info',
+    `${presentation.icon} 【状态变化】${fighter.name} 的【${presentation.name}】${sourceText}效果自然结束；仍有其他来源维持。`,
+  );
+}
+
+function groupExpiredStatuses(statuses: readonly StatusInstance[]): StatusInstance[][] {
+  const groups = new Map<string, StatusInstance[]>();
+  statuses.forEach((status) => {
+    const key = statusPresentationGroupKey(status);
+    const group = groups.get(key) ?? [];
+    group.push(status);
+    groups.set(key, group);
+  });
+  return [...groups.values()];
+}
+
+function handleSelfTimedStatusExpiryGroup(
+  runtime: StatusProcessingRuntime,
+  actor: Fighter,
+  expiredStatuses: readonly StatusInstance[],
+): void {
+  const status = expiredStatuses[0];
+  if (!status) return;
+  const type = status.identityId;
+  if (type === 'WT_REPAIRING') {
+    runtime.log('info', `🔧 【抢修完成】${actor.name} 接好履带、修复炮闩，重新恢复机动！`);
+    return;
+  }
+  if (type === 'AIRBORNE') {
+    resolveAirborneLanding(runtime, actor, status);
+    return;
+  }
+  if (type === 'ZEROED') {
+    runtime.log('info', `🧮 ${actor.name} 的【归零】状态结束，被降维的属性恢复了！`);
+    return;
+  }
+  if (status.mechanicId === 'CHARGE' && !hasMechanic(actor, 'CHARGE')) {
+    const presentation = buildStatusPresentationMember(status);
+    runtime.log('info', `${presentation.icon} 【资源耗尽】${actor.name} 的【${presentation.name}】归零并移除。`);
+    return;
+  }
+  if (status.mechanicId === 'TREMOR' && !hasMechanic(actor, 'TREMOR')) {
+    const presentation = buildStatusPresentationMember(status);
+    runtime.log('info', `${presentation.icon} 【状态结束】${actor.name} 的【${presentation.name}】次数自然衰减至零。`);
+    return;
+  }
+  if (status.mechanicId === 'STAGGERED' && !hasMechanic(actor, 'STAGGERED')) {
+    const presentation = buildStatusPresentationMember(status);
+    runtime.log('info', `${presentation.icon} 【状态结束】${actor.name} 稳住身形，【${presentation.name}】在本次行动机会后解除。`);
+    return;
+  }
+  logNaturalStatusExpiryGroup(runtime.log, actor, expiredStatuses);
 }
 
 export function handleSelfTimedStatusExpiry(
   runtime: StatusProcessingRuntime,
   actor: Fighter,
-  type: string,
-  expiredStatus?: StatusEntry,
+  expiredStatus: StatusInstance,
 ): void {
-  if (type === 'WT_REPAIRING') {
-    runtime.log('info', `🔧 【抢修完成】${actor.name} 接好履带、修复炮闩，重新恢复机动！`);
-    return;
-  }
-  if (type === 'AIRBORNE' || type === 'WT_AIRBORNE') {
-    resolveAirborneLanding(runtime, actor, expiredStatus ?? { type, duration: 0 });
-    return;
-  }
-  if (type !== 'ZEROED') return;
-  if (actor.baseStatsForZero) {
-    const legacyBase = actor.baseStatsForZero;
-    withTimedStatModifiersSuspended(actor, () => {
-      actor.atk = legacyBase.atk;
-      actor.def = legacyBase.def;
-      actor.res = legacyBase.res;
-    });
-  }
-  delete actor.baseStatsForZero;
-  actor.wasZeroed = false;
-  runtime.log('info', `🧮 ${actor.name} 的【归零】状态结束，被降维的属性恢复了！`);
+  handleSelfTimedStatusExpiryGroup(runtime, actor, [expiredStatus]);
 }
 
 export function resolveAirborneLanding(
   runtime: StatusProcessingRuntime,
   actor: Fighter,
-  status: StatusEntry,
+  status: StatusInstance,
 ): void {
   const applier = findStatusApplier(runtime, status);
   const damage = Math.max(1, Math.floor(actor.maxHp * 0.03));
@@ -174,7 +239,7 @@ export function resolveAirborneLanding(
     actionName: '击飞坠地',
   };
   const actualDamage = runtime.applyDamage(actor, damage, 'status', false, applier, damageOptions);
-  const isWarThunder = !!applier?.isWT || status.sourceId === 'war_thunder_airborne';
+  const isWarThunder = !!applier?.isWT || status.attribution.effectSourceId === 'war_thunder_airborne';
   runtime.flushDeferredDamageEvents(actor, 'mitigation');
   runtime.log(
     actualDamage > 0 ? 'poison' : 'info',
@@ -201,255 +266,339 @@ export function resolveAirborneLanding(
 function handleGlobalTimedStatusExpiry(
   log: StatusProcessingRuntime['log'] | undefined,
   fighter: Fighter,
-  type: string,
+  statuses: readonly StatusInstance[],
 ): void {
   if (!log) return;
+  const status = statuses[0];
+  if (!status) return;
+  const type = status.identityId;
   if (type === 'TING_DEFIANCE') {
     log('info', `🩸 ${fighter.name} 的【不甘倒下】怨念耗尽，下一次致命伤将无法再被压回！`);
   } else if (type === 'TOKUSATSU_DEFIANCE') {
     log('info', `🔥 ${fighter.name} 的【悲愿不倒】奇迹余火熄灭，后续致命伤不会再被强行改写！`);
+  } else {
+    logNaturalStatusExpiryGroup(log, fighter, statuses);
   }
 }
 
 export function advanceGlobalTimedStatuses(
   fighters: Fighter[],
   turnCount: number,
-  log?: StatusProcessingRuntime['log'],
+  output?: StatusProcessingRuntime['log'] | StatusProcessingRuntime,
 ): void {
+  const runtime = typeof output === 'function' ? undefined : output;
+  const log = typeof output === 'function' ? output : output?.log;
   fighters.forEach((fighter) => {
     if (fighter.isDead) return;
-
-    fighter.status = fighter.status.flatMap((status) => {
-      normalizeStatusEntry(status);
-      if (status.expiresOn !== 'global_action_end' || status.duration >= 999) {
-        return [status];
-      }
-
-      const appliedTurn = status.appliedTurn ?? turnCount;
-      if (appliedTurn >= turnCount) {
-        return [{ ...status, appliedTurn }];
-      }
-
-      if (!tickStatusTurn(status)) return [{ ...status, appliedTurn }];
-      handleGlobalTimedStatusExpiry(log, fighter, status.type);
-      return [];
+    const { expiredStatuses, expiredBarriers } = advanceEffects(fighter, {
+      tickMode: 'global_action',
+      clock: turnCount,
     });
-    cleanupOrphanedTimedStatModifiers(fighter);
+    for (const statuses of groupExpiredStatuses(expiredStatuses)) {
+      const status = statuses[0];
+      if (!status) continue;
+      if (
+        runtime &&
+        status.mechanicId === 'AIRBORNE'
+      ) {
+        resolveAirborneLanding(runtime, fighter, status);
+      } else {
+        handleGlobalTimedStatusExpiry(log, fighter, statuses);
+      }
+    }
+    expiredBarriers.forEach((barrier) => logBarrierExpiry(log, fighter, barrier));
   });
 }
 
-export function stampNewGlobalTimedStatuses(fighters: Fighter[], turnCount: number): void {
+export function advanceLargeRoundTimedBarriers(
+  fighters: Fighter[],
+  completedRound: number,
+  log?: StatusProcessingRuntime['log'],
+): void {
   fighters.forEach((fighter) => {
-    fighter.status.forEach((status) => {
-      normalizeStatusEntry(status);
-      if (status.expiresOn === 'global_action_end' && status.duration < 999 && status.appliedTurn === undefined) {
-        status.appliedTurn = turnCount;
-      }
+    if (fighter.isDead || hasIdentity(fighter, 'SYNERGY_SLACKING')) return;
+    const { expiredBarriers } = advanceEffects(fighter, {
+      tickMode: 'large_round',
+      clock: completedRound,
+      includeStatuses: false,
     });
+    expiredBarriers.forEach((barrier) => logBarrierExpiry(log, fighter, barrier));
   });
+}
+
+function logBarrierExpiry(
+  log: StatusProcessingRuntime['log'] | undefined,
+  fighter: Fighter,
+  barrier: BarrierEntry,
+): void {
+  if (!log) return;
+  const presentation = buildBarrierPresentationItem(barrier);
+  log('info', `${presentation.icon} 【屏障结束】${fighter.name} 的【${presentation.name}】自然消散。`);
 }
 
 function tryTokusatsuControlThrone(runtime: StatusProcessingRuntime, actor: Fighter): boolean {
   if (!canUseTokusatsuThrone(actor)) return false;
-  const hadControl = actor.status.some((status) => isStatusType(status.type, CONTROL_STATUS_TYPES));
+  const hadControl = actor.statuses.some((status) => statusHasTag(status, 'control'));
   if (!hadControl) return false;
 
   const resonance = addTokusatsuThroneResonance(actor, 1);
   if (Math.random() >= getTokusatsuControlThroneChance(actor)) return false;
 
-  actor.status = actor.status.filter((status) => !isStatusType(status.type, BKB_BLOCKED_STATUS_TYPES));
+  runtime.log('buff', `🪑 【悲愿共鸣·武神王座】${actor.name} 被控制逼到极限，王座回应了 ${resonance}/${TOKUSATSU_THRONE_RESONANCE_MAX} 层共鸣！`);
+  runtime.dispelStatusEffects(actor, {
+    strength: 'strong',
+    direction: 'negative',
+    identityIds: getStatusIdentityIdsByTag('spell_immunity_blocked'),
+  });
   enterTokusatsuThroneStance(actor, 2, 2);
-  runtime.log('buff', `🪑 【悲愿共鸣】${actor.name} 被控制逼到极限，王座共鸣升至 ${resonance}/${TOKUSATSU_THRONE_RESONANCE_MAX}，强行坐上【武神王座】等待反击！`);
+  runtime.log('buff', `🪑 【武神王座】${actor.name} 已经挣脱控制并坐上王座，开始等待反击！`);
   return true;
 }
 
 export function processStatusTurn(
   runtime: StatusProcessingRuntime,
   actor: Fighter,
-  options: StatusTurnOptions = {},
+  _options: StatusTurnOptions = {},
 ): StatusTurnResult {
-  normalizeLegacyAirborne(actor);
-  normalizeSingleInstanceStatuses(actor);
+  void _options;
   removeExpiredCharmSource(runtime, actor);
 
-  if (!actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
+  if (!hasIdentity(actor, 'SYNERGY_SLACKING')) {
     const controlImmune = findDefenseStatus(actor, 'BKB');
-    const hadBkbBlocked = actor.status.some((status) => isStatusType(status.type, BKB_BLOCKED_STATUS_TYPES));
+    const hadBkbBlocked = actor.statuses.some((status) => statusHasTag(status, 'spell_immunity_blocked'));
     if (controlImmune && hadBkbBlocked) {
-      actor.status = actor.status.filter((status) => !isStatusType(status.type, BKB_BLOCKED_STATUS_TYPES));
       runtime.log('info', formatControlCleanse(controlImmune, actor.name));
+      runtime.dispelStatusEffects(actor, {
+        strength: 'strong',
+        direction: 'negative',
+        identityIds: getStatusIdentityIdsByTag('spell_immunity_blocked'),
+      });
     }
 
-    const hadFoolControl = actor.status.some((status) => isStatusType(status.type, CONTROL_STATUS_TYPES));
-    if (actor.status.some((status) => status.type === 'STYLE_FOOL') && hadFoolControl) {
-      actor.status = actor.status.filter((status) => !isStatusType(status.type, CONTROL_STATUS_TYPES));
-      runtime.log('info', `🤪 ${actor.name} 笨蛋女人的混沌之力让她对控制免疫，懵懵懂懂地无视了异常状态！`);
+    const hadFoolControl = actor.statuses.some((status) => statusHasTag(status, 'control'));
+    if (hasIdentity(actor, 'STYLE_FOOL') && hadFoolControl) {
+      runtime.log('info', `🤪 ${actor.name} 的笨蛋女人混沌之力发动，开始无视身上的控制异常！`);
+      runtime.dispelStatusEffects(actor, {
+        strength: 'strong',
+        direction: 'negative',
+        identityIds: getStatusIdentityIdsByTag('control'),
+      });
     }
 
-    const hadGachaControl = actor.status.some((status) => isStatusType(status.type, CONTROL_STATUS_TYPES));
+    const hadGachaControl = actor.statuses.some((status) => statusHasTag(status, 'control'));
     if (actor.jobData?.name === '欧皇' && hadGachaControl && Math.random() < 0.8) {
-      actor.status = actor.status.filter((status) => !isStatusType(status.type, CONTROL_STATUS_TYPES));
-      runtime.log('buff', `👑 ${actor.name} 发动了钞能力！解除了控制状态！`);
+      runtime.log('buff', `👑 ${actor.name} 发动钞能力，开始解除控制状态！`);
+      runtime.dispelStatusEffects(actor, {
+        strength: 'strong',
+        direction: 'negative',
+        identityIds: getStatusIdentityIdsByTag('control'),
+      });
     }
     tryTokusatsuControlThrone(runtime, actor);
   }
 
-  const blockingStatus = actor.status.find((status) => status.type === 'AIRBORNE' || status.type === 'WT_AIRBORNE') ??
-    actor.status.find((status) => isStatusType(status.type, ACTION_BLOCKING_STATUS_TYPES));
+  let blockingStatus = findMechanic(actor, 'AIRBORNE') ??
+    actor.statuses.find((status) => statusHasTag(status, 'action_blocking'));
   let blockedByControl = !!blockingStatus;
-  let confused = actor.status.some((status) => status.type === 'CONFUSED');
-  let embarrassed = actor.status.some((status) => status.type === 'EMBARRASSED');
-  const controlStatusesAtTurnStart = actor.status.filter((status) => isStatusType(status.type, CONTROL_STATUS_TYPES));
-  const blockedByCharacterState = actor.status.some((status) =>
-    status.type === 'OWL_FORM_DEFEAT' ||
-    status.type === 'OWL_ENJOYING' ||
-    status.type === 'OWL_SPALTER_DOLL',
+  let confused = hasMechanic(actor, 'CONFUSED');
+  let embarrassed = hasMechanic(actor, 'EMBARRASSED');
+  const blockedByCharacterState = actor.statuses.some((status) =>
+    status.identityId === 'OWL_FORM_DEFEAT' ||
+    status.identityId === 'OWL_ENJOYING' ||
+    status.identityId === 'OWL_SPALTER_DOLL',
   );
-  const nextStatusEntries: Array<{ original: StatusEntry; next: StatusEntry }> = [];
-  const processedStatuses = new Set(actor.status);
   // Damage-over-time always resolves before recovery. A fixed secondary order
   // prevents insertion history from deciding survival or kill ownership.
-  const statusesToProcess = actor.status
+  const statusesToProcess = actor.statuses
     .map((status, index) => ({ status, index }))
     .sort((a, b) => statusSettlementPriority(a.status) - statusSettlementPriority(b.status) || a.index - b.index)
     .map(({ status }) => status);
-  const isSlacking = actor.status.some((status) => status.type === 'SYNERGY_SLACKING');
-  let pendingAirborneLanding: StatusEntry | undefined;
-  let pendingActionBlockExpiry: StatusEntry | undefined;
+  const isSlacking = hasIdentity(actor, 'SYNERGY_SLACKING');
+  const selfOpportunityStatuses = actor.statuses.filter((status) =>
+    status.expiresOn === 'self_opportunity_end',
+  );
+  const selfOpportunityBarriers = (actor.barriers ?? []).filter((barrier) =>
+    barrier.tickMode === 'self_opportunity',
+  );
+  const selfOpportunityStatusVersions = Object.fromEntries(selfOpportunityStatuses.map((status) => [
+    status.instanceId,
+    status.appliedSequence,
+  ]));
+  const selfOpportunityBarrierVersions = Object.fromEntries(selfOpportunityBarriers.map((barrier) => [
+    barrier.id,
+    barrier.appliedSequence,
+  ]));
+  let poisonSettled = false;
 
   for (const status of statusesToProcess) {
     if (actor.currentHp <= 0 || actor.isDead || actor.isDeadAnnounced) break;
-    if (!actor.status.includes(status)) continue;
+    if (!actor.statuses.includes(status)) continue;
 
-    if (!isSlacking && isStatusType(status.type, DOT_STATUS_TYPES)) {
-      const poisonStacks = Math.max(1, Math.min(3, status.stacks ?? 1));
-      const damagePct = status.type === 'WATER_PRISON'
-        ? 0.08
-        : status.type === 'BURN'
-          ? 0.05
-          : status.type === 'BLEED'
-            ? 0.04
-            : [0.04, 0.05, 0.06][poisonStacks - 1] ?? 0.04;
-      const dmgAmt = Math.max(1, Math.floor(actor.maxHp * damagePct));
-      const statusInfo = runtime.statusEffects[status.type];
-      const statusCause = status.type === 'WATER_PRISON' ? '深渊水牢窒息' : (statusInfo?.name ?? '持续伤害');
-      const actionText = status.type === 'WATER_PRISON'
-        ? '在深渊水牢中窒息'
-        : status.type === 'BLEED'
-          ? '血流不止'
-          : '受到持续伤害';
-      const damageOptions: DamageApplicationOptions = {
-        deferTransform: true,
-        actionName: statusCause,
-      };
-      const applier = findStatusApplier(runtime, status);
-      const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true, applier, damageOptions);
-      runtime.flushDeferredDamageEvents(actor, 'mitigation');
-      if (actualDmg > 0) {
-        const stackText = status.type === 'POISON' ? `（${poisonStacks} 层）` : '';
-        runtime.log('poison', `${statusInfo?.icon ?? ''} ${actor.name} ${actionText}${stackText}，实际损失 ${actualDmg} 点生命！`);
-      } else if (damageOptions.redirectedByMomo) {
-        runtime.log('info', `${statusInfo?.icon ?? ''} ${actor.name} 的【${statusInfo?.name ?? status.type}】触发【|OMO】，舰长合计损失 ${damageOptions.redirectedMomoDamage ?? 0} 点生命；${actor.name} 本体未受伤。`);
+    if (!isSlacking && statusHasTag(status, 'damage_over_time')) {
+      if (status.identityId === 'POISON' && poisonSettled) {
+        // Each source keeps its own lifetime, but poison deals one aggregate tick.
       } else {
-        runtime.log('info', `${statusInfo?.icon ?? ''} ${actor.name} 的【${statusInfo?.name ?? status.type}】本次没有穿透防护，生命未减少。`);
-      }
-      if (actualDmg > 0 || (actor.pendingDamageEvents?.length ?? 0) > 0) {
-        runtime.flushDeferredDamageEvents(actor);
-      }
-      if (actor.currentHp <= 0) {
-        runtime.markDefeated(actor, {
-          message: `💀 ${actor.name} 因${statusCause}（${actualDmg}点）倒下了！`,
-          killer: applier,
-          awardKill: !!applier,
-        });
-        if (!runtime.isActiveCombatant(actor)) {
-          blockedByControl = true;
-          break;
+        const settlementStatus = status.identityId === 'POISON'
+          ? findMechanic(actor, 'POISON') ?? status
+          : status;
+        if (status.identityId === 'POISON') poisonSettled = true;
+        const poisonStacks = status.identityId === 'POISON'
+          ? Math.max(1, Math.min(3, actor.statuses
+              .filter((entry) => entry.mechanicId === 'POISON')
+              .reduce((sum, entry) => sum + Math.max(0, entry.potency ?? 0), 0)))
+          : 1;
+        const damagePct = status.identityId === 'WATER_PRISON'
+          ? 0.08
+          : [0.04, 0.05, 0.06][poisonStacks - 1] ?? 0.04;
+        const dmgAmt = Math.max(1, Math.floor(actor.maxHp * damagePct));
+        const statusPresentation = buildStatusPresentationMember(settlementStatus);
+        const statusCause = status.identityId === 'WATER_PRISON' ? '深渊水牢窒息' : statusPresentation.name;
+        const actionText = status.identityId === 'WATER_PRISON'
+          ? '在深渊水牢中窒息'
+          : '受到持续伤害';
+        const damageOptions: DamageApplicationOptions = {
+          deferTransform: true,
+          actionName: statusCause,
+          sourceKind: 'status',
+          suppressStatusAftermath: true,
+          bypassShields: status.identityId === 'POISON',
+        };
+        const applier = findStatusApplier(runtime, settlementStatus);
+        const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true, applier, damageOptions);
+        runtime.flushDeferredDamageEvents(actor, 'mitigation');
+        const sourceName = settlementStatus.attribution.applierName ?? applier?.name ?? settlementStatus.attribution.effectSourceName;
+        const sourceText = sourceName ? `；最新施加者 ${sourceName}` : '';
+        const remainingBeforeTick = status.identityId === 'POISON'
+          ? Math.max(...actor.statuses
+              .filter((entry) => entry.identityId === 'POISON')
+              .map((entry) => entry.remainingTurns ?? 0), 0)
+          : settlementStatus.remainingTurns ?? 0;
+        const timingText = `当前剩余 ${remainingBeforeTick} 次${sourceText}；本次行动结束后衰减 1 次`;
+        if (actualDmg > 0) {
+          const stackText = status.identityId === 'POISON' ? `（${poisonStacks} 层）` : '';
+          runtime.log('poison', `${statusPresentation.icon} 【${statusPresentation.name}】${actor.name} ${actionText}${stackText}，实际损失 ${actualDmg} 点生命！（${timingText}）`);
+        } else if (damageOptions.redirectedByMomo) {
+          runtime.log('info', `${statusPresentation.icon} ${actor.name} 的【${statusPresentation.name}】触发【|OMO】，舰长合计损失 ${damageOptions.redirectedMomoDamage ?? 0} 点生命；${actor.name} 本体未受伤。（${timingText}）`);
+        } else if (damageOptions.redirectedByYuzu) {
+          runtime.log('info', `${statusPresentation.icon} ${actor.name} 的【${statusPresentation.name}】触发【镜界分摊】，队友合计损失 ${damageOptions.redirectedYuzuDamage ?? 0} 点生命；${actor.name} 本体未受伤。（${timingText}）`);
+        } else {
+          runtime.log('info', `${statusPresentation.icon} ${actor.name} 的【${statusPresentation.name}】本次没有穿透防护，生命未减少。（${timingText}）`);
+        }
+        if (actualDmg > 0 || (actor.pendingDamageEvents?.length ?? 0) > 0) {
+          runtime.flushDeferredDamageEvents(actor);
+        }
+        if (actor.currentHp <= 0) {
+          runtime.markDefeated(actor, {
+            message: `💀 ${actor.name} 因${statusCause}（${actualDmg}点）倒下了！`,
+            killer: applier,
+            awardKill: !!applier,
+          });
+          if (!runtime.isActiveCombatant(actor)) {
+            blockedByControl = true;
+            break;
+          }
         }
       }
     }
     const canAutoRecover =
-      status.type === 'REGEN' ||
-      status.type === 'WT_REPAIRING' ||
-      status.type === 'STYLE_FAMILY' ||
-      (status.type === 'PLUG_HEART' && !!actor.isSuccubus && !!actor.transformed);
+      status.mechanicId === 'REGEN' ||
+      status.identityId === 'WT_REPAIRING' ||
+      (status.identityId === 'PLUG_HEART' && !!actor.isSuccubus && !!actor.transformed);
     if (!isSlacking && canAutoRecover && actor.currentHp < actor.maxHp) {
-      if (actor.status.some((candidate) => candidate.type === 'NO_HEAL')) {
-        runtime.log('info', status.type === 'WT_REPAIRING'
-          ? `🥀 【抢修受阻】${actor.name} 处于禁疗状态，本次维修无法恢复生命！`
-          : `🥀 ${actor.name} 处于禁疗状态，无法自动回复生命！`);
-      } else {
-        const healPct = status.type === 'WT_REPAIRING' ? WT_REPAIRING_PROFILE.healPerTurnPct : 0.05;
-        const heal = Math.floor(actor.maxHp * healPct);
-        const healed = healFighter(actor, heal, runtime.log);
-        if (healed > 0) {
-          runtime.log('heal', status.type === 'WT_REPAIRING'
-            ? `🔧 【抢修进度】${actor.name} 趁停车维修恢复了 ${healed} 点生命！`
-            : `${runtime.statusEffects[status.type]?.icon ?? ''} ${actor.name} 自动回复了 ${healed} 点生命`);
-        }
+      const healPct = status.identityId === 'WT_REPAIRING' ? WT_REPAIRING_PROFILE.healPerTurnPct : 0.05;
+      const heal = Math.floor(actor.maxHp * healPct);
+      const healed = healFighter(actor, heal, runtime.log, { kind: 'regen', sourceId: status.attribution.effectSourceId });
+      if (healed > 0) {
+        const presentation = buildStatusPresentationMember(status);
+        runtime.log('heal', status.identityId === 'WT_REPAIRING'
+          ? `🔧 【抢修进度】${actor.name} 趁停车维修恢复了 ${healed} 点生命！`
+          : `${presentation.icon} 【${presentation.name}】${actor.name} 自动回复了 ${healed} 点生命（来源：${presentation.sourceLabel}）`);
       }
     }
-    normalizeStatusEntry(status);
-    const statusStillPresent = actor.status.includes(status);
-    if (!statusStillPresent) {
-      continue;
-    }
-    if (status.expiresOn !== 'self_turn_end') {
-      nextStatusEntries.push({ original: status, next: status });
-    } else if (!tickStatusTurn(status)) {
-      nextStatusEntries.push({ original: status, next: { ...status } });
-    } else if (status.type === 'AIRBORNE' && options.deferAirborneLanding) {
-      pendingAirborneLanding = { ...status };
-    } else if (
-      status.type === 'WT_REPAIRING' &&
-      options.deferActionBlockExpiry
-    ) {
-      pendingActionBlockExpiry = { ...status };
-    } else {
-      handleSelfTimedStatusExpiry(runtime, actor, status.type, status);
-    }
   }
-  const controlPurgedDuringProcessing = controlStatusesAtTurnStart.some((status) => !actor.status.includes(status));
-  const statusesAddedDuringProcessing = actor.status.filter((status) => !processedStatuses.has(status));
-  actor.status = [
-    ...nextStatusEntries
-      .filter(({ original }) => actor.status.includes(original))
-      .map(({ next }) => next),
-    ...statusesAddedDuringProcessing,
-  ];
-  cleanupOrphanedTimedStatModifiers(actor);
   syncSpinalSwordState(runtime, actor, true);
+  blockingStatus = findMechanic(actor, 'AIRBORNE') ??
+    actor.statuses.find((status) => statusHasTag(status, 'action_blocking'));
+  blockedByControl = !!blockingStatus;
+  confused = hasMechanic(actor, 'CONFUSED');
+  embarrassed = hasMechanic(actor, 'EMBARRASSED');
 
-  if (controlPurgedDuringProcessing) {
-    blockedByControl = false;
-    confused = false;
-    embarrassed = false;
-    pendingAirborneLanding = undefined;
-    pendingActionBlockExpiry = undefined;
-  }
-
-  if (actor.status.some((status) => status.type === 'SYNERGY_SLACKING')) {
+  if (hasIdentity(actor, 'SYNERGY_SLACKING')) {
     return {
       canAct: false,
       confused: false,
       embarrassed: false,
       blockingStatusType: 'SYNERGY_SLACKING',
-      pendingAirborneLanding,
-      pendingActionBlockExpiry,
+      selfOpportunityStatuses: [],
+      selfOpportunityBarriers: [],
+      selfOpportunityStatusVersions: {},
+      selfOpportunityBarrierVersions: {},
     };
   }
   return {
     canAct: actor.currentHp > 0 && !actor.isDead && !actor.isDeadAnnounced && !blockedByControl && !blockedByCharacterState,
     confused,
     embarrassed,
-    blockingStatusType: blockingStatus?.type,
-    pendingAirborneLanding,
-    pendingActionBlockExpiry,
+    blockingStatusType: blockingStatus?.identityId,
+    selfOpportunityStatuses,
+    selfOpportunityBarriers,
+    selfOpportunityStatusVersions,
+    selfOpportunityBarrierVersions,
   };
 }
 
 export function processStatus(runtime: StatusProcessingRuntime, actor: Fighter): boolean {
-  return processStatusTurn(runtime, actor).canAct;
+  const result = processStatusTurn(runtime, actor);
+  settleSelfOpportunityStatuses(
+    runtime,
+    actor,
+    result.selfOpportunityStatuses,
+    result.selfOpportunityBarriers,
+    result.selfOpportunityStatusVersions,
+    result.selfOpportunityBarrierVersions,
+  );
+  return result.canAct;
+}
+
+export function settleSelfOpportunityStatuses(
+  runtime: StatusProcessingRuntime,
+  actor: Fighter,
+  statuses: readonly StatusInstance[],
+  barriers: readonly BarrierEntry[] = [],
+  statusVersions?: Readonly<Record<string, number>>,
+  barrierVersions?: Readonly<Record<string, number>>,
+): void {
+  const ordered = [...statuses].sort((a, b) => statusSettlementPriority(a) - statusSettlementPriority(b));
+  const groups = groupExpiredStatuses(ordered);
+  for (const group of groups) {
+    const eligible = group.filter((status) =>
+      actor.statuses.includes(status) &&
+      (statusVersions?.[status.instanceId] === undefined || status.appliedSequence === statusVersions[status.instanceId]),
+    );
+    if (eligible.length === 0) continue;
+    const { expiredStatuses } = advanceEffects(actor, {
+      tickMode: 'self_opportunity',
+      instanceIds: eligible.map((status) => status.instanceId),
+      includeBarriers: false,
+    });
+    if (expiredStatuses.length === 0) continue;
+    handleSelfTimedStatusExpiryGroup(runtime, actor, expiredStatuses);
+    if (actor.currentHp <= 0 || actor.isDead || actor.isDeadAnnounced) break;
+  }
+  const eligibleBarrierIds = barriers
+    .filter((barrier) =>
+      actor.barriers?.includes(barrier) &&
+      (barrierVersions?.[barrier.id] === undefined || barrier.appliedSequence === barrierVersions[barrier.id]))
+    .map((barrier) => barrier.id);
+  const { expiredBarriers } = advanceEffects(actor, {
+    tickMode: 'self_opportunity',
+    barrierIds: eligibleBarrierIds,
+    includeStatuses: false,
+  });
+  expiredBarriers.forEach((barrier) => {
+    const presentation = buildBarrierPresentationItem(barrier);
+    runtime.log('info', `${presentation.icon} 【屏障结束】${actor.name} 的【${presentation.name}】自然消散。`);
+  });
 }
 
 export function handleSpinalSwordDrop(
@@ -463,12 +612,12 @@ export function handleSpinalSwordDrop(
     !actor.isTing &&
     !actor.isSummon &&
     !actor.hasSpinalSword &&
-    !actor.status.some((status) => status.type === 'SYNERGY_SLACKING')
+    !hasIdentity(actor, 'SYNERGY_SLACKING')
   ) {
     if (Math.random() < (actor.isGacha ? 0.8 : 0.2)) {
       actor.hasSpinalSword = true;
       actor.spinalSwordTurns = Math.floor(Math.random() * 3) + 3;
-      actor.status.push(createLifecycleStatus('SPINAL_SWORD', actor.spinalSwordTurns));
+      applyStatus(actor, { identityId: 'SPINAL_SWORD', remainingTurns: actor.spinalSwordTurns, attribution: { effectSourceId: 'spinal_sword_pickup' } });
       spinalSwordRef.current = false;
       runtime.log('buff', `🦴 ${actor.name} 捡起了小汀留下的脊髓剑！攻击力暴增！`);
       if (!actor.jobData?.skills?.includes('summon_puppet_ting')) {
@@ -484,10 +633,10 @@ export function clearSpinalSword(
   actor: Fighter,
   logWhenActive = false,
 ): void {
-  const hadActiveSword = !!actor.hasSpinalSword || actor.status.some((status) => status.type === 'SPINAL_SWORD');
+  const hadActiveSword = !!actor.hasSpinalSword || hasIdentity(actor, 'SPINAL_SWORD');
   actor.hasSpinalSword = false;
   actor.spinalSwordTurns = 0;
-  actor.status = actor.status.filter((status) => status.type !== 'SPINAL_SWORD');
+  removeEffects(actor, { identityIds: ['SPINAL_SWORD'], reason: 'scripted' });
   if (!actor.isTing) {
     actor.jobData.skills = (actor.jobData.skills ?? []).filter((skillId) => skillId !== 'summon_puppet_ting');
   }
@@ -501,7 +650,7 @@ export function syncSpinalSwordState(
   actor: Fighter,
   logWhenExpired = false,
 ): void {
-  const hasStatus = actor.status.some((status) => status.type === 'SPINAL_SWORD');
+  const hasStatus = hasIdentity(actor, 'SPINAL_SWORD');
   if (actor.hasSpinalSword && !hasStatus) {
     clearSpinalSword(runtime, actor, logWhenExpired);
   } else if (!actor.hasSpinalSword && !actor.isTing && actor.jobData?.skills?.includes('summon_puppet_ting')) {
@@ -516,10 +665,10 @@ export function syncPuppetMasterStatus(runtime: StatusProcessingRuntime, actor: 
     (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
     runtime.isActiveCombatant(fighter),
   );
-  const hasStatus = actor.status.some((status) => status.type === 'PUPPET_MASTER');
+  const hasStatus = hasIdentity(actor, 'PUPPET_MASTER');
   if (hasPuppet && !hasStatus) {
-    actor.status.push(createLifecycleStatus('PUPPET_MASTER', 999));
+    applyStatus(actor, { identityId: 'PUPPET_MASTER', attribution: { effectSourceId: 'puppet_ting' } });
   } else if (!hasPuppet && hasStatus) {
-    actor.status = actor.status.filter((status) => status.type !== 'PUPPET_MASTER');
+    removeEffects(actor, { identityIds: ['PUPPET_MASTER'], reason: 'scripted' });
   }
 }

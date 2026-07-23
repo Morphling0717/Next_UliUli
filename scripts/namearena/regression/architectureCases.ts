@@ -1,3 +1,6 @@
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import * as ts from 'typescript';
 import {
   consumeCompletedLargeRound,
   createBattleState,
@@ -6,12 +9,13 @@ import {
   syncLargeRoundState,
   withBattleRandom,
 } from '../../../lib/namearena/battleState';
-import { grantStatus } from '../../../lib/namearena/defenseStatus';
 import {
+  applyPermanentStatBuff,
   cloneFighters,
   cloneJobDefinition,
   reconcileFighterSnapshots,
 } from '../../../lib/namearena/combatState';
+import { commitFormTransition } from '../../../lib/namearena/battlePresentation';
 import {
   createCombatActorMotionPlan,
   TING_SELF_DESTRUCT_TIMELINE,
@@ -20,23 +24,27 @@ import {
   GACHA_COMBAT_EFFECT_IDS,
   resolveCombatEffect,
 } from '../../../lib/namearena/combatEffects';
-import { GACHA_NORMAL_POOL, GACHA_SSR_POOL } from '../../../lib/namearena/data/gachaPools';
+import {
+  GACHA_NORMAL_POOL,
+  GACHA_SSR_POOL,
+  RED_FURY_POOL,
+  SUICIDE_POOL,
+} from '../../../lib/namearena/data/gachaPools';
 import {
   GACHA_ORDINARY_SUMMON_NAMES,
   GACHA_SUMMON_LIFESTEAL_STATUS,
 } from '../../../lib/namearena/gachaMechanics';
+import { getEffectiveCombatStat } from '../../../lib/namearena/statusMechanics';
+import { buildFighterStatusPresentation } from '../../../lib/namearena/statusPresentation';
+import { BARRIER_IDENTITIES, STATUS_IDENTITIES, STATUS_MECHANICS } from '../../../lib/namearena/statusRegistry';
 import {
-  applyPermanentStatBuff,
-  applyTimedStatModifier,
-  cleanupOrphanedTimedStatModifiers,
-  makeTimedStatModifier,
-} from '../../../lib/namearena/statModifiers';
-import {
-  consumeStatusCharge,
-  createLifecycleStatus,
-  statusDurationText,
-  tickStatusTurn,
-} from '../../../lib/namearena/statusLifecycle';
+  applyStatus,
+  consumeStatusValue,
+  formatStatusValue,
+  grantBarrier,
+  queryMechanic,
+  removeEffects,
+} from '../../../lib/namearena/statusSystem';
 import {
   appendStageLogGroup,
   buildStageLogGroups,
@@ -44,16 +52,27 @@ import {
   createVisibleStagePositionMap,
   getStageFinisherImage,
   getStageFighterImage,
-  getStageFocusCycleKey,
   resolveStageManualFocusId,
   shouldRenderFighterOnStage,
+  toggleStageManualFocus,
   type StageLogEntry,
 } from '../../../lib/namearena/battleStageModel';
 import {
   appendBattleFeedEntry,
   commitBattlePlaybackView,
   createBattlePlaybackView,
+  enqueueBattlePlaybackCommit,
 } from '../../../lib/namearena/battlePlaybackModel';
+import {
+  claimBattleVisualEvent,
+  createBattleVisualEventLedger,
+  resetBattleVisualEventLedger,
+} from '../../../lib/namearena/battleVisualLedger';
+import {
+  BATTLE_CINEMATIC_DURATION_MS,
+  BATTLE_CINEMATIC_PLAYBACK_BUFFER_MS,
+  getVisualCueMinimumDisplayMs,
+} from '../../../lib/namearena/battleVisualTiming';
 import {
   StageAnimationScheduler,
   type StageAnimationHost,
@@ -71,9 +90,85 @@ import {
   localProject,
   makeFighter,
   makeProjectEngine,
+  scanLogs,
   type LogEntry,
 } from '../shared/harness';
 import { makeDeathEngine } from './deathAccountingCases';
+
+function collectTypeScriptFiles(root: string): string[] {
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) return collectTypeScriptFiles(path);
+    return entry.isFile() && /\.(?:ts|tsx)$/.test(entry.name) ? [path] : [];
+  });
+}
+
+const FORM_MUTATION_PROPERTIES = new Set([
+  'job',
+  'jobData',
+  'transformed',
+  'yuzuPhase',
+  'puruisaishiPhase',
+  'phase',
+]);
+
+const FORM_INITIALIZER_FUNCTIONS = new Set([
+  'createPuruisaishi',
+  'ensureMomoState',
+  'ensureYuzuState',
+]);
+
+function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
+  return kind === ts.SyntaxKind.EqualsToken ||
+    kind === ts.SyntaxKind.PlusEqualsToken ||
+    kind === ts.SyntaxKind.MinusEqualsToken ||
+    kind === ts.SyntaxKind.AsteriskEqualsToken ||
+    kind === ts.SyntaxKind.SlashEqualsToken ||
+    kind === ts.SyntaxKind.QuestionQuestionEqualsToken ||
+    kind === ts.SyntaxKind.BarBarEqualsToken ||
+    kind === ts.SyntaxKind.AmpersandAmpersandEqualsToken;
+}
+
+function formMutationProperty(node: ts.Node): string | undefined {
+  if (!ts.isBinaryExpression(node) || !isAssignmentOperator(node.operatorToken.kind)) return undefined;
+  if (!ts.isPropertyAccessExpression(node.left)) return undefined;
+  const property = node.left.name.text;
+  if (!FORM_MUTATION_PROPERTIES.has(property)) return undefined;
+  if (property === 'phase') {
+    const owner = node.left.expression;
+    if (!ts.isIdentifier(owner) || owner.text !== 'state') return undefined;
+  }
+  return property;
+}
+
+function isAuthorizedFormMutation(node: ts.Node): boolean {
+  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+    if (ts.isCallExpression(current) && ts.isIdentifier(current.expression)) {
+      if (current.expression.text === 'commitFormTransition' || current.expression.text === 'transform') return true;
+    }
+    if (ts.isFunctionDeclaration(current) && current.name && FORM_INITIALIZER_FUNCTIONS.has(current.name.text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findUnauthorizedFormMutations(path: string): string[] {
+  const source = readFileSync(path, 'utf8');
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const issues: string[] = [];
+  const visit = (node: ts.Node): void => {
+    const property = formMutationProperty(node);
+    if (property && !isAuthorizedFormMutation(node)) {
+      const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+      issues.push(`${relative(process.cwd(), path)}:${position.line + 1} writes ${property}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return issues;
+}
 
 function activePlayers(fighters: Fighter[]): Fighter[] {
   return fighters.filter((fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0 && !fighter.isNpc);
@@ -121,7 +216,7 @@ function seededTrace(seed: number): string {
       hp: fighter.currentHp,
       dead: fighter.isDead,
       stats: fighter.stats,
-      status: fighter.status,
+      status: fighter.statuses,
     })),
     state,
   });
@@ -129,6 +224,30 @@ function seededTrace(seed: number): string {
 
 export function runArchitectureCases(): string[] {
   const cases: string[] = [];
+
+  {
+    const fighter = makeFighter('刺猬人@视觉时长');
+    const target = makeFighter('玄凝@视觉时长目标');
+    const transitionEvents: BattleEvent[] = [];
+    const engine = makeProjectEngine(localProject, [fighter, target], [], 0, undefined, transitionEvents);
+    commitFormTransition({
+      fighter,
+      message: `${fighter.name} 进入下一阶段。`,
+      log: (type, text, metadata) => engine.log(type, text, metadata),
+      mutate: () => { fighter.transformed = true; },
+    });
+    const transition = transitionEvents.find((event) => event.visualCue?.kind === 'transformation');
+    assert(Boolean(transition), 'Visual timing test should create a transformation event');
+    assert(
+      getVisualCueMinimumDisplayMs(transition ?? {}) >= BATTLE_CINEMATIC_DURATION_MS.tokusatsuTransformation + BATTLE_CINEMATIC_PLAYBACK_BUFFER_MS,
+      'Transformation playback must not advance before the longest transformation cinematic finishes',
+    );
+    assert(
+      getVisualCueMinimumDisplayMs({ presentation: 'finisher' }) >= BATTLE_CINEMATIC_DURATION_MS.tokusatsuFinisher + BATTLE_CINEMATIC_PLAYBACK_BUFFER_MS,
+      'Finisher playback must not advance before the longest finisher cinematic finishes',
+    );
+    cases.push('log playback timing is derived from authoritative cinematic durations');
+  }
 
   {
     const actor = makeFighter('刺猬人@视觉分类');
@@ -175,9 +294,16 @@ export function runArchitectureCases(): string[] {
     const randomExplosion = resolveCombatEffect({
       skillId: 'suicide_rng',
       skillName: '以命换命',
-      text: `${ting.name} 自爆卡车冲向目标。`,
+      text: `${ting.name} 使用了完全不含动作关键词的新文案。`,
       presentation: 'skill',
       type: 'skill',
+      visualCue: {
+        kind: 'combat_action',
+        sourceId: ting.id,
+        targetIds: [inheritor.id],
+        presentation: 'skill',
+        effectId: 'ting_detonation_charge',
+      },
     }, ting);
     const selfDestruct = resolveCombatEffect({
       skillId: 'suicide_bomb',
@@ -190,11 +316,12 @@ export function runArchitectureCases(): string[] {
     assert(basic?.actorMotion === 'melee_lunge', 'Ting basic attacks should move her fighter card into melee range');
     assert(spinal?.motion === 'spinal_cleave', 'Spinal-sword inheritors should retain Ting spinal-cleave effects');
     assert(spinal?.actorMotion === 'melee_lunge', 'Spinal-sword inheritors should lunge before the cleave lands');
-    assert(randomExplosion?.motion === 'detonation', 'Random sacrifice attacks should derive their subtype from the resolved pool text');
-    assert(randomExplosion?.actorMotion === 'melee_lunge', 'Charge-based random sacrifice attacks should move toward their target');
+    assert(randomExplosion?.motion === 'detonation', 'Random sacrifice attacks should resolve their subtype from structured metadata');
+    assert(randomExplosion?.actorMotion === 'melee_lunge', 'Structured charge attacks should move toward their target without reading log text');
     assert(selfDestruct?.actorMotion === 'self_destruct_cling', 'Ting self-destruction should cling to the target before charging');
     assert(localProject.skills.suicide_bomb?.presentation === 'finisher', 'Ting self-destruction should be explicitly classified as a finisher');
-    cases.push('Ting combat effects are structured by skill and random-pool subtype');
+    assert([...RED_FURY_POOL, ...SUICIDE_POOL].every((entry) => entry.visualEffect), 'Every Ting random-pool entry must declare its visual subtype');
+    cases.push('Ting combat effects are structured by skill and explicit random-pool subtype');
   }
 
   {
@@ -224,6 +351,19 @@ export function runArchitectureCases(): string[] {
     assert(
       new Set(GACHA_NORMAL_POOL.map((entry) => entry.visualEffect)).size === GACHA_NORMAL_POOL.length,
       'Every phase-one gacha result should have a distinct effect identity',
+    );
+    const fakeSealCard = GACHA_NORMAL_POOL.find((entry) => entry.text.includes('盗版封印卡'));
+    assert(
+      fakeSealCard?.statusApplications?.some((application) =>
+        application.identityId === 'SPELL_BLOCK' && application.charges === 3,
+      ),
+      'The fake seal card should explicitly preserve its three spell-block charges',
+    );
+    const potShardCard = GACHA_NORMAL_POOL.find((entry) => entry.text.includes('强欲之壶的碎片'));
+    assert(
+      potShardCard?.text.includes('【反击】')
+        && potShardCard.statusApplications?.some((application) => application.identityId === 'COUNTER'),
+      'The Pot shard card must name the counter stance that it grants',
     );
     assert(
       GACHA_SSR_POOL.filter((entry) => !entry.isSummon).every((entry) => Boolean(entry.visualEffect)),
@@ -314,12 +454,16 @@ export function runArchitectureCases(): string[] {
     });
     deathEngine.flushDeferredDamageEvents(laoe);
     assert(
-      deathEvents.some((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_death_save'),
-      'Queued damage logs should preserve the Laoe death-save effect metadata',
+      deathEvents.some((event) => event.visualCue?.kind === 'reaction_fx' && event.visualCue.effectId === 'gacha_death_save'),
+      'Queued damage logs should preserve the Laoe death-save reaction metadata',
     );
     assert(
-      deathEvents.some((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_luck_gain'),
-      'Luck gained during a queued death-save should preserve its effect metadata',
+      !deathEvents.some((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_death_save'),
+      'A passive Laoe death save must not masquerade as an active combat effect',
+    );
+    assert(
+      !deathEvents.some((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_luck_gain'),
+      'Passive luck gain must not masquerade as a combat action effect',
     );
 
     const lifestealOwner = makeFighter('牢鳄@吸血回流');
@@ -327,7 +471,11 @@ export function runArchitectureCases(): string[] {
     lifestealOwner.jobData = { ...lifestealOwner.jobData, name: '欧皇' };
     localProject.setCurrentHp(lifestealOwner, Math.floor(lifestealOwner.maxHp * 0.4));
     lifestealOwner.gachaSummonLifestealPct = 0.35;
-    lifestealOwner.status.push(createLifecycleStatus(GACHA_SUMMON_LIFESTEAL_STATUS, 4));
+    applyStatus(lifestealOwner, {
+      identityId: GACHA_SUMMON_LIFESTEAL_STATUS,
+      remainingTurns: 4,
+      attribution: { effectSourceId: GACHA_SUMMON_LIFESTEAL_STATUS },
+    });
     const summon = makeFighter('史瓦罗@吸血攻击');
     summon.name = '史瓦罗';
     summon.isSummon = true;
@@ -341,47 +489,64 @@ export function runArchitectureCases(): string[] {
       actionName: '吸血回流测试',
     });
     lifestealEngine.flushDeferredDamageEvents(enemy);
-    const lifestealCue = lifestealEvents.find((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'gacha_lifesteal_proc')?.visualCue;
-    assert(lifestealCue?.kind === 'combat_fx', 'Queued summon lifesteal should emit a combat effect');
-    if (lifestealCue?.kind === 'combat_fx') {
-      assert(lifestealCue.sourceId === summon.id, 'Summon lifesteal should originate from the summon that dealt damage');
-      assert(lifestealCue.targetIds.includes(lifestealOwner.id), 'Summon lifesteal should terminate on Laoe');
-    }
-    cases.push('Laoe damage-triggered passives retain source, target, and effect metadata after deferred settlement');
+    const lifestealEvent = lifestealEvents.find((event) => event.text.includes('吸血牌回流'));
+    assert(!lifestealEvent?.visualCue, 'Deferred summon lifesteal must not replay the summon attack animation outside its action');
+    assert(lifestealEvent?.actorId === summon.id, 'Summon lifesteal attribution should retain the summon that dealt damage');
+    assert(lifestealEvent?.targetIds?.includes(lifestealOwner.id), 'Summon lifesteal attribution should retain Laoe as its target');
+    cases.push('Laoe damage-triggered passives retain causal metadata without replaying combat animations');
   }
 
   {
-    const firstAction = {
-      id: 'focus-log-a',
-      actionId: 'focus-action-a',
-      actorId: 'actor-a',
-      type: 'skill' as const,
-      text: '行动者甲发动技能。',
-    };
-    const sameActionFollowUp = {
-      ...firstAction,
-      id: 'focus-log-a-2',
-      text: '行动者甲结算技能。',
-    };
-    const nextAction = {
-      ...firstAction,
-      id: 'focus-log-b',
-      actionId: 'focus-action-b',
-      actorId: 'actor-b',
-      text: '行动者乙发动技能。',
-    };
-    const firstFocusKey = getStageFocusCycleKey(firstAction, 7, 11, firstAction.actorId);
-    const followUpFocusKey = getStageFocusCycleKey(sameActionFollowUp, 7, 11, sameActionFollowUp.actorId);
-    const nextFocusKey = getStageFocusCycleKey(nextAction, 7, 12, nextAction.actorId);
-    const manualFocus = { fighterId: 'inspected-fighter', focusCycleKey: firstFocusKey };
-    assert(firstFocusKey === followUpFocusKey, 'Logs from one actor action should share a detail-card focus cycle');
-    assert(resolveStageManualFocusId(manualFocus, followUpFocusKey) === 'inspected-fighter', 'Manual inspection should remain available during the current action');
-    assert(resolveStageManualFocusId(manualFocus, nextFocusKey) === null, 'Manual inspection must expire when the next actor action starts');
+    const laoe = makeFighter('牢鳄@神不死鸟归属');
+    const ra = makeFighter('翼神龙@神不死鸟归属');
+    const attacker = makeFighter('玄凝@神不死鸟攻击者');
+    laoe.transformed = true;
+    laoe.jobData = { ...laoe.jobData, name: '欧皇' };
+    ra.name = '翼神龙';
+    ra.isSummon = true;
+    ra.isAdvancedSummon = true;
+    ra.summonerId = laoe.id;
+    ra.summonBaseName = '翼神龙';
+    ra.maxHp = 3000;
+    localProject.setCurrentHp(ra, 100);
+    applyStatus(ra, { identityId: 'RA_PHOENIX', remainingTurns: 3 });
+    const events: BattleEvent[] = [];
+    const engine = makeProjectEngine(localProject, [laoe, ra, attacker], [], 0, undefined, events);
+
+    engine.applyDamage(engine.fighters[1], 5000, 'skill', true, engine.fighters[2], {
+      actionName: '神不死鸟反应分类测试',
+    });
+
+    const phoenixEvent = events.find((event) => event.visualCue?.kind === 'reaction_fx' && event.visualCue.effectId === 'summon_ra_rebirth');
+    assert(Boolean(phoenixEvent), 'Ra Phoenix should emit one passive reaction visual cue');
+    assert(phoenixEvent?.actorId === engine.fighters[1].id, 'Ra Phoenix reaction should identify Ra as its actor');
+    assert(phoenixEvent?.targetIds?.includes(engine.fighters[1].id), 'Ra Phoenix reaction should identify the revived Ra as its target');
     assert(
-      getStageFocusCycleKey(firstAction, 8, 11, firstAction.actorId) !== firstFocusKey,
+      !events.some((event) => event.visualCue?.kind === 'combat_fx' && event.visualCue.effectId === 'summon_ra_rebirth'),
+      'Ra Phoenix revival must not masquerade as an active combat effect',
+    );
+    cases.push('passive revival effects use reaction cues with explicit actor and target attribution');
+  }
+
+  {
+    const manualFocus = { fighterId: 'inspected-fighter', battleRunId: 7 };
+    assert(
+      resolveStageManualFocusId(manualFocus, 7) === 'inspected-fighter',
+      'Manual inspection should persist across later actor actions in the same battle',
+    );
+    assert(
+      resolveStageManualFocusId(manualFocus, 8) === null,
       'A new battle run must never restore a stale manual inspection',
     );
-    cases.push('stage detail focus is temporary and resumes actor-following on the next action');
+    assert(
+      toggleStageManualFocus(manualFocus, 'inspected-fighter', 7) === null,
+      'Selecting the focused fighter again should resume actor-following',
+    );
+    assert(
+      toggleStageManualFocus(manualFocus, 'other-fighter', 7)?.fighterId === 'other-fighter',
+      'Selecting another fighter should move the manual inspection lock',
+    );
+    cases.push('stage detail focus persists for a battle until the user explicitly resumes following');
   }
 
   {
@@ -425,23 +590,164 @@ export function runArchitectureCases(): string[] {
   }
 
   {
+    const ledger = createBattleVisualEventLedger();
+    assert(claimBattleVisualEvent(ledger, 1, 'cue-a'), 'the first visual claim in a run should succeed');
+    assert(!claimBattleVisualEvent(ledger, 1, 'cue-a'), 'the same visual cue must not replay in one battle run');
+    for (let index = 0; index < 4096; index += 1) {
+      claimBattleVisualEvent(ledger, 1, `cue-${index}`);
+    }
+    assert(!claimBattleVisualEvent(ledger, 1, 'cue-a'), 'an early cue must remain claimed for the entire battle run');
+    assert(ledger.keys.size === 4097, 'the visual ledger should retain every cue until the battle run changes');
+    assert(claimBattleVisualEvent(ledger, 2, 'cue-a'), 'a new battle run should reset exact-once playback ownership');
+    resetBattleVisualEventLedger(ledger, 2);
+    assert(Number(ledger.keys.size) === 0, 'an explicit battle reset should clear visual playback ownership');
+    cases.push('visual cue playback ledger is exact-once, bounded, and scoped to one battle run');
+  }
+
+  {
     const fighter = makeFighter('玄凝@形态快照');
     const events: BattleEvent[] = [];
     const engine = makeProjectEngine(localProject, [fighter], [], 0, undefined, events);
     const beforeJob = fighter.job;
-    fighter.transformed = true;
-    fighter.job = 'ALL_PLATFORM_CHAMPION';
-    fighter.jobData = cloneJobDefinition(localProject.jobs.ALL_PLATFORM_CHAMPION!);
-    engine.log('buff', `${fighter.name} 完成职业重构。`);
+    commitFormTransition({
+      fighter,
+      message: `${fighter.name} 完成职业重构。`,
+      log: (type, text, metadata) => engine.log(type, text, metadata),
+      mutate: () => {
+        fighter.transformed = true;
+        fighter.job = 'ALL_PLATFORM_CHAMPION';
+        fighter.jobData = cloneJobDefinition(localProject.jobs.ALL_PLATFORM_CHAMPION!);
+      },
+    });
     const cue = events.find((event) => event.visible)?.visualCue;
     assert(cue?.kind === 'transformation', 'A real form mutation should emit a structured transformation cue');
     if (cue?.kind === 'transformation') {
       assert(cue.from.jobKey === beforeJob && cue.to.jobKey === 'ALL_PLATFORM_CHAMPION', 'Transformation cue should retain authoritative before/after jobs');
     }
+    const firstVisible = events.find((event) => event.visible);
+    assert(firstVisible?.visualCueId === `${firstVisible?.id}:visual`, 'Visual form events should receive a stable exact-once playback key');
+
+    commitFormTransition({
+      fighter,
+      message: `${fighter.name} 在同阶段切换职业。`,
+      log: (type, text, metadata) => engine.log(type, text, metadata),
+      mutate: () => {
+        fighter.job = 'HIGH_END_GAMER';
+        fighter.jobData = cloneJobDefinition(localProject.jobs.HIGH_END_GAMER!);
+      },
+    });
+    const shiftCue = events.filter((event) => event.visible)[1]?.visualCue;
+    assert(shiftCue?.kind === 'form_shift', 'A same-phase job change should use the short form-shift cue');
     engine.log('transform', `${fighter.name} 只是重复播报当前职业。`);
     const visible = events.filter((event) => event.visible);
-    assert(!visible[1]?.visualCue, 'A transform-like log without a form mutation must not replay a transformation');
-    cases.push('transformation cinematics require an authoritative form delta');
+    assert(!visible[2]?.visualCue, 'A transform-like log without a form mutation must not replay a transformation');
+    cases.push('form cinematics require one authoritative transition and distinguish same-phase shifts');
+  }
+
+  {
+    const first = makeFighter('玄凝@范围转阶段甲');
+    const second = makeFighter('克蕾儿丝菲尔@范围转阶段乙');
+    const events: BattleEvent[] = [];
+    const engine = makeProjectEngine(localProject, [first, second], [], 0, undefined, events);
+    const action = engine.beginAction('form-transition-area-test', first, second, 0);
+    [first, second].forEach((fighter, index) => {
+      commitFormTransition({
+        fighter,
+        message: `${fighter.name} 在同一次范围攻击中进入第二阶段。`,
+        log: (type, text, metadata) => engine.log(type, text, metadata),
+        mutate: () => {
+          fighter.transformed = true;
+          fighter.job = index === 0 ? 'ALL_PLATFORM_CHAMPION' : 'SUCCUBUS';
+          fighter.jobData = cloneJobDefinition(localProject.jobs[fighter.job]!);
+        },
+      });
+    });
+    engine.endAction(action);
+    const transitions = events.filter((event) => event.actionId === action.id && event.visualCue?.kind === 'transformation');
+    assert(transitions.length === 2, 'One area action must retain one transformation cue for every fighter that actually changes phase');
+    assert(new Set(transitions.map((event) => event.visualCueId)).size === 2, 'Simultaneous transformations must own distinct playback keys');
+    cases.push('one area action preserves independent transformation cues for every affected fighter');
+  }
+
+  {
+    const fighter = makeFighter('柚子@连续升阶');
+    const events: BattleEvent[] = [];
+    const engine = makeProjectEngine(localProject, [fighter], [], 0, undefined, events);
+    fighter.yuzuPhase = 1;
+    const advanceTo = (phase: 2 | 3) => commitFormTransition({
+      fighter,
+      message: `${fighter.name} 进入第 ${phase} 阶段。`,
+      log: (type, text, metadata) => engine.log(type, text, metadata),
+      mutate: () => { fighter.yuzuPhase = phase; },
+    });
+    assert(advanceTo(2), 'The first phase edge should commit');
+    assert(advanceTo(3), 'The second phase edge should commit');
+    assert(!advanceTo(3), 'Re-announcing the current phase must not commit another transition');
+    const transitions = events.filter((event) => event.visualCue?.kind === 'transformation');
+    assert(
+      transitions.length === 2 &&
+      transitions[0]?.visualCue?.kind === 'transformation' && transitions[0].visualCue.from.phase === 1 && transitions[0].visualCue.to.phase === 2 &&
+      transitions[1]?.visualCue?.kind === 'transformation' && transitions[1].visualCue.from.phase === 2 && transitions[1].visualCue.to.phase === 3,
+      'A multi-stage fighter must publish exactly the authoritative 1->2 and 2->3 edges',
+    );
+    engine.log('info', `${fighter.name} 转阶段后的普通状态结算。`);
+    assert(!events.at(-1)?.visualCue, 'A log following a phase transition must not inherit its visual cue');
+    cases.push('multi-stage fighters publish each real phase edge once without leaking cues to later logs');
+  }
+
+  {
+    const fighter = makeFighter('M1A2_abrams_sep@同形态复活');
+    const events: BattleEvent[] = [];
+    const engine = makeProjectEngine(localProject, [fighter], [], 0, undefined, events);
+    const before = { job: fighter.job, phase: fighter.transformed };
+    const changed = commitFormTransition({
+      fighter,
+      kind: 'form_shift',
+      cause: 'redeploy',
+      force: true,
+      message: `${fighter.name} 驾驶同型号备用载具重新部署。`,
+      log: (type, text, metadata) => engine.log(type, text, metadata),
+      mutate: () => { fighter.currentHp = fighter.maxHp; },
+    });
+    const cue = events.find((event) => event.visible)?.visualCue;
+    assert(changed && cue?.kind === 'form_shift', 'A forced same-form revival should publish the short form-shift cue');
+    if (cue?.kind === 'form_shift') {
+      assert(cue.from.jobKey === before.job && cue.to.jobKey === before.job && fighter.transformed === before.phase, 'A same-form revival must not invent a phase or job edge');
+      assert(cue.cause === 'redeploy', 'A same-form backup vehicle should identify redeployment as the transition cause');
+    }
+    cases.push('same-form revival uses an explicit short form-shift without inventing a phase edge');
+  }
+
+  {
+    const actor = makeFighter('鸮@动作视觉锚点');
+    const target = makeFighter('小汀@动作视觉目标');
+    const events: BattleEvent[] = [];
+    const engine = makeProjectEngine(localProject, [actor, target], [], 0, undefined, events);
+    const action = engine.beginAction('owl_shining_hopper', actor, target, 0);
+    engine.log('skill', '第一条动作视觉日志', {
+      targetIds: [target.id],
+      visualCue: { kind: 'combat_action', sourceId: actor.id, targetIds: [target.id], presentation: 'skill' },
+    });
+    engine.log('skill', '同一动作的后续结果日志', {
+      targetIds: [target.id],
+      visualCue: { kind: 'combat_fx', effectId: 'toku_bujin_slash', sourceId: actor.id, targetIds: [target.id] },
+    });
+    engine.log('skill', '错误请求第二个主动作锚点', {
+      targetIds: [target.id],
+      visualCue: { kind: 'combat_action', sourceId: actor.id, targetIds: [target.id], presentation: 'skill' },
+    });
+    engine.endAction(action);
+    const actionVisuals = events.filter((event) => event.actionId === action.id && (event.visualCue?.kind === 'combat_action' || event.visualCue?.kind === 'combat_fx'));
+    assert(
+      actionVisuals.filter((event) => event.visualCue?.kind === 'combat_action').length === 1,
+      'one action may publish only one primary combat visual anchor',
+    );
+    assert(
+      actionVisuals.filter((event) => event.visualCue?.kind === 'combat_fx').length === 1,
+      'one action may retain an explicitly authored follow-up hit effect',
+    );
+    assert(new Set(actionVisuals.map((event) => event.visualCueId)).size === 2, 'primary and follow-up visuals must retain distinct exact-once keys');
+    cases.push('one causal action deduplicates its primary anchor while retaining explicit follow-up hits');
   }
 
   {
@@ -468,6 +774,32 @@ export function runArchitectureCases(): string[] {
       assert(summonCue.materials.length === 5, 'Exodia card cinematic should carry all five sealed components');
     }
     cases.push('advanced summon arrivals emit structured card cinematics');
+  }
+
+  {
+    const summoner = makeFighter('牢鳄@召唤ID冲突');
+    const engine = makeProjectEngine(localProject, [summoner], []);
+    const originalGenerateUuid = localProject.core.generateUUID;
+    let attempts = 0;
+    localProject.core.generateUUID = () => {
+      attempts += 1;
+      return attempts === 1 ? summoner.id : 'summon-id-after-collision';
+    };
+    try {
+      engine.executeSummonSkill({
+        name: '召唤ID冲突回归',
+        tag: 'special',
+        text: '{USER} 召唤测试伙伴。',
+        isSummon: true,
+        summonName: 'ID测试伙伴',
+        summonJob: 'WARRIOR',
+      }, summoner, engine.getTeamId(summoner));
+    } finally {
+      localProject.core.generateUUID = originalGenerateUuid;
+    }
+    assert(attempts === 2, 'Dynamic summon IDs should retry after colliding with an existing fighter');
+    assert(new Set(engine.fighters.map((fighter) => fighter.id)).size === engine.fighters.length, 'Dynamic summon IDs must remain unique across the roster');
+    cases.push('dynamic summons retry UUID collisions instead of aliasing existing fighters');
   }
 
   {
@@ -694,11 +1026,16 @@ export function runArchitectureCases(): string[] {
     const changedSource = cloneFighters(source);
     changedSource[1].currentHp -= 123;
     changedSource[1].hpPct = changedSource[1].currentHp / changedSource[1].maxHp;
-    changedSource[1].status.push({ type: 'BURN', duration: 2 });
+    applyStatus(changedSource[1], {
+      identityId: 'BURN',
+      potency: 1,
+      count: 2,
+      attribution: { effectSourceId: 'architecture-snapshot' },
+    });
     const second = reconcileFighterSnapshots(changedSource, first);
     assert(second !== first, 'A changed playback frame should receive a new roster array');
     assert(second[0] === first[0], 'Unchanged fighters should be structurally shared across log snapshots');
-    assert(second[1] !== first[1] && first[1].status.length === 0, 'Changed fighter state should be cloned without mutating the previous log snapshot');
+    assert(second[1] !== first[1] && first[1].statuses.length === 0, 'Changed fighter state should be cloned without mutating the previous log snapshot');
 
     changedSource[0].jobData.skills.push('snapshot_test_skill');
     const third = reconcileFighterSnapshots(changedSource, second);
@@ -773,7 +1110,11 @@ export function runArchitectureCases(): string[] {
     const slacker = makeFighter('轮次场外者@C');
     const summon = makeFighter('轮次召唤物@D');
     const npc = makeFighter('轮次NPC@E');
-    slacker.status.push(createLifecycleStatus('SYNERGY_SLACKING', 5));
+    applyStatus(slacker, {
+      identityId: 'SYNERGY_SLACKING',
+      remainingTurns: 5,
+      attribution: { effectSourceId: 'architecture-large-round' },
+    });
     summon.isSummon = true;
     npc.isNpc = true;
     npc.cannotAct = true;
@@ -815,41 +1156,289 @@ export function runArchitectureCases(): string[] {
   {
     const fighter = makeFighter('临时属性测试@A');
     fighter.atk = 100;
-    fighter.status = [createLifecycleStatus('TEMP_STAT_BUFF', 3, 'architecture')];
-    applyTimedStatModifier(fighter, makeTimedStatModifier('architecture-atk', 'TEMP_STAT_BUFF', { atk: 1.5 }, 'architecture'));
-    assert(fighter.atk === 150, `Temporary modifier should apply once, got ${fighter.atk}`);
-    applyTimedStatModifier(fighter, makeTimedStatModifier('architecture-atk', 'TEMP_STAT_BUFF', { atk: 2 }, 'architecture'));
-    assert(Number(fighter.atk) === 200, `Refreshing a modifier should recompute from base instead of stacking exponentially, got ${fighter.atk}`);
+    applyStatus(fighter, {
+      identityId: 'GAMER_RUSH_B',
+      remainingTurns: 3,
+      componentPotencies: { ATK_UP: 50, SPD_UP: 100 },
+      attribution: { effectSourceId: 'architecture-atk' },
+    });
+    assert(getEffectiveCombatStat(fighter, 'atk') === 150, `Temporary status should affect the calculated stat once, got ${getEffectiveCombatStat(fighter, 'atk')}`);
+    applyStatus(fighter, {
+      identityId: 'GAMER_RUSH_B',
+      remainingTurns: 3,
+      componentPotencies: { ATK_UP: 100, SPD_UP: 100 },
+      attribution: { effectSourceId: 'architecture-atk' },
+    });
+    assert(getEffectiveCombatStat(fighter, 'atk') === 200, `Refreshing a status should recompute from the raw stat instead of stacking exponentially, got ${getEffectiveCombatStat(fighter, 'atk')}`);
     applyPermanentStatBuff(fighter, { atk: 1.5 });
-    assert(Number(fighter.atk) === 300, `Permanent growth should update the unmodified base before reapplying the temporary layer, got ${fighter.atk}`);
-    fighter.status = [];
-    cleanupOrphanedTimedStatModifiers(fighter);
-    assert(Number(fighter.atk) === 150, `Expired temporary modifier should restore the updated permanent base, got ${fighter.atk}`);
-    cases.push('temporary stat modifiers refresh and roll back against a permanent base');
+    assert(Number(fighter.atk) === 150 && getEffectiveCombatStat(fighter, 'atk') === 300, `Permanent growth should update the raw stat before the temporary layer, got raw ${fighter.atk} / effective ${getEffectiveCombatStat(fighter, 'atk')}`);
+    removeEffects(fighter, { identityIds: ['GAMER_RUSH_B'], reason: 'expired' });
+    assert(Number(fighter.atk) === 150 && getEffectiveCombatStat(fighter, 'atk') === 150, `Expired status should leave the permanent raw stat intact, got ${getEffectiveCombatStat(fighter, 'atk')}`);
+    cases.push('temporary status calculators refresh and roll back against permanent stats');
+  }
+
+  {
+    const projectRoot = process.cwd();
+    const legacyModules = [
+      'lib/namearena/statusLifecycle.ts',
+      'lib/namearena/statusRules.ts',
+      'lib/namearena/statModifiers.ts',
+    ];
+    legacyModules.forEach((path) => {
+      assert(!existsSync(join(projectRoot, path)), `Legacy status module must stay deleted: ${path}`);
+    });
+
+    const productionFiles = [
+      ...collectTypeScriptFiles(join(projectRoot, 'lib/namearena')),
+      ...collectTypeScriptFiles(join(projectRoot, 'components/namearena')),
+    ];
+    const forbiddenSymbols = [
+      'StatusEntry',
+      'legacyType',
+      'timedStatModifiers',
+      'timedStatBase',
+      'baseStatsForZero',
+      'savedStats',
+      'savedSpd',
+      'savedAgl',
+      'originiumInfectionStacks',
+      'originiumStatMultipliers',
+      'yuzuShield',
+      'puruisaishiShield',
+      'STATUS_EFFECTS',
+      'WT_AIRBORNE',
+      'deferAirborneLanding',
+      'statusLifecycle',
+      'statusRules',
+      'statModifiers',
+    ];
+    productionFiles.forEach((path) => {
+      const source = readFileSync(path, 'utf8');
+      forbiddenSymbols.forEach((symbol) => {
+        assert(!source.includes(symbol), `${relative(projectRoot, path)} must not reference legacy status symbol ${symbol}`);
+      });
+      assert(
+        !/\b(?:fighter|actor|target|user|enemy|ally|summon|owner|candidate|tgt)\.status\b/.test(source),
+        `${relative(projectRoot, path)} must use fighter.statuses instead of the removed fighter.status field`,
+      );
+      assert(
+        !/(?:duration|remainingTurns)\s*:\s*999\b/.test(source),
+        `${relative(projectRoot, path)} must not encode permanent status lifetime as 999 turns`,
+      );
+      for (const match of source.matchAll(/\bidentityId\s*:\s*['"]([A-Z0-9_:-]+)['"]/g)) {
+        const identityId = match[1];
+        assert(Boolean(STATUS_IDENTITIES[identityId] || BARRIER_IDENTITIES[identityId]), `${relative(projectRoot, path)} references unregistered identity ${identityId}`);
+      }
+    });
+
+    const unauthorizedFormMutations = collectTypeScriptFiles(join(projectRoot, 'lib/namearena'))
+      .flatMap(findUnauthorizedFormMutations);
+    assert(
+      unauthorizedFormMutations.length === 0,
+      `Runtime form fields must change only through commitFormTransition (initializers are explicitly allowlisted): ${unauthorizedFormMutations.join(', ')}`,
+    );
+    const manualTransformationCueFiles = collectTypeScriptFiles(join(projectRoot, 'lib/namearena'))
+      .filter((path) => !path.endsWith('/battlePresentation.ts') && !path.endsWith('/types.ts'))
+      .filter((path) => /visualCue\s*:\s*\{[\s\S]{0,240}?kind\s*:\s*['"]transformation['"]/.test(readFileSync(path, 'utf8')));
+    assert(
+      manualTransformationCueFiles.length === 0,
+      `Transformation cues must be emitted by commitFormTransition: ${manualTransformationCueFiles.map((path) => relative(projectRoot, path)).join(', ')}`,
+    );
+
+    const metadataAwareSkillFiles = [
+      join(projectRoot, 'lib/namearena/skills/momo.ts'),
+      join(projectRoot, 'lib/namearena/skills/owl.ts'),
+      join(projectRoot, 'lib/namearena/skills/yuzu.ts'),
+    ];
+    metadataAwareSkillFiles.forEach((path) => {
+      const source = readFileSync(path, 'utf8');
+      assert(
+        !/log\s*:\s*\(\s*type\s*,\s*text\s*\)\s*=>\s*ctx\.log\s*\(\s*type\s*,\s*text\s*\)/.test(source),
+        `${relative(projectRoot, path)} must forward BattleLogMetadata through nested mechanic runtimes`,
+      );
+    });
+
+    productionFiles
+      .filter((path) => !path.endsWith('/statusSystem.ts'))
+      .forEach((path) => {
+        const source = readFileSync(path, 'utf8');
+      assert(
+        !/\.statuses\.(?:push|splice|pop|shift|unshift|sort|reverse)\s*\(|\.statuses\s*=/.test(source),
+        `${relative(projectRoot, path)} must mutate statuses through statusSystem`,
+      );
+      assert(
+        !/\.(?:potency|count|remainingTurns|charges)\s*(?:\+\+|--|[+\-*/]?=(?!=))/.test(source),
+        `${relative(projectRoot, path)} must mutate status values through statusSystem`,
+      );
+      assert(
+        !/\.barriers\.(?:push|splice|pop|shift|unshift|sort|reverse)\s*\(|\.barriers\s*=/.test(source),
+        `${relative(projectRoot, path)} must mutate barriers through statusSystem`,
+      );
+      });
+
+    const strictConsumerFiles = productionFiles.filter((path) =>
+      path.includes('/lib/namearena/skills/') ||
+      path.includes('/lib/namearena/characterHooks/') ||
+      path.includes('/components/namearena/'),
+    );
+    strictConsumerFiles.forEach((path) => {
+      const source = readFileSync(path, 'utf8');
+      assert(
+        !/\.statuses(?:\.|\[)/.test(source),
+        `${relative(projectRoot, path)} must query statuses through the unified service`,
+      );
+    });
+
+    const presentationConsumers = productionFiles.filter((path) => {
+      const source = readFileSync(path, 'utf8');
+      return source.includes('STATUS_IDENTITY_PRESENTATION') &&
+        !path.endsWith('/statusRegistry.ts') &&
+        !path.endsWith('/data/constants.ts');
+    });
+    assert(
+      presentationConsumers.length === 0,
+      `Only statusRegistry may consume presentation seeds: ${presentationConsumers.map((path) => relative(projectRoot, path)).join(', ')}`,
+    );
+
+    Object.values(STATUS_IDENTITIES).forEach((identity) => {
+      const mechanicIds = [identity.mechanicId, ...(identity.components ?? []).map((component) => component.mechanicId)];
+      mechanicIds.forEach((mechanicId) => {
+        assert(Boolean(STATUS_MECHANICS[mechanicId]), `${identity.identityId} references unregistered mechanic ${mechanicId}`);
+      });
+    });
+    Object.entries(BARRIER_IDENTITIES).forEach(([identityId, identity]) => {
+      assert(identity.identityId === identityId, `Barrier identity key mismatch: ${identityId}/${identity.identityId}`);
+    });
+    cases.push('production status architecture has one strict registry and mutation pipeline');
+  }
+
+  {
+    Object.entries(STATUS_IDENTITIES).forEach(([identityId, identity]) => {
+      assert(identity.identityId === identityId, `Status identity key mismatch: ${identityId}/${identity.identityId}`);
+      const fighter = makeFighter(`目录验收-${identityId}@A`);
+      const result = applyStatus(fighter, {
+        identityId,
+        attribution: {
+          effectSourceId: `catalog:${identityId}`,
+          effectSourceName: '目录验收',
+          applierId: 'catalog-applier',
+          applierName: '目录施加者',
+        },
+      });
+      const expectedMechanics = new Set(
+        identity.components?.map((component) => component.mechanicId) ?? [identity.mechanicId],
+      );
+      assert(result.statuses.length === expectedMechanics.size, `${identityId} should materialize one instance per declared mechanic`);
+      result.statuses.forEach((status) => {
+        assert(expectedMechanics.has(status.mechanicId), `${identityId} materialized undeclared mechanic ${status.mechanicId}`);
+        assert(status.attribution.effectSourceId === `catalog:${identityId}`, `${identityId} lost effect-source attribution`);
+      });
+      const presentation = buildFighterStatusPresentation(fighter);
+      const presentedIds = new Set(presentation.flatMap((item) => item.members.map((member) => member.key)));
+      assert(result.statuses.every((status) => presentedIds.has(status.instanceId)), `${identityId} did not expose every mechanic through its themed status card`);
+      const removed = removeEffects(fighter, { identityIds: [identityId], reason: 'scripted' });
+      assert(removed.length === result.statuses.length && fighter.statuses.length === 0, `${identityId} did not leave through the unified removal service`);
+    });
+    cases.push('every registered status materializes, presents, attributes, and removes through the unified service');
+  }
+
+  {
+    Object.values(BARRIER_IDENTITIES).forEach((identity) => {
+      const fighter = makeFighter(`护盾目录验收-${identity.identityId}@A`);
+      const barrier = grantBarrier(fighter, 25, {
+        identityId: identity.identityId,
+        sourceId: `catalog:${identity.identityId}`,
+        displayName: identity.displayName,
+        attribution: { effectSourceId: `catalog:${identity.identityId}` },
+      });
+      const presentation = buildFighterStatusPresentation(fighter);
+      assert(barrier.identityId === identity.identityId, `${identity.identityId} lost its registered barrier identity`);
+      assert(presentation.some((item) => item.kind === 'barrier' && item.members.some((member) => member.key === barrier.id)), `${identity.identityId} did not expose its barrier presentation`);
+    });
+    cases.push('every registered barrier validates and presents through the unified effect service');
   }
 
   {
     const fighter = makeFighter('状态生命周期测试@A');
-    const spellBlock = createLifecycleStatus('SPELL_BLOCK', 2, 'architecture');
-    fighter.status = [spellBlock];
+    const spellBlock = applyStatus(fighter, {
+      identityId: 'SPELL_BLOCK',
+      charges: 2,
+      attribution: { effectSourceId: 'architecture' },
+    }).primary;
     assert(spellBlock.charges === 2 && spellBlock.remainingTurns === undefined, 'Spell block should expose charges without a turn duration');
-    assert(statusDurationText(spellBlock) === '2次', `Spell block UI should display charges, got ${statusDurationText(spellBlock)}`);
-    consumeStatusCharge(fighter, spellBlock);
-    assert(fighter.status.includes(spellBlock) && Number(spellBlock.charges) === 1, 'First spell block trigger should consume exactly one charge');
-    consumeStatusCharge(fighter, spellBlock);
-    assert(!fighter.status.includes(spellBlock), 'Second spell block trigger should remove the exhausted status');
+    assert(formatStatusValue(spellBlock) === '2次', `Spell block UI should display charges, got ${formatStatusValue(spellBlock)}`);
+    consumeStatusValue(fighter, spellBlock, 'charges');
+    assert(fighter.statuses.includes(spellBlock) && Number(spellBlock.charges) === 1, 'First spell block trigger should consume exactly one charge');
+    consumeStatusValue(fighter, spellBlock, 'charges');
+    assert(!fighter.statuses.includes(spellBlock), 'Second spell block trigger should remove the exhausted status');
 
-    const counter = createLifecycleStatus('CTR_CHARM', 5);
-    fighter.status = [counter];
+    const counter = applyStatus(fighter, {
+      identityId: 'CTR_CHARM',
+      remainingTurns: 5,
+      charges: 1,
+      attribution: { effectSourceId: 'architecture-counter' },
+    }).primary;
     assert(counter.remainingTurns === 5 && counter.charges === 1, 'Counter stance should separate owner-turn expiry from its one trigger');
-    assert(statusDurationText(counter) === '5回合 · 1次', `Counter UI should display both clocks, got ${statusDurationText(counter)}`);
-    consumeStatusCharge(fighter, counter);
-    assert(fighter.status.length === 0, 'Counter stance should disappear after its single trigger even with turns remaining');
+    assert(formatStatusValue(counter) === '5次自身行动机会 · 1次', `Counter UI should display both clocks, got ${formatStatusValue(counter)}`);
+    consumeStatusValue(fighter, counter, 'charges');
+    assert(fighter.statuses.length === 0, 'Counter stance should disappear after its single trigger even with turns remaining');
 
-    const permanentRage = createLifecycleStatus('RAGE', 999);
-    assert(permanentRage.expiresOn === 'never' && !tickStatusTurn(permanentRage), '999-turn non-trigger statuses should be truly permanent');
-    assert(statusDurationText(permanentRage) === undefined, 'Permanent statuses should not expose a fake 999-turn UI label');
+    const permanentRage = applyStatus(fighter, {
+      identityId: 'RABBIT_STYLE_RAGE',
+      attribution: { effectSourceId: 'architecture-permanent' },
+    }).primary;
+    assert(permanentRage.expiresOn === 'never' && permanentRage.remainingTurns === undefined, 'Permanent statuses should have no turn counter');
+    assert(!/999|回合|行动机会/.test(formatStatusValue(permanentRage)), 'Permanent statuses should not expose a fake turn label');
+
+    const flatAttack = applyStatus(fighter, {
+      identityId: 'ATK_FLAT_UP',
+      potency: 18,
+      remainingTurns: 2,
+      attribution: { effectSourceId: 'architecture-flat-stat' },
+    }).primary;
+    assert(formatStatusValue(flatAttack) === '18点 · 2次自身行动机会', `Flat stat status should use points instead of percent, got ${formatStatusValue(flatAttack)}`);
+    const crowdJoy = applyStatus(fighter, {
+      identityId: 'MOMO_CROWD_JOY',
+      potency: 42,
+      attribution: { effectSourceId: 'architecture-crowd-joy' },
+    }).primary;
+    assert(formatStatusValue(crowdJoy) === '42/138层', `Crowd joy should expose stacks and cap, got ${formatStatusValue(crowdJoy)}`);
+    const owlWild = applyStatus(fighter, {
+      identityId: 'OWL_WILD',
+      potency: 3,
+      attribution: { effectSourceId: 'architecture-owl-wild' },
+    }).primary;
+    assert(formatStatusValue(owlWild) === '3/5层', `Owl wild should expose stacks and cap, got ${formatStatusValue(owlWild)}`);
+    const poison = applyStatus(fighter, {
+      identityId: 'POISON',
+      potency: 2,
+      remainingTurns: 3,
+      attribution: { effectSourceId: 'architecture-poison' },
+    }).primary;
+    assert(formatStatusValue(poison) === '2层 · 3次自身行动机会', `Poison should expose stacks and its settlement clock, got ${formatStatusValue(poison)}`);
+    const poisonPresentation = buildFighterStatusPresentation(fighter).find((item) =>
+      item.members.some((member) => member.key === poison.instanceId),
+    );
+    assert(poisonPresentation?.valueLabel === '2层 · 3次自身行动机会', `Poison presentation should consume the canonical value label exactly once, got ${poisonPresentation?.valueLabel}`);
     cases.push('status duration, trigger charges, and UI labels are independent');
+  }
+
+  {
+    const fighter = makeFighter('击飞刷新测试@A');
+    applyStatus(fighter, {
+      identityId: 'AIRBORNE',
+      remainingTurns: 1,
+      attribution: { effectSourceId: 'first-launch', applierId: 'first-attacker' },
+    });
+    applyStatus(fighter, {
+      identityId: 'AIRBORNE',
+      remainingTurns: 1,
+      attribution: { effectSourceId: 'second-launch', applierId: 'second-attacker' },
+    });
+    const airborne = queryMechanic(fighter, 'AIRBORNE').entries;
+    assert(airborne.length === 1, 'Repeated airborne applications must leave one pending landing');
+    assert(airborne[0]?.attribution.effectSourceId === 'second-launch', 'Airborne refresh should attribute the landing to the latest launch');
+    cases.push('airborne refreshes one landing across different sources');
   }
 
   {
@@ -867,7 +1456,11 @@ export function runArchitectureCases(): string[] {
 
     const shieldAttacker = makeFighter('护盾统计攻击者@A');
     const shieldTarget = makeFighter('护盾统计目标@B');
-    shieldTarget.yuzuShield = 40;
+    grantBarrier(shieldTarget, 40, {
+      sourceId: 'YUZU_BARRIER',
+      displayName: '护盾',
+      attribution: { effectSourceId: 'architecture-shield' },
+    });
     const shieldFixture = makeDeathEngine([shieldAttacker, shieldTarget]);
     const shieldOptions: DamageApplicationOptions = {};
     const shieldActual = shieldFixture.engine.applyDamage(
@@ -883,7 +1476,11 @@ export function runArchitectureCases(): string[] {
 
     const blockedAttacker = makeFighter('抵挡统计攻击者@A');
     const blockedTarget = makeFighter('抵挡统计目标@B');
-    grantStatus(blockedTarget, 'SPELL_BLOCK', 1, 'morphling_linken_sphere');
+    applyStatus(blockedTarget, {
+      identityId: 'SPELL_BLOCK',
+      charges: 1,
+      attribution: { effectSourceId: 'morphling_linken_sphere' },
+    });
     const blockedFixture = makeDeathEngine([blockedAttacker, blockedTarget]);
     const blockedOptions: DamageApplicationOptions = { respectDefenses: true };
     const blockedActual = blockedFixture.engine.applyDamage(
@@ -936,8 +1533,23 @@ export function runArchitectureCases(): string[] {
     scheduler.after('impact', 100, () => fired.push('impact'));
     scheduler.frame('popup:1', () => fired.push('popup'));
     assert(scheduler.pendingCount() === 2, 'Stage scheduler should account for pending work across scopes');
+    scheduler.after('cinematic-followup:old-action', 100, () => fired.push('old-followup'));
+    scheduler.after('cinematic-followup:new-action', 100, () => fired.push('new-followup'));
+    scheduler.after('unrelated', 100, () => fired.push('unrelated'));
+    scheduler.cancelPrefix('cinematic-followup:');
+    assert(scheduler.pendingCount() === 3, 'Cancelling cinematic follow-ups should preserve unrelated stage work');
     scheduler.reset();
     assert(scheduler.pendingCount() === 0 && timers.size === 0 && frames.size === 0, 'Stage reset should cancel every timer and animation frame');
+    assert(scheduler.trackedScopeCount() === 0, 'Stage reset should release dynamic scope generations instead of retaining them across battles');
+    flush();
+    assert(
+      !fired.includes('impact') &&
+      !fired.includes('popup') &&
+      !fired.includes('old-followup') &&
+      !fired.includes('new-followup') &&
+      !fired.includes('unrelated'),
+      'Callbacks cancelled by a prefix or reset must stay stale after scope generations are cleared',
+    );
     scheduler.dispose();
     assert(scheduler.after('disposed', 0, () => fired.push('disposed')) === null, 'Disposed scheduler should reject new work');
     cases.push('stage animation scheduler cancels stale actions and releases pending work');
@@ -974,6 +1586,39 @@ export function runArchitectureCases(): string[] {
     });
     assert(hiddenCommit.feed === committed.feed, 'Hidden state checkpoints should reuse the visible feed while advancing the fighter frame');
 
+    const synchronizedQueue = [{
+      fighters,
+      battleTurn: 1,
+      battleState: createBattleState(31337, 1),
+      log: visibleLog,
+    }];
+    const damagedFighters = cloneFighters(fighters);
+    damagedFighters[1]!.currentHp -= 25;
+    enqueueBattlePlaybackCommit(synchronizedQueue, {
+      fighters: damagedFighters,
+      battleTurn: 1,
+      battleState: createBattleState(31337, 1),
+      log: {
+        type: 'system',
+        text: `state-sync:${damagedFighters[1]!.id}`,
+        displayInFeed: false,
+        actionId: visibleLog.actionId,
+        rootEventId: 'root-atomic-action-1',
+      },
+    });
+    assert(synchronizedQueue.length === 1, 'A hidden damage checkpoint should merge into its preceding visible action frame');
+    assert(
+      synchronizedQueue[0]!.fighters[1]!.currentHp === fighters[1]!.currentHp - 25,
+      'The visible damage log and resulting HP must be published in the same playback frame',
+    );
+    enqueueBattlePlaybackCommit(synchronizedQueue, {
+      fighters: cloneFighters(damagedFighters),
+      battleTurn: 1,
+      battleState: createBattleState(31337, 1),
+      log: { type: 'system', text: 'unowned-hidden-checkpoint', displayInFeed: false },
+    });
+    assert(Number(synchronizedQueue.length) === 2, 'Unowned hidden checkpoints must not overwrite an unrelated visible frame');
+
     let cappedFeed = committed.feed;
     for (let index = 0; index < 260; index += 1) {
       cappedFeed = appendBattleFeedEntry(cappedFeed, { type: 'info', text: `日志 ${index}`, id: `cap-${index}` });
@@ -1001,6 +1646,109 @@ export function runArchitectureCases(): string[] {
     const replay = seededTrace(20260712);
     assert(first === replay, 'The same roster and seed should reproduce an identical structured battle trace');
     cases.push('seeded structured events replay deterministically');
+  }
+
+  {
+    const issues = scanLogs([
+      { type: 'info', text: '💥 地狱笑话命中 鸮，实际造成 300 点魔法伤害！' },
+      { type: 'debuff', text: '🌀 【谢幕返场】鸮 被地狱笑话扰乱，陷入 1 回合混乱！' },
+      { type: 'info', text: '🦉 【不怕酸】鸮 削减 101 点伤害，剩余 300 点继续结算。' },
+    ], '减伤时序扫描测试', ['鸮']);
+    assert(issues.some((issue) => issue.type === 'result-before-mitigation'), 'Log scanner should flag a final damage result emitted before mitigation');
+    const separatedIssues = scanLogs([
+      { type: 'info', text: '📌 实际结算：柚子 实际承受 70 点伤害（原始预估 367）。' },
+      { type: 'system', text: 'state-sync:test-target' },
+      { type: 'info', text: '🪞 【镜界减伤】柚子 处于第 3 阶段，削减 27 点伤害。' },
+      { type: 'skill', text: '🐲 【原子吐息】帝王之征 轰向 柚子，实际造成 144 点伤害！' },
+    ], '减伤时序边界测试', ['柚子']);
+    assert(!separatedIssues.some((issue) => issue.type === 'result-before-mitigation'), 'A state-sync boundary must keep consecutive attacks in separate causal chains');
+    const redistributedIssues = scanLogs([
+      { type: 'info', text: '📌 【|OMO结算】鸮 分得 515 点伤害，生命实际损失 515 点。', rootEventId: 'action-1' },
+      { type: 'buff', text: '🦉 【天意侵蚀】鸮 由【骄兵】转入【败兵】。', rootEventId: 'action-1' },
+      { type: 'info', text: '🦉 【败兵阵势】鸮 削减 131 点伤害，剩余 23 点继续结算。', rootEventId: 'action-1' },
+      { type: 'skill', text: '🌑 黑气余波扫过 鸮，实际造成 23 点真实伤害！', rootEventId: 'action-1' },
+    ], '分摊与后续余波边界测试', ['鸮']);
+    assert(!redistributedIssues.some((issue) => issue.type === 'result-before-mitigation'), 'A redistribution settlement must not be paired with mitigation for a later damage packet');
+    const crossTurnIssues = scanLogs([
+      { type: 'poison', text: '🦠 【矿石病侵蚀】鸮 实际损失 18 点生命。', turn: 10 },
+      { type: 'info', text: '🦉 鸮 处于【败兵】状态，无法行动！', turn: 11 },
+      { type: 'info', text: '🦉 【败兵阵势】鸮 削减 103 点伤害，剩余 18 点继续结算。', turn: 11 },
+    ], '跨回合重复结算边界测试', ['鸮']);
+    assert(!crossTurnIssues.some((issue) => issue.type === 'result-before-mitigation'), 'Mitigation in a new turn must not be paired with the previous turn settlement');
+    const multiHitThenStatusIssues = scanLogs([
+      { type: 'skill', text: '🪞 【一码归一码】第 4/4 击抽到 盾牌（武器倍率+5%），命中 鸮，实际造成 42 点伤害。', rootEventId: 'action-yuzu', actionId: 'action-yuzu', turn: 20 },
+      { type: 'buff', text: '🛡️ 【盾牌】柚子把 42 点命中伤害折成镜界护盾。', rootEventId: 'action-yuzu', actionId: 'action-yuzu', turn: 20 },
+      { type: 'info', text: '🦉 【败兵阵势】鸮 削减 88 点伤害，剩余 15 点继续结算。', rootEventId: 'action-yuzu', turn: 20 },
+      { type: 'poison', text: '🦠 【矿石病侵蚀】本次全局行动结束结算：鸮 实际损失 15 点生命。', rootEventId: 'action-yuzu', turn: 20 },
+    ], '多段技能后状态减伤边界测试', ['鸮', '柚子']);
+    assert(!multiHitThenStatusIssues.some((issue) => issue.type === 'result-before-mitigation'), 'A later status-damage mitigation must not be paired with the final hit of a multi-hit skill');
+    const consecutiveStatusIssues = scanLogs([
+      { type: 'info', text: '🦉 【不怕酸】鸮 削减 38 点伤害，剩余 111 点继续结算。', rootEventId: 'turn-30', turn: 30 },
+      { type: 'poison', text: '🤢 【中毒】鸮 受到持续伤害，实际损失 111 点生命！', rootEventId: 'turn-30', turn: 30 },
+      { type: 'info', text: '🦉 【不怕酸】鸮 削减 75 点伤害，剩余 224 点继续结算。', rootEventId: 'turn-30', turn: 30 },
+      { type: 'info', text: '🌊 鸮 的【深渊水牢】本次没有穿透防护，生命未减少。', rootEventId: 'turn-30', turn: 30 },
+    ], '连续状态伤害减伤边界测试', ['鸮']);
+    assert(!consecutiveStatusIssues.some((issue) => issue.type === 'result-before-mitigation'), 'Mitigation for a following status packet must not be paired with the previous status settlement');
+    const mitigationSubjectIssues = scanLogs([
+      { type: 'info', text: '🩸 小汀 因【以命换命】反噬，实际损失 599 点生命！', rootEventId: 'action-trade', actionId: 'action-trade', turn: 40 },
+      { type: 'info', text: '🧿 【适应转轮】表情 记录 小汀 的攻击模式，削减 203 点伤害并复制属性。', rootEventId: 'action-trade', actionId: 'action-trade', turn: 40 },
+      { type: 'info', text: '📌 实际结算：表情 实际承受 474 点伤害。', rootEventId: 'action-trade', actionId: 'action-trade', turn: 40 },
+    ], '减伤主语识别测试', ['小汀', '表情']);
+    assert(!mitigationSubjectIssues.some((issue) => issue.type === 'result-before-mitigation'), 'A mitigation log must attribute reduction to its titled subject, not the attacker mentioned later in the sentence');
+    const redirectedThenDirectAoeIssues = scanLogs([
+      { type: 'crit', text: '🎭 【随机恶作剧】屑 将爆风余波转移给了倒霉的 柚子！', rootEventId: 'action-cas', actionId: 'action-cas', turn: 41 },
+      { type: 'info', text: '🪞 【镜界减伤】柚子 处于第 3 阶段，削减 16 点伤害。', rootEventId: 'action-cas', actionId: 'action-cas', turn: 41 },
+      { type: 'info', text: '🎭 转移伤害落在 柚子 身上，实际承受 81 点伤害！', rootEventId: 'action-cas', actionId: 'action-cas', turn: 41 },
+      { type: 'info', text: '🪞 【镜界减伤】柚子 处于第 3 阶段，削减 16 点伤害。', rootEventId: 'action-cas', actionId: 'action-cas', turn: 41 },
+      { type: 'crit', text: '💥 爆风余波波及！柚子 承受了 81 点真实伤害并被【火力压制】！', rootEventId: 'action-cas', actionId: 'action-cas', turn: 41 },
+    ], '转移后再次直接命中边界测试', ['屑', '柚子']);
+    assert(
+      !redirectedThenDirectAoeIssues.some((issue) => issue.type === 'result-before-mitigation'),
+      'A redirected hit and a later direct AOE hit on the same fighter must remain separate mitigation packets',
+    );
+    const repeatedNameIssues = scanLogs([
+      { type: 'skill', text: '🔊 【扩音处刑】魔音刺向 2 名敌人：萨姆、萨姆！', rootEventId: 'action-2' },
+      { type: 'death', text: '💀 【击杀】萨姆 被魔音贯耳，大脑宕机而亡！', rootEventId: 'action-2' },
+      { type: 'info', text: '🔊 刺耳魔音贯耳！萨姆 实际承受 425 点真实精神伤害！', rootEventId: 'action-2' },
+    ], '同名多目标测试', ['萨姆']);
+    assert(!repeatedNameIssues.some((issue) => issue.type === 'dead-fighter-mentioned-as-target'), 'Repeated display names in one multi-target action must remain distinguishable to the scanner');
+    const crossSubactionHealingIssues = scanLogs([
+      {
+        type: 'info',
+        text: '🥀 【枯竭】萌月沫沫 的治疗被完全阻止！（枯竭 100%）',
+        rootEventId: 'action-peaches',
+        actionId: 'action-peach-3',
+      },
+      {
+        type: 'info',
+        text: '🌈 【奇迹炼成装甲】的彩虹装甲为 刺猬人 挡下了 萌月沫沫 的【！？桃桃？！】，但生命已满，治疗溢出！',
+        rootEventId: 'action-peaches',
+        actionId: 'action-peach-4',
+      },
+    ], '跨子攻击治疗边界测试', ['萌月沫沫', '刺猬人']);
+    assert(
+      !crossSubactionHealingIssues.some((issue) => issue.type === 'blocked-healing-described-as-full-health'),
+      'Healing outcomes from separate child attacks must not be merged just because they share a root action',
+    );
+    const contradictoryHealingIssues = scanLogs([
+      {
+        type: 'info',
+        text: '🥀 【枯竭】萌月沫沫 的治疗被完全阻止！（枯竭 100%）',
+        rootEventId: 'action-heal',
+        actionId: 'action-heal',
+      },
+      {
+        type: 'heal',
+        text: '🍑 萌月沫沫 生命已满，治疗溢出！',
+        rootEventId: 'action-heal',
+        actionId: 'action-heal',
+      },
+    ], '同次行动治疗矛盾测试', ['萌月沫沫']);
+    assert(
+      contradictoryHealingIssues.some((issue) => issue.type === 'blocked-healing-described-as-full-health'),
+      'The scanner must still flag blocked and full-health outcomes for the same fighter in one action',
+    );
+    cases.push('log scanner detects damage results emitted before mitigation without crossing state-sync boundaries');
   }
 
   return cases;

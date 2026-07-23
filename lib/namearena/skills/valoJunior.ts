@@ -1,9 +1,9 @@
 import type { DamageApplicationOptions, Fighter, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter, isActiveCombatant } from '../combatState';
-import { REVIVE_CLEAN_STATUS_TYPES, isStatusType } from '../statusRules';
-import { consumeSpellBlock, formatPreSkillSpellBlock, grantStatus } from '../defenseStatus';
-import { clearZeroedStatPenalty, cleanupOrphanedTimedStatModifiers } from '../statModifiers';
+import { clearZeroedStatPenalty, isActiveCombatant, resolveHealing } from '../combatState';
+import { consumeSpellBlock, formatPreSkillSpellBlock } from '../defenseStatus';
+import { applyStatus, hasIdentity } from '../statusSystem';
+import { isDamageRedirected } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -14,8 +14,12 @@ function namesOf(fighters: Fighter[]): string {
 function consumeAreaStatusSpellBlock(ctx: Parameters<NonNullable<SkillDefinition['onExecute']>>[0], target: Fighter, actionName: string): boolean {
   const spellBlock = consumeSpellBlock(target);
   if (!spellBlock) return false;
-  const healed = healFighter(target, Math.floor(target.maxHp * 0.15), ctx.log);
-  const healText = healed > 0 ? `，并恢复了 ${healed} 点生命` : '，但生命已满，治疗溢出';
+  const healing = resolveHealing(target, Math.floor(target.maxHp * 0.15), {}, ctx.log);
+  const healText = healing.actual > 0
+    ? `，并恢复了 ${healing.actual} 点生命`
+    : healing.outcome === 'blocked'
+      ? '，但附带治疗被完全阻止'
+      : '，但生命已满，治疗溢出';
   ctx.log('info', formatPreSkillSpellBlock(spellBlock, ctx.user.name, actionName, target.name, healText));
   return true;
 }
@@ -31,8 +35,8 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   },
   valo_vandal_shot: { name: '狂徒(Vandal)', tag: SKILL_TAGS.PHYS, mult: 1.5, minDamagePct: 0.22, text: '🔫 {USER} 使用狂徒步枪扫射 {TARGET}，造成 {VAL} 伤害！' },
   valo_operator_shot: { name: '冥驹(Operator)', tag: SKILL_TAGS.PHYS, mult: 5.0, ignoreDef: true, text: '🔭 {USER} 屏息凝神... 砰！冥驹轰鸣，一枪穿透了 {TARGET}！造成 {VAL} 真实伤害！' },
-  valo_holding_angle: { name: '架枪预瞄', tag: SKILL_TAGS.BUFF, status: 'VALO_HOLDING_ANGLE', text: '🔭 {USER} 停止移动，进入了架枪预瞄姿态！' },
-  valo_pre_fire: { name: '提前枪', tag: SKILL_TAGS.PHYS, mult: 1.5, minDamagePct: 0.18, status: 'VALO_AIM_PUNCH', text: '🔫 {USER} 扣下扳机，精准的提前枪击中了 {TARGET} 并附加了【截停】！' },
+  valo_holding_angle: { name: '架枪预瞄', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'VALO_HOLDING_ANGLE' }], text: '🔭 {USER} 停止移动，进入了架枪预瞄姿态！' },
+  valo_pre_fire: { name: '提前枪', tag: SKILL_TAGS.PHYS, mult: 1.5, minDamagePct: 0.18, statusApplications: [{ identityId: 'VALO_AIM_PUNCH' }], text: '🔫 {USER} 扣下扳机，精准的提前枪击中了 {TARGET} 并附加了【截停】！' },
   valo_clutch_headshot: { name: '残局爆头线', tag: SKILL_TAGS.PHYS, mult: 2.6, minDamagePct: 0.42, ignoreDef: true, alwaysHit: true, alwaysCrit: true, text: '🎯 【残局爆头线】{USER} 架好准星，peek 出去的一瞬间爆头命中 {TARGET}，造成 {VAL} 真实伤害！' },
   valo_clutch_execute: { name: '残局处决', tag: SKILL_TAGS.PHYS, mult: 3.8, minDamagePct: 0.6, ignoreDef: true, alwaysHit: true, alwaysCrit: true, text: '🏆 【残局处决】{USER} 抓住 {TARGET} 的破绽，冷静收下这一分，造成 {VAL} 真实伤害！' },
 
@@ -45,14 +49,21 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         .slice(0, 2);
       if (otherEnemies.length > 0) {
         if (!isActiveCombatant(ctx.user)) return;
-        ctx.log('skill', `🚀 【晚安火炮】爆炸波及 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`);
+        ctx.log('skill', `🚀 【晚安火炮】爆炸波及 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`, {
+          targetIds: otherEnemies.map((enemy) => enemy.id),
+          visualCue: {
+            kind: 'combat_fx',
+            sourceId: ctx.user.id,
+            targetIds: otherEnemies.map((enemy) => enemy.id),
+          },
+        });
         const aoeDmg = Math.floor(dmg * 0.8);
         for (const e of otherEnemies) {
           if (!isActiveCombatant(ctx.user)) break;
-          if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+          if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
           const damageOptions: DamageApplicationOptions = { actionName: '晚安火炮余波' };
           const actualDmg = ctx.applyDamage(e, aoeDmg, 'skill', false, ctx.user, damageOptions);
-          if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
+          if (isDamageRedirected(damageOptions)) continue;
           if (actualDmg > 0) {
             ctx.log('info', `💥 爆炸余波重创了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
           } else {
@@ -77,8 +88,8 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     },
   },
 
-  valo_ult_empress: { name: '女皇神威', tag: SKILL_TAGS.BUFF, status: 'VALO_ULT_EMPRESS', statBuff: { atk: 2.0, spd: 2.0 }, text: '👑 {USER} 进入女皇状态！"绝不留情！" 攻击力与速度翻倍，且获得100%吸血！' },
-  valo_ult_run_it_back: { name: '再火一回', tag: SKILL_TAGS.BUFF, status: 'VALO_ULT_RUN_IT_BACK', text: '🔥 {USER} 留下了时空标记："别急，我还会回来的！" 获得了免死金牌！' },
+  valo_ult_empress: { name: '女皇神威', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'VALO_ULT_EMPRESS' }], text: '👑 {USER} 进入女皇状态！"绝不留情！" 攻击力与速度翻倍，且获得100%吸血！' },
+  valo_ult_run_it_back: { name: '再火一回', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'VALO_ULT_RUN_IT_BACK' }], text: '🔥 {USER} 留下了时空标记："别急，我还会回来的！" 获得了免死金牌！' },
   valo_ult_hunters_fury: { name: '狂猎之怒', tag: SKILL_TAGS.MAG, mult: 1.5, hits: 3, ignoreDef: true, text: '🦅 {USER} 张弓搭箭："我就是猎人！" 三道能量箭穿透了 {TARGET}，共造成 {VAL} 真实伤害！' },
 
   valo_ult_orbital_strike: {
@@ -90,14 +101,21 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && !f.isDead && !f.isDeadAnnounced && f.currentHp > 0);
         if (otherEnemies.length > 0) {
           if (!isActiveCombatant(ctx.user)) return;
-          ctx.log('crit', `🛰️ 【天降以此】火力过剩！溢出的 ${overflow} 点伤害溅射给 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`);
+          ctx.log('crit', `🛰️ 【天降以此】火力过剩！溢出的 ${overflow} 点伤害溅射给 ${otherEnemies.length} 名敌人：${namesOf(otherEnemies)}！`, {
+            targetIds: otherEnemies.map((enemy) => enemy.id),
+            visualCue: {
+              kind: 'combat_fx',
+              sourceId: ctx.user.id,
+              targetIds: otherEnemies.map((enemy) => enemy.id),
+            },
+          });
           const splashDmg = Math.floor(overflow / otherEnemies.length);
           for (const e of otherEnemies) {
             if (!isActiveCombatant(ctx.user)) break;
-            if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || e.status.some((status) => status.type === 'SYNERGY_SLACKING')) continue;
+            if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
             const damageOptions: DamageApplicationOptions = { actionName: '天降以此余波' };
             const actualDmg = ctx.applyDamage(e, splashDmg, 'skill', false, ctx.user, damageOptions);
-            if (damageOptions.redirectedByJoker || damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) continue;
+            if (isDamageRedirected(damageOptions)) continue;
             if (actualDmg > 0) {
               ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
             } else {
@@ -118,16 +136,15 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const userTeamId = ctx.getTeamId(ctx.user);
       const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && !f.isDeadAnnounced && f.currentHp > 0 && ctx.getTeamId(f) === userTeamId);
+      ctx.setVisualTargets(allies);
+      ctx.log('buff', `🌍 【宇宙分裂】${ctx.user.name} 撕裂空间，开始庇护并净化 ${allies.length} 名队友：${namesOf(allies)}！`);
       allies.forEach((a) => {
-        a.status = a.status ?? [];
-        grantStatus(a, 'INVUL', 1, 'valorant_astra_cosmic_divide');
-        a.status = a.status.filter(
-          (s) => !['STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'EMBARRASSED', 'CHARMED', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'NEURAL_THEFT_DEBUFF', 'BABY_WEAKNESS_MARK'].includes(s.type),
-        );
+        applyStatus(a, { identityId: 'INVUL', remainingTurns: 1, attribution: { effectSourceId: 'valorant_astra_cosmic_divide' } });
+        ctx.dispelStatusEffects(a, { strength: 'strong', direction: 'negative' });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === a.id);
         if (idx !== -1) ctx.fighters[idx] = a;
       });
-      ctx.log('buff', `🌍 【宇宙分裂】${ctx.user.name} 撕裂了空间！${allies.length} 名队友获得绝对无敌并净化负面状态：${namesOf(allies)}！`);
+      ctx.log('buff', `🌍 【宇宙分裂完成】${allies.length} 名队友已获得绝对无敌，净化结算完毕！`);
       return true;
     },
   },
@@ -141,16 +158,17 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
       );
       if (deadTeammates.length > 0) {
         const targetToRevive = deadTeammates[Math.floor(Math.random() * deadTeammates.length)];
+        ctx.setVisualTargets([targetToRevive]);
         targetToRevive.isDead = false;
         targetToRevive.isDeadAnnounced = false;
         targetToRevive.isActing = false;
         targetToRevive.isHit = false;
         targetToRevive.currentHp = targetToRevive.maxHp;
         targetToRevive.hpPct = 1.0;
-        targetToRevive.status = (targetToRevive.status ?? []).filter((s) => !isStatusType(s.type, REVIVE_CLEAN_STATUS_TYPES));
+        ctx.log('heal', `💉 【复活】${ctx.user.name} 将生命之玉注入 ${targetToRevive.name}：“你的职责尚未完成！”`);
+        ctx.dispelStatusEffects(targetToRevive, { strength: 'strong', direction: 'negative' });
         clearZeroedStatPenalty(targetToRevive);
-        cleanupOrphanedTimedStatModifiers(targetToRevive);
-        ctx.log('heal', `💉 【复活】${ctx.user.name} 消耗终极点数，复活了 ${targetToRevive.name}，恢复至 ${targetToRevive.maxHp}/${targetToRevive.maxHp} 生命！"你的职责尚未完成！"`);
+        ctx.log('heal', `💉 【复活完成】${targetToRevive.name} 已恢复至 ${targetToRevive.maxHp}/${targetToRevive.maxHp} 生命并重新加入战场！`);
         const revIdx = (ctx.fighters ?? []).findIndex((f) => f.id === targetToRevive.id);
         if (revIdx !== -1) ctx.fighters[revIdx] = targetToRevive;
       }
@@ -162,9 +180,10 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     name: '全面封锁', tag: SKILL_TAGS.SPECIAL, spellBlockMode: 'perHit', text: '🤖 {USER} 部署封锁装置...',
     onExecute: (ctx) => {
       const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      ctx.setVisualTargets(targets);
       const affected = targets.filter((e) => {
         if (consumeAreaStatusSpellBlock(ctx, e, '全面封锁')) return false;
-        const applied = ctx.applyStatus(e, 'STUN', 2);
+        const applied = ctx.applyStatus(e, { identityId: 'STUN', remainingTurns: 2 });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
         return applied;
@@ -178,12 +197,13 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     name: '蝰蛇神殿', tag: SKILL_TAGS.SPECIAL, spellBlockMode: 'perHit', text: '🐍 {USER} 展开毒幕...',
     onExecute: (ctx) => {
       const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      ctx.setVisualTargets(targets);
       const affected = targets.filter((e) => {
         if (consumeAreaStatusSpellBlock(ctx, e, '蝰蛇神殿')) return false;
         const results = [
-          ctx.applyStatus(e, 'POISON', 3),
-          ctx.applyStatus(e, 'BLIND', 3),
-          ctx.applyStatus(e, 'VALO_VIPER_DECAY', 3),
+          ctx.applyStatus(e, { identityId: 'POISON', remainingTurns: 3 }),
+          ctx.applyStatus(e, { identityId: 'BLIND', charges: 3 }),
+          ctx.applyStatus(e, { identityId: 'VALO_VIPER_DECAY', remainingTurns: 3 }),
         ];
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
@@ -198,14 +218,15 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     name: '全面压制', tag: SKILL_TAGS.SPECIAL, spellBlockMode: 'perHit', text: '🤖 {USER} 发射抑制脉冲...',
     onExecute: (ctx) => {
       const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      ctx.setVisualTargets(targets);
       const affected = targets.filter((e) => {
         if (consumeAreaStatusSpellBlock(ctx, e, '全面压制')) return false;
-        const applied = ctx.applyStatus(e, 'SILENCE', 3);
+        const applied = ctx.applyStatus(e, { identityId: 'SILENCE', remainingTurns: 3 });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
         return applied;
       });
-      grantStatus(ctx.user, 'RAGE', 3);
+      applyStatus(ctx.user, { identityId: 'RAGE', remainingTurns: 3 });
       ctx.log('skill', `🤖 【全面压制】抑制脉冲激活！${affected.length} 名敌人被【沉默】：${namesOf(affected)}，${ctx.user.name} 获得 3 回合狂暴！`);
       return true;
     },
@@ -215,9 +236,10 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     name: '神经取缔', tag: SKILL_TAGS.SPECIAL, spellBlockMode: 'perHit', text: '📷 {USER} 抛出帽子读取记忆...',
     onExecute: (ctx) => {
       const targets = (ctx.currentTargets ?? []).filter((e) => !e.isDead && !e.isDeadAnnounced && e.currentHp > 0);
+      ctx.setVisualTargets(targets);
       const affected = targets.filter((e) => {
         if (consumeAreaStatusSpellBlock(ctx, e, '神经取缔')) return false;
-        const applied = ctx.applyStatus(e, 'NEURAL_THEFT_DEBUFF', 2);
+        const applied = ctx.applyStatus(e, { identityId: 'NEURAL_THEFT_DEBUFF', remainingTurns: 2 });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === e.id);
         if (idx !== -1) ctx.fighters[idx] = e;
         return applied;

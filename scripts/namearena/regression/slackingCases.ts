@@ -1,5 +1,6 @@
 import type { Fighter } from '../../../lib/namearena/types';
 import {
+  applyTestStatus,
   applySlacking,
   assert,
   assertUnchanged,
@@ -50,7 +51,7 @@ export function runSlackingIsolation(): string[] {
     const sigua = makeFighter('丝瓜uli@A');
     const bunny = makeFighter('兔卷卷@B');
     const enemy = makeFighter('摸鱼抵挡测试靶@C');
-    enemy.status.push({ type: 'SPELL_BLOCK', duration: 1, sourceId: 'morphling_linken_sphere' });
+    applyTestStatus(enemy, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'morphling_linken_sphere' } });
     const logs: LogEntry[] = [];
     const engine = makeEngine(localProject.cloneFighters([sigua, bunny, enemy]), logs);
 
@@ -58,9 +59,9 @@ export function runSlackingIsolation(): string[] {
       engine.executeSkillAction('slacking', engine.fighters[0], engine.fighters[2]);
     });
 
-    assert(engine.fighters[0].status.some((status) => status.type === 'SYNERGY_SLACKING'), 'Enemy spell block should not prevent Sigua from leaving the field');
-    assert(engine.fighters[1].status.some((status) => status.type === 'SYNERGY_SLACKING'), 'Enemy spell block should not prevent Bunny from leaving the field');
-    assert(engine.fighters[2].status.some((status) => status.type === 'SPELL_BLOCK'), 'Slacking setup should not consume an unrelated enemy spell block');
+    assert(engine.fighters[0].statuses.some((status) => status.identityId === 'SYNERGY_SLACKING'), 'Enemy spell block should not prevent Sigua from leaving the field');
+    assert(engine.fighters[1].statuses.some((status) => status.identityId === 'SYNERGY_SLACKING'), 'Enemy spell block should not prevent Bunny from leaving the field');
+    assert(engine.fighters[2].statuses.some((status) => status.identityId === 'SPELL_BLOCK'), 'Slacking setup should not consume an unrelated enemy spell block');
     assert(!logs.some((entry) => entry.text.includes('挡下') && entry.text.includes('【寻找摸鱼搭子】')), 'Slacking setup should never be logged as blocked by an enemy defense');
     cases.push('enemy spell defense cannot block the slacking partnership');
   }
@@ -103,7 +104,7 @@ export function runSlackingIsolation(): string[] {
     bunny.job = 'VERSATILE_RABBIT';
     bunny.jobData.name = '百变兔娘';
     bunny.styleTurnCounter = 3;
-    bunny.status.push({ type: 'STYLE_FOOL', duration: 999 });
+    applyTestStatus(bunny, { identityId: 'STYLE_FOOL' });
     bunny.spd = 10000;
     const enemyA = makeFighter('测试敌人A@a');
     const enemyB = makeFighter('测试敌人B@b');

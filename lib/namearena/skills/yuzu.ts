@@ -1,6 +1,6 @@
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
 import { namerenaData as Data } from '../data';
-import { healFighter } from '../combatState';
+import { resolveHealing } from '../combatState';
 import { consumeOwlFoodForYuzu } from '../owlMechanics';
 import { namerenaJobs } from '../jobs';
 import { tryMomoStealYuzuMeal, type MomoRuntime } from '../momoMechanics';
@@ -19,6 +19,9 @@ import {
   yuzuWeaponSummary,
 } from '../yuzuMechanics';
 import { findActivePuppetProtector, isSelectableTargetFor } from '../targeting';
+import { findIdentity } from '../statusSystem';
+import { getStatusIdentityDefinition } from '../statusRegistry';
+import { getDamageRedirectKind, getResolvedDamageTotal } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -79,7 +82,7 @@ function resolveYuzuPuppetInterception(ctx: SkillContext, intendedTarget: Fighte
 
 function chooseYuzuTarget(ctx: SkillContext, plan: YuzuAttackPlan): YuzuTargetSelection | undefined {
   const runtime = yuzuRuntime(ctx);
-  const charmSourceId = ctx.user.status.find((status) => status.type === 'CHARMED')?.applierId;
+  const charmSourceId = findIdentity(ctx.user, 'CHARMED')?.attribution.applierId;
   const charmAlternatives = charmSourceId
     ? enemyTargets(ctx).filter((fighter) => fighter.id !== charmSourceId)
     : [];
@@ -128,10 +131,19 @@ function applyRandomYuzuDebuff(ctx: SkillContext, target: Fighter): void {
     ['YUZU_ATK_DOWN', 2, '攻击力下降'],
     ['YUZU_DEF_DOWN', 2, '防御力下降'],
     ['YUZU_RES_DOWN', 2, '魔抗下降'],
-    ['BLEED', 3, '一层流血'],
+    ['BLEED', 3, '3 次流血'],
   ] as const;
-  const [status, duration, label] = pool[Math.floor(Math.random() * pool.length)] ?? pool[0];
-  if (ctx.applyStatus(target, status, duration, { sourceId: ctx.user.id })) {
+  const [identityId, value, label] = pool[Math.floor(Math.random() * pool.length)] ?? pool[0];
+  const lifecycle = identityId === 'BLEED'
+    ? { count: value }
+    : getStatusIdentityDefinition(identityId).expiresOn === 'trigger'
+      ? { charges: value }
+      : { remainingTurns: value };
+  if (ctx.applyStatus(target, {
+    identityId,
+    ...lifecycle,
+    attribution: { effectSourceId: ctx.user.id },
+  })) {
     ctx.log('debuff', `🪞 【地狱刑具】${target.name} 被追加 ${label}。`);
   }
 }
@@ -150,8 +162,11 @@ function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAt
   ctx.user.yuzuLastWeapon = weapon.name;
 
   const baseRoll = 0.9 + Math.random() * 0.2;
-  const raw = ctx.user.atk * 0.86 + ctx.user.wis * 0.1 + ctx.user.maxHp * 0.016;
-  const defended = Math.max(1, raw * baseRoll - target.def * 0.28);
+  const effectiveAtk = ctx.getEffectiveStat(ctx.user, 'atk');
+  const effectiveWis = ctx.getEffectiveStat(ctx.user, 'wis');
+  const effectiveDef = ctx.getEffectiveStat(target, 'def');
+  const raw = effectiveAtk * 0.86 + effectiveWis * 0.1 + ctx.user.maxHp * 0.016;
+  const defended = Math.max(1, raw * baseRoll - effectiveDef * 0.28);
   const preferredBonus = plan.preferredWeapon === weapon.id ? (plan.preferredBonus ?? 0) : 0;
   let multiplier = weapon.attackMultiplier * (1 + (plan.damageBonus ?? 0) + preferredBonus);
   let isMarkedPhaseThreeTarget = false;
@@ -168,11 +183,11 @@ function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAt
   let amount = Math.max(1, Math.floor(defended * multiplier));
   if (isMarkedPhaseThreeTarget) {
     if (plan.furioso) {
-      const selfStatFloor = ctx.user.atk * YUZU_FURIOSO_ATK_FLOOR_RATIO + ctx.user.wis * YUZU_FURIOSO_WIS_FLOOR_RATIO;
+      const selfStatFloor = effectiveAtk * YUZU_FURIOSO_ATK_FLOOR_RATIO + effectiveWis * YUZU_FURIOSO_WIS_FLOOR_RATIO;
       amount = Math.max(amount, Math.floor(selfStatFloor));
     } else {
       const maxHpFloor = target.maxHp * YUZU_MARKED_MAX_HP_FLOOR_RATIO;
-      const statFloor = ctx.user.atk * YUZU_MARKED_ATK_FLOOR_RATIO;
+      const statFloor = effectiveAtk * YUZU_MARKED_ATK_FLOOR_RATIO;
       amount = Math.max(amount, Math.floor(maxHpFloor + statFloor));
     }
   }
@@ -193,21 +208,28 @@ function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon):
     turnCount: ctx.turnCount,
     getTeamId: ctx.getTeamId,
     isActiveCombatant: (fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
-    log: (type, text) => ctx.log(type, text),
+    log: (type, text, metadata) => ctx.log(type, text, metadata),
     syncHpPct: (fighter) => {
       fighter.hpPct = fighter.maxHp > 0 ? fighter.currentHp / fighter.maxHp : 0;
     },
     applyDamage: ctx.applyDamage,
     applyStatus: ctx.applyStatus,
+    dispelStatusEffects: ctx.dispelStatusEffects,
     markDefeated: ctx.markDefeated,
     flushDeferredDamageEvents: () => ctx.flushDeferredDamageEvents?.(),
   };
   if (tryMomoStealYuzuMeal(momoRuntime, ctx.user)) return;
 
   const healAmount = Math.floor(ctx.user.maxHp * healRatio);
-  const healed = healFighter(ctx.user, healAmount, ctx.log);
-  if (healed > 0) {
-    ctx.log('heal', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，恢复 ${healed} 点生命（按最大生命的 ${Math.round(healRatio * 100)}% 计算），随后继续攻击！`);
+  const healing = resolveHealing(ctx.user, healAmount, {
+    kind: 'direct',
+    sourceId: '拼好饭',
+    healer: ctx.user,
+  }, ctx.log);
+  if (healing.actual > 0) {
+    ctx.log('heal', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，恢复 ${healing.actual} 点生命（按最大生命的 ${Math.round(healRatio * 100)}% 计算），随后继续攻击！`);
+  } else if (healing.outcome === 'blocked') {
+    ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但治疗被完全阻止，随后继续攻击！`);
   } else {
     ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但生命已满，随后继续攻击！`);
   }
@@ -244,38 +266,39 @@ function executeYuzuHit(
     respectDefenses: true,
   };
   const actual = ctx.applyDamage(target, amount + fatigueBonus, 'skill', false, ctx.user, options);
-  const redirectedByJoker = !!options.redirectedByJoker;
-  const redirectedByOriginiumCore = !!options.redirectedByOriginiumCore;
-  const redirectedByOwlEmperor = !!options.redirectedByOwlEmperor;
-  const redirectedByMomo = !!options.redirectedByMomo;
-  const redirected = redirectedByJoker || redirectedByOriginiumCore || redirectedByOwlEmperor || redirectedByMomo;
-  const resolvedActual = redirectedByJoker
-    ? options.redirectedJokerDamage ?? actual
-    : redirectedByOriginiumCore
-      ? options.redirectedOriginiumDamage ?? actual
-      : redirectedByOwlEmperor
-        ? options.redirectedOwlEmperorDamage ?? actual
-        : redirectedByMomo
-          ? options.redirectedMomoDamage ?? actual
-          : actual;
+  const redirectKind = getDamageRedirectKind(options);
+  const redirected = redirectKind !== null;
+  const resolvedActual = getResolvedDamageTotal(actual, options);
 
   const hitLabel = `${index + 1}/${plan.hits}`;
-  if (redirectedByJoker) {
+  const followUpVisual = index > 0 ? {
+    targetIds: [target.id],
+    visualCue: {
+      kind: 'combat_fx' as const,
+      sourceId: ctx.user.id,
+      targetIds: [target.id],
+    },
+  } : { targetIds: [target.id] };
+  if (redirectKind === 'joker') {
     ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
       ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移目标实际承受 ${resolvedActual} 点伤害。`
-      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移后仍被化解，没有单位损失生命。`);
-  } else if (redirectedByOriginiumCore) {
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，刀路被随机恶作剧带偏，转移后仍被化解，没有单位损失生命。`, followUpVisual);
+  } else if (redirectKind === 'originium') {
     ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
       ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被转入源石网络，共对源石结晶结算 ${resolvedActual} 点伤害；阿喃那本体未受伤。`
-      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，冲击被转入源石网络，但源石结晶均未损失生命。`);
-  } else if (redirectedByOwlEmperor) {
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，冲击被转入源石网络，但源石结晶均未损失生命。`, followUpVisual);
+  } else if (redirectKind === 'owl_emperor') {
     ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
       ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，斩向 ${target.name} 的冲击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`
-      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，冲击被帝王之征全数接走，但龙未损失生命。`);
-  } else if (redirectedByMomo) {
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，冲击被帝王之征全数接走，但龙未损失生命。`, followUpVisual);
+  } else if (redirectKind === 'momo') {
     ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
       ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【|OMO】把伤害均摊给舰长，舰长合计损失 ${resolvedActual} 点生命。`
-      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【|OMO】完成均摊，但舰长均未损失生命。`);
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【|OMO】完成均摊，但舰长均未损失生命。`, followUpVisual);
+  } else if (redirectKind === 'yuzu') {
+    ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
+      ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【镜界分摊】把伤害交给队友，队友合计损失 ${resolvedActual} 点生命。`
+      : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【镜界分摊】把伤害交给队友，但队友均未损失生命。`, followUpVisual);
   } else if (resolvedActual <= 0) {
     const outcome = options.resolution?.outcome;
     const outcomeText = outcome === 'spell_blocked'
@@ -287,11 +310,11 @@ function executeYuzuHit(
           : outcome === 'redistributed'
             ? `${target.name} 将本击伤害全部分摊给了队友，本体未损失生命`
             : outcome === 'lockblood'
-              ? `${target.name} 的阶段锁血保护化解了本次致命冲击`
+              ? `${target.name} 的${options.resolution?.lockbloodLabel ?? options.lockbloodLabel ?? '锁血保护'}化解了本次致命冲击`
               : `${target.name} 化解了本击，没有损失生命`;
-    ctx.log('info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${outcomeText}。`);
+    ctx.log('info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${outcomeText}。`, followUpVisual);
   } else {
-    ctx.log(resolvedActual > 0 ? 'skill' : 'info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，命中 ${target.name}，实际造成 ${resolvedActual} 点伤害。`);
+    ctx.log(resolvedActual > 0 ? 'skill' : 'info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，命中 ${target.name}，实际造成 ${resolvedActual} 点伤害。`, followUpVisual);
   }
   if (resolvedActual > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) {
     ctx.flushDeferredDamageEvents?.();
@@ -303,7 +326,7 @@ function executeYuzuHit(
 
   if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     ctx.markDefeated(target, {
-      message: `💀 【${plan.actionName}】${target.name} 被 ${ctx.user.name} 的镜界武器处刑！`,
+      message: `💀 【${plan.actionName}】${target.name} 被 ${ctx.user.name} 的镜界武器击败！`,
       killer: ctx.user,
     });
   }
@@ -317,6 +340,10 @@ function executeYuzuHit(
 }
 
 function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean {
+  const firstTargetSelection = chooseYuzuTarget(ctx, plan);
+  ctx.setVisualTargets(plan.group
+    ? enemyTargets(ctx)
+    : firstTargetSelection ? [firstTargetSelection.target] : []);
   ctx.log('skill', `🪞 【${plan.actionName}】${ctx.user.name}：${plan.quote}`);
   let markedTargetHitThisSkill: Fighter | undefined;
   const fatigueBonus = getFatigueDamageBonusForTurn(ctx.turnCount);
@@ -328,9 +355,9 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
   };
 
   for (let i = 0; i < plan.hits; i += 1) {
-    const targetSelection = chooseYuzuTarget(ctx, plan);
+    const targetSelection = i === 0 ? firstTargetSelection : chooseYuzuTarget(ctx, plan);
     if (!targetSelection) {
-      ctx.log('info', `🪞 【${plan.actionName}】镜界里已经找不到可以处刑的目标。`);
+      ctx.log('info', `🪞 【${plan.actionName}】镜界里已经找不到可以攻击的目标。`);
       registerMarkedSkillIfNeeded();
       return true;
     }
@@ -349,7 +376,7 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
     const targetJobBeforeHit = target.job;
     const hitResult = executeYuzuHit(ctx, target, protectedTarget, plan, i, forcedWeapon, fatigueBonus);
     if (i < plan.hits - 1 && isActive(target) && target.job !== targetJobBeforeHit) {
-      ctx.log('info', `🪞 【镜界追击】${target.name} 在本击结算后以【${target.jobData.name}】形态重返战场，${ctx.user.name} 的后续连击重新锁定该目标！`);
+      ctx.log('info', `🪞 【镜界追击】${target.name} 在本击结算中重构为【${target.jobData.name}】，${ctx.user.name} 重新确认目标后继续后续连击！`);
     }
     if (hitResult.hitMarkedTarget) markedTargetHitThisSkill = protectedTarget ?? target;
     if (!hitResult.canContinue) {

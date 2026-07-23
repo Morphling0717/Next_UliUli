@@ -1,5 +1,4 @@
 import {
-  addStatsToFighter,
   EMOTE_DEATH_GAIN_KEYS,
   type EmoteStatMap,
   formatEmoteStats,
@@ -7,18 +6,16 @@ import {
   getEmoteAdaptTotal,
   getEmoteClaimableKills,
   grantEmoteAdaptStats,
-  removeStatsFromFighter,
 } from '../emoteMechanics';
 import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
-import { withTimedStatModifiersSuspended } from '../statModifiers';
-import { grantStatus } from '../defenseStatus';
+import { hasIdentity, queryMechanic, removeBarriers, removeEffects, applyStatus } from '../statusSystem';
 
 const EMOTE_DEATH_REVIVE_TICKS = 5;
 const EMOTE_DEATH_ADAPT_RATIO = 0.0625;
 
 function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((status) => status.type === type);
+  return hasIdentity(fighter, type);
 }
 
 function activePlayerCandidates(runtime: CharacterHookRuntime, emote: Fighter): Fighter[] {
@@ -52,9 +49,7 @@ function findKillerFallback(runtime: CharacterHookRuntime, fighter: Fighter, kil
 
 function clearFamiliarMarks(runtime: CharacterHookRuntime, emote: Fighter): void {
   runtime.fighters.forEach((fighter) => {
-    fighter.status = fighter.status.filter((status) =>
-      !(status.type === 'EMOTE_FAMILIAR' && status.sourceId === emote.id),
-    );
+    removeEffects(fighter, { identityIds: ['EMOTE_FAMILIAR'], effectSourceIds: [emote.id], reason: 'scripted' });
   });
   emote.emoteFamiliarTargetId = undefined;
 }
@@ -65,7 +60,9 @@ function findPreferredOwner(runtime: CharacterHookRuntime, emote: Fighter, candi
     : undefined;
   if (byId) return byId;
   return candidates.find((candidate) =>
-    candidate.status.some((status) => status.type === 'EMOTE_FAMILIAR' && status.sourceId === emote.id),
+    queryMechanic(candidate, 'EMOTE_FAMILIAR').entries.some((status) =>
+      status.attribution.effectSourceId === emote.id,
+    ),
   );
 }
 
@@ -76,10 +73,13 @@ function removeOwnerBonus(runtime: CharacterHookRuntime, emote: Fighter, reason 
 
   const owner = runtime.fighters.find((candidate) => candidate.id === ownerId);
   if (owner) {
-    withTimedStatModifiersSuspended(owner, () => removeStatsFromFighter(owner, bonus));
-    owner.status = owner.status.filter((status) =>
-      !(status.type === 'EMOTE_OWNER_BONUS' && status.sourceId === emote.id),
-    );
+    const maxHpBonus = Math.max(0, Math.floor(bonus.maxHp ?? 0));
+    if (maxHpBonus > 0) {
+      owner.maxHp = Math.max(1, owner.maxHp - maxHpBonus);
+      owner.currentHp = Math.min(owner.currentHp, owner.maxHp);
+      runtime.syncHpPct(owner);
+    }
+    removeEffects(owner, { identityIds: ['EMOTE_OWNER_BONUS'], effectSourceIds: [emote.id], reason: 'scripted' });
     runtime.log('info', `📜 【认主补偿收回】${emote.name} ${reason}，${owner.name} 身上的临时补偿被移除（${formatEmoteStats(bonus)}）。`);
   }
 
@@ -90,11 +90,20 @@ function removeOwnerBonus(runtime: CharacterHookRuntime, emote: Fighter, reason 
 
 function applyOwnerBonus(runtime: CharacterHookRuntime, emote: Fighter, owner: Fighter, bonus: EmoteStatMap): void {
   removeOwnerBonus(runtime, emote);
-  withTimedStatModifiersSuspended(owner, () => addStatsToFighter(owner, bonus));
-  owner.status = owner.status.filter((status) =>
-    !(status.type === 'EMOTE_OWNER_BONUS' && status.sourceId === emote.id),
-  );
-  grantStatus(owner, 'EMOTE_OWNER_BONUS', 999, emote.id);
+  const maxHpBonus = Math.max(0, Math.floor(bonus.maxHp ?? 0));
+  if (maxHpBonus > 0) {
+    owner.maxHp += maxHpBonus;
+    owner.currentHp += maxHpBonus;
+    runtime.syncHpPct(owner);
+  }
+  removeEffects(owner, { identityIds: ['EMOTE_OWNER_BONUS'], effectSourceIds: [emote.id], reason: 'replaced' });
+  applyStatus(owner, {
+    identityId: 'EMOTE_OWNER_BONUS',
+    componentPotencies: Object.fromEntries(
+      (['atk', 'def', 'spd', 'agl', 'mag', 'res', 'wis'] as const).map((key) => [`${key.toUpperCase()}_FLAT_UP`, bonus[key]]),
+    ),
+    attribution: { effectSourceId: emote.id, applierId: emote.id, applierName: emote.name },
+  });
   emote.emoteOwnerId = owner.id;
   emote.emoteOwnerBonus = bonus;
   runtime.log('buff', `📜 【认主补偿】${owner.name} 临时获得本次击杀者 6.25% 生命与属性（${formatEmoteStats(bonus)}）；这是死亡认主补偿，${emote.name} 的累计适应值不会借出。`);
@@ -113,18 +122,35 @@ function finalizeEmoteTrueDeath(runtime: CharacterHookRuntime, emote: Fighter, r
 }
 
 function reviveEmote(runtime: CharacterHookRuntime, emote: Fighter): void {
-  removeOwnerBonus(runtime, emote);
-  clearFamiliarMarks(runtime, emote);
-  emote.isDead = false;
-  emote.isDeadAnnounced = false;
-  emote.defeatHooksResolved = false;
-  emote.emoteReviveTurns = 0;
-  emote.emoteReviveAppliedTurn = undefined;
-  emote.emoteFinalDead = false;
-  emote.currentHp = Math.max(1, Math.floor(emote.maxHp * 0.82));
-  emote.status = [];
-  runtime.syncHpPct(emote);
-  runtime.log('buff', `🧿 【四处认主型魔虚罗】${emote.name} 借着场上“认主账本余额为 0”的锚点复活至 82% 生命：“快让我看血流成河，布瑠布由良由良”。累计适应值仍然保留（总和 ${getEmoteAdaptTotal(emote)}）。`);
+  runtime.runReactionAction(emote, {
+    skillId: 'emote_owner_return',
+    skillName: '认主返场',
+    presentation: 'skill',
+    targets: [emote],
+  }, () => {
+    removeOwnerBonus(runtime, emote);
+    clearFamiliarMarks(runtime, emote);
+    emote.isDead = false;
+    emote.isDeadAnnounced = false;
+    emote.defeatHooksResolved = false;
+    emote.emoteReviveTurns = 0;
+    emote.emoteReviveAppliedTurn = undefined;
+    emote.emoteFinalDead = false;
+    emote.currentHp = Math.max(1, Math.floor(emote.maxHp * 0.82));
+    runtime.log('buff', `🧿 【四处认主型魔虚罗】场上“认主账本余额为 0”的锚点响应，${emote.name} 开始复活并重整状态！`, {
+      actorId: emote.id,
+      actorName: emote.name,
+      targetIds: [emote.id],
+    });
+    removeEffects(emote, { reason: 'revive' });
+    removeBarriers(emote);
+    runtime.syncHpPct(emote);
+    runtime.log('buff', `🧿 【认主返场】${emote.name} 已复活至 82% 生命：“快让我看血流成河，布瑠布由良由良”。累计适应值仍然保留（总和 ${getEmoteAdaptTotal(emote)}）。`, {
+      actorId: emote.id,
+      actorName: emote.name,
+      targetIds: [emote.id],
+    });
+  });
 }
 
 function tryFinalOwnerChallenge(runtime: CharacterHookRuntime, emote: Fighter, alivePlayers: Fighter[]): boolean {

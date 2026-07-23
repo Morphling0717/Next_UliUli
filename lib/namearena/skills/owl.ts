@@ -1,10 +1,10 @@
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
-import { healFighter, isActiveCombatant } from '../combatState';
+import { isActiveCombatant, resolveHealing } from '../combatState';
 import { namerenaData as Data } from '../data';
 import { namerenaJobs } from '../jobs';
-import { grantStatus } from '../defenseStatus';
+
 import { isSelectableTargetFor } from '../targeting';
-import { CONTROL_STATUS_TYPES, isStatusType } from '../statusRules';
+import { getStatusIdentityIdsByTag } from '../statusRegistry';
 import {
   addOwlWildStack,
   applyOwlRiverMark,
@@ -15,6 +15,8 @@ import {
   spawnOwlZhao,
   type OwlRuntime,
 } from '../owlMechanics';
+import { applyStatus, hasIdentity } from '../statusSystem';
+import { getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -25,32 +27,16 @@ function asOwlRuntime(ctx: SkillContext): OwlRuntime {
     turnCount: ctx.turnCount,
     getTeamId: ctx.getTeamId,
     isActiveCombatant,
-    log: (type, text) => ctx.log(type, text),
+    log: (type, text, metadata) => ctx.log(type, text, metadata),
     syncHpPct: (fighter) => {
       fighter.hpPct = fighter.maxHp > 0 ? fighter.currentHp / fighter.maxHp : 0;
     },
     applyDamage: ctx.applyDamage,
     applyStatus: ctx.applyStatus,
+    dispelStatusEffects: ctx.dispelStatusEffects,
     markDefeated: ctx.markDefeated,
     flushDeferredDamageEvents: () => ctx.flushDeferredDamageEvents?.(),
   };
-}
-
-function isRedirected(options: DamageApplicationOptions): boolean {
-  return !!(
-    options.redirectedByJoker ||
-    options.redirectedByOriginiumCore ||
-    options.redirectedByOwlEmperor ||
-    options.redirectedByMomo
-  );
-}
-
-function resolvedDamage(actual: number, options: DamageApplicationOptions): number {
-  if (options.redirectedByJoker) return options.redirectedJokerDamage ?? actual;
-  if (options.redirectedByOriginiumCore) return options.redirectedOriginiumDamage ?? actual;
-  if (options.redirectedByOwlEmperor) return options.redirectedOwlEmperorDamage ?? actual;
-  if (options.redirectedByMomo) return options.redirectedMomoDamage ?? actual;
-  return actual;
 }
 
 function applyOwlDamage(
@@ -67,8 +53,8 @@ function applyOwlDamage(
     ...options,
   };
   const actual = ctx.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, ctx.user, damageOptions);
-  const redirected = isRedirected(damageOptions);
-  const resolved = resolvedDamage(actual, damageOptions);
+  const redirected = isDamageRedirected(damageOptions);
+  const resolved = getResolvedDamageTotal(actual, damageOptions);
   return { actual: resolved, redirected, landed: actual > 0 && !redirected };
 }
 
@@ -99,18 +85,19 @@ function selectableEnemies(ctx: SkillContext): Fighter[] {
 
 function canReceiveOwlRiverMark(fighter: Fighter): boolean {
   if (fighter.cannotAct) return false;
-  return !fighter.status.some((status) =>
-    isStatusType(status.type, CONTROL_STATUS_TYPES) ||
-    status.type === 'OWL_FORM_DEFEAT' ||
-    status.type === 'OWL_ENJOYING' ||
-    status.type === 'OWL_SPALTER_DOLL',
-  );
+  return ![
+    ...getStatusIdentityIdsByTag('control'),
+    'OWL_FORM_DEFEAT',
+    'OWL_ENJOYING',
+    'OWL_SPALTER_DOLL',
+  ].some((identityId) => hasIdentity(fighter, identityId));
 }
 
 function executeYilingFire(ctx: SkillContext): boolean {
   const targets = selectableEnemies(ctx);
+  ctx.setVisualTargets(targets);
   ctx.log('skill', `🔥 【夷陵之火】${ctx.user.name}：“好火啊，这火比夷陵之火还要好啊！”烈焰扑向 ${targets.length} 名敌人！`);
-  const raw = ctx.user.mag * 1.25 + ctx.user.wis * 0.55;
+  const raw = ctx.getEffectiveStat(ctx.user, 'mag') * 1.25 + ctx.getEffectiveStat(ctx.user, 'wis') * 0.55;
   targets.forEach((target) => {
     if (!isActiveCombatant(target)) return;
     const result = applyOwlDamage(ctx, target, raw, '夷陵之火');
@@ -123,8 +110,8 @@ function executeYilingFire(ctx: SkillContext): boolean {
       );
     }
     settleOwlDamage(ctx, target, result, '夷陵之火');
-    if (result.landed && isActiveCombatant(target) && ctx.applyStatus(target, 'BURN', 3, { sourceId: ctx.user.id, effectName: '夷陵之火' })) {
-      ctx.log('poison', `🔥 ${target.name} 被【夷陵之火】点燃，将灼烧 3 个全局行动回合。`);
+    if (result.landed && isActiveCombatant(target) && ctx.applyStatus(target, { identityId: 'BURN', count: 3, effectName: '夷陵之火', attribution: { effectSourceId: ctx.user.id } })) {
+      ctx.log('poison', `🔥 ${target.name} 被【夷陵之火】点燃，火势将在每个大回合结束时结算。`);
     }
   });
   return true;
@@ -171,11 +158,21 @@ function executeBumperHarvest(ctx: SkillContext): boolean {
     fighter.id !== ctx.user.id && !fighter.isNpc && isActiveCombatant(fighter),
   );
   const speaker = speakers[Math.floor(Math.random() * speakers.length)];
-  const selfHeal = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.2), ctx.log);
-  const dragonHeal = emperor ? healFighter(emperor, Math.floor(emperor.maxHp * 0.2), ctx.log) : 0;
-  const selfText = selfHeal > 0 ? `${ctx.user.name} 恢复 ${selfHeal} 点生命` : `${ctx.user.name} 生命已满`;
+  const selfHealing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * 0.2), {}, ctx.log);
+  const dragonHealing = emperor
+    ? resolveHealing(emperor, Math.floor(emperor.maxHp * 0.2), {}, ctx.log)
+    : undefined;
+  const selfText = selfHealing.actual > 0
+    ? `${ctx.user.name} 恢复 ${selfHealing.actual} 点生命`
+    : selfHealing.outcome === 'blocked'
+      ? `${ctx.user.name} 的治疗被完全阻止`
+      : `${ctx.user.name} 生命已满`;
   const dragonText = emperor
-    ? dragonHeal > 0 ? `${emperor.name} 恢复 ${dragonHeal} 点生命` : `${emperor.name} 生命已满`
+    ? dragonHealing && dragonHealing.actual > 0
+      ? `${emperor.name} 恢复 ${dragonHealing.actual} 点生命`
+      : dragonHealing?.outcome === 'blocked'
+        ? `${emperor.name} 的治疗被完全阻止`
+        : `${emperor.name} 生命已满`
     : '帝王之征已不在场';
   ctx.log('heal', `🌾 【五谷丰登】${ctx.user.name}：“你走了，我们吃什么？”${speaker ? `${speaker.name}：“是啊，吃什么？”` : ''}${selfText}，${dragonText}。`);
   return true;
@@ -194,11 +191,14 @@ function executeDesk(ctx: SkillContext): boolean {
 }
 
 function executeEnjoy(ctx: SkillContext): boolean {
-  const healed = healFighter(ctx.user, Math.floor(ctx.user.maxHp * 0.28), ctx.log);
-  grantStatus(ctx.user, 'OWL_ENJOYING', 3, ctx.user.id);
-  ctx.log('heal', healed > 0
-    ? `🎶 【乐不思蜀】${ctx.user.name}：“我打了一辈子仗就不能享受享受吗！接着奏乐，接着舞！”恢复 ${healed} 点生命，接下来 3 回合不进行攻击。`
-    : `🎶 【乐不思蜀】${ctx.user.name}：“我打了一辈子仗就不能享受享受吗！接着奏乐，接着舞！”生命已满，接下来 3 回合不进行攻击。`);
+  const healing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * 0.28), {}, ctx.log);
+  applyStatus(ctx.user, { identityId: 'OWL_ENJOYING', remainingTurns: 3, attribution: { effectSourceId: ctx.user.id } });
+  const recoveryText = healing.actual > 0
+    ? `恢复 ${healing.actual} 点生命`
+    : healing.outcome === 'blocked'
+      ? '治疗被完全阻止'
+      : '生命已满';
+  ctx.log(healing.outcome === 'blocked' ? 'info' : 'heal', `🎶 【乐不思蜀】${ctx.user.name}：“我打了一辈子仗就不能享受享受吗！接着奏乐，接着舞！”${recoveryText}，接下来 3 回合不进行攻击。`);
   return true;
 }
 
@@ -219,9 +219,15 @@ function executeBoneScrape(ctx: SkillContext): boolean {
   };
   const actualCost = ctx.applyDamage(ctx.user, rawCost, 'owl_cost', true, ctx.user, options);
   if (actualCost > 0 || (ctx.user.pendingDamageEvents?.length ?? 0) > 0) ctx.flushDeferredDamageEvents?.();
-  const healed = emperor ? healFighter(emperor, Math.floor(actualCost * 1.6), ctx.log) : 0;
+  const healing = emperor
+    ? resolveHealing(emperor, Math.floor(actualCost * 1.6), {}, ctx.log)
+    : undefined;
   const emperorText = emperor
-    ? healed > 0 ? `并为 ${emperor.name} 恢复 ${healed} 点` : `，${emperor.name} 生命已满`
+    ? healing && healing.actual > 0
+      ? `并为 ${emperor.name} 恢复 ${healing.actual} 点`
+      : healing?.outcome === 'blocked'
+        ? `，但为 ${emperor.name} 进行的治疗被完全阻止`
+        : `，${emperor.name} 生命已满`
     : '，但已经没有帝王之征可以治疗';
   ctx.log('skill', `🩺 【刮骨】${speaker ? `${speaker.name}：“三日之内不可活动这只伤臂。”` : ''}${ctx.user.name}：→ ↑ ↙ ↗ → ↖ ↻ ↗，自损 ${actualCost} 点生命${emperorText}。`);
   if (ctx.user.currentHp <= 0 && !ctx.user.isDead && !ctx.user.isDeadAnnounced) {
@@ -236,20 +242,22 @@ function executeZhaoRampage(ctx: SkillContext): boolean {
     isActiveCombatant(fighter) &&
     !(fighter.isPuruisaishi && (fighter.puruisaishiPhase ?? 1) <= 1) &&
     (fighter.untargetableUntilTurn ?? -1) < ctx.turnCount &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    !hasIdentity(fighter, 'SYNERGY_SLACKING'),
   );
   const target = targets[Math.floor(Math.random() * targets.length)];
   if (!target) return true;
+  ctx.setVisualTargets([target]);
+  ctx.log('skill', `🏇 【无差别冲阵】${ctx.user.name} 不分敌我，径直冲向 ${target.name}！`);
   if (ctx.handleWaitCounter?.(target, ctx.user, '长坂冲阵')) return true;
   if (ctx.handleCounterStatus?.(target, ctx.user) || !isActiveCombatant(ctx.user)) return true;
-  const raw = ctx.user.atk * 1.45 + ctx.user.spd * 0.45;
+  const raw = ctx.getEffectiveStat(ctx.user, 'atk') * 1.45 + ctx.getEffectiveStat(ctx.user, 'spd') * 0.45;
   const result = applyOwlDamage(ctx, target, raw, '长坂冲阵');
   if (!result.redirected) {
     ctx.log(
       result.actual > 0 ? 'skill' : 'info',
       result.actual > 0
-        ? `🏇 【无差别冲阵】${ctx.user.name} 不分敌我冲向 ${target.name}，实际造成 ${result.actual} 点伤害！`
-        : `🏇 【无差别冲阵】${ctx.user.name} 冲向 ${target.name}，但未能造成生命伤害。`,
+        ? `🏇 ${ctx.user.name} 的冲阵命中 ${target.name}，实际造成 ${result.actual} 点伤害！`
+        : `🏇 ${ctx.user.name} 的冲阵被 ${target.name} 化解，未造成生命伤害。`,
     );
   }
   settleOwlDamage(ctx, target, result, '长坂冲阵');
@@ -257,16 +265,20 @@ function executeZhaoRampage(ctx: SkillContext): boolean {
 }
 
 function executeAtomicBreath(ctx: SkillContext): boolean {
+  ctx.setVisualTargets([ctx.target]);
+  ctx.log('skill', `🐲 【原子吐息】${ctx.user.name} 将原子能压缩成龙息，锁定 ${ctx.target.name}！`);
   if (ctx.handleWaitCounter?.(ctx.target, ctx.user, '原子吐息')) return true;
   if (ctx.handleCounterStatus?.(ctx.target, ctx.user) || !isActiveCombatant(ctx.user)) return true;
-  const raw = ctx.user.mag * 1.75 + ctx.user.atk * 0.75 + ctx.user.wis * 0.3;
+  const raw = ctx.getEffectiveStat(ctx.user, 'mag') * 1.75 +
+    ctx.getEffectiveStat(ctx.user, 'atk') * 0.75 +
+    ctx.getEffectiveStat(ctx.user, 'wis') * 0.3;
   const result = applyOwlDamage(ctx, ctx.target, raw, '原子吐息');
   if (!result.redirected) {
     ctx.log(
       result.actual > 0 ? 'skill' : 'info',
       result.actual > 0
-        ? `🐲 【原子吐息】${ctx.user.name} 将原子能压缩成龙息轰向 ${ctx.target.name}，实际造成 ${result.actual} 点混合伤害！`
-        : `🐲 【原子吐息】${ctx.user.name} 轰向 ${ctx.target.name}，龙息被完全化解，未造成生命伤害。`,
+        ? `🐲 原子龙息命中 ${ctx.target.name}，实际造成 ${result.actual} 点混合伤害！`
+        : `🐲 ${ctx.target.name} 完全化解了原子龙息，未受到生命伤害。`,
     );
   }
   settleOwlDamage(ctx, ctx.target, result, '原子吐息');
@@ -281,10 +293,11 @@ function executeDragonShock(ctx: SkillContext): boolean {
     const [target] = pool.splice(index, 1);
     if (target) targets.push(target);
   }
+  ctx.setVisualTargets(targets);
   ctx.log('skill', `🐲 【龙威震荡】${ctx.user.name} 振翼释放帝王威压，震向 ${targets.map((target) => target.name).join('、')}！`);
   targets.forEach((target) => {
     if (!isActiveCombatant(target)) return;
-    const raw = ctx.user.mag * 0.9 + ctx.user.atk * 0.45;
+    const raw = ctx.getEffectiveStat(ctx.user, 'mag') * 0.9 + ctx.getEffectiveStat(ctx.user, 'atk') * 0.45;
     const result = applyOwlDamage(ctx, target, raw, '龙威震荡');
     if (!result.redirected) {
       ctx.log(
@@ -295,7 +308,7 @@ function executeDragonShock(ctx: SkillContext): boolean {
       );
     }
     settleOwlDamage(ctx, target, result, '龙威震荡');
-    if (result.landed && isActiveCombatant(target) && ctx.applyStatus(target, 'OWL_DRAGON_SLOW', 2, { sourceId: ctx.user.id, effectName: '龙威震荡' })) {
+    if (result.landed && isActiveCombatant(target) && ctx.applyStatus(target, { identityId: 'OWL_DRAGON_SLOW', remainingTurns: 2, effectName: '龙威震荡', attribution: { effectSourceId: ctx.user.id } })) {
       ctx.log('debuff', `🐲 ${target.name} 被龙威震慑，行动速度下降 2 回合。`);
     }
   });
@@ -345,7 +358,7 @@ export const owlSkills: Record<string, SkillDefinition> = {
   },
   owl_enjoy: { name: '乐不思蜀', tag: SKILL_TAGS.HEAL, rate: 1, onExecute: executeEnjoy },
   owl_great_wind: {
-    name: '大风起兮云飞扬', tag: SKILL_TAGS.MAG, rate: 1, mult: 1.8, status: 'OWL_EVADE_DOWN',
+    name: '大风起兮云飞扬', tag: SKILL_TAGS.MAG, rate: 1, mult: 1.8, statusApplications: [{ identityId: 'OWL_EVADE_DOWN' }],
     text: '🍃 【大风起兮云飞扬】{USER}：“好风啊，风从虎，云从龙，龙虎英雄傲苍穹！”风刃击中 {TARGET}，造成 {VAL} 点伤害并扰乱闪避！',
   },
   owl_bone_scrape: { name: '刮骨', tag: SKILL_TAGS.HEAL, rate: 1, onExecute: executeBoneScrape },

@@ -1,4 +1,7 @@
 import type { Fighter } from './types';
+import { getAggroMultiplier, getEffectiveCombatStat } from './statusMechanics';
+import { getPuruisaishiBarrierTotal } from './puruisaishiMechanics';
+import { findIdentity, hasIdentity, hasMechanic } from './statusSystem';
 
 export interface TargetingRuntime {
   fighters: Fighter[];
@@ -16,7 +19,7 @@ export interface TargetSelectionResult {
 type OriginiumTargetingState = {
   eventActive: boolean;
   phaseTwo: boolean;
-  puruisaishiShield: number;
+  puruisaishiBarrier: number;
   activeCrystalCount: number;
   coreActive: boolean;
 };
@@ -40,7 +43,7 @@ export function isSelectableTargetFor(
   return runtime.isActiveCombatant(target) &&
     target.id !== user.id &&
     (confusedFriendlyTarget || runtime.getTeamId(target) !== runtime.getTeamId(user)) &&
-    !target.status.some((status) => status.type === 'SYNERGY_SLACKING');
+    !hasIdentity(target, 'SYNERGY_SLACKING');
 }
 
 export function getSelectableTargets(runtime: TargetingRuntime, user: Fighter): Fighter[] {
@@ -55,9 +58,9 @@ export function getConfusionTargets(runtime: TargetingRuntime, user: Fighter): F
     target.owlSummonState?.kind !== 'meal' &&
     target.owlSummonState?.kind !== 'rice' &&
     (target.untargetableUntilTurn ?? -1) < runtime.turnCount &&
-    !target.status.some((status) => status.type === 'SYNERGY_SLACKING'),
+    !hasIdentity(target, 'SYNERGY_SLACKING'),
   );
-  const charmSourceId = user.status.find((status) => status.type === 'CHARMED')?.applierId;
+  const charmSourceId = findIdentity(user, 'CHARMED')?.attribution.applierId;
   if (!charmSourceId) return candidates;
   const alternatives = candidates.filter((target) => target.id !== charmSourceId);
   return alternatives.length > 0 ? alternatives : candidates;
@@ -73,6 +76,7 @@ export function findActivePuppetProtector(
     fighter.summonerId === protectedTarget.id &&
     (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
     runtime.isActiveCombatant(fighter) &&
+    !hasMechanic(fighter, 'STAGGERED') &&
     fighter.id !== attacker?.id,
   );
 }
@@ -84,7 +88,7 @@ function getOriginiumTargetingState(runtime: TargetingRuntime): OriginiumTargeti
   return {
     eventActive: !!activePuruisaishi,
     phaseTwo: (activePuruisaishi?.puruisaishiPhase ?? 1) >= 2,
-    puruisaishiShield: Math.max(0, activePuruisaishi?.puruisaishiShield ?? 0),
+    puruisaishiBarrier: activePuruisaishi ? getPuruisaishiBarrierTotal(activePuruisaishi) : 0,
     activeCrystalCount: runtime.fighters.filter((fighter) =>
       fighter.isOriginiumCrystal && runtime.isActiveCombatant(fighter),
     ).length,
@@ -109,13 +113,14 @@ function targetWeight(target: Fighter, originium: OriginiumTargetingState): numb
   }
   if (target.isPuruisaishi) {
     if (!originium.phaseTwo) return 0.5;
-    if (originium.activeCrystalCount > 0) return originium.puruisaishiShield > 1 ? 1.35 : 0.05;
+    if (originium.activeCrystalCount > 0) return originium.puruisaishiBarrier > 1 ? 1.35 : 0.05;
     return originium.coreActive ? 2.55 : 4.35;
   }
   const waitingOnTokusatsuThrone = target.isTokusatsu &&
     target.job === 'MIRACLE_BUJIN' &&
-    target.status.some((status) => status.type === 'WAIT_COUNTER');
-  return waitingOnTokusatsuThrone ? 3 : 1;
+    !hasMechanic(target, 'STAGGERED') &&
+    hasIdentity(target, 'WAIT_COUNTER');
+  return (waitingOnTokusatsuThrone ? 3 : 1) * getAggroMultiplier(target);
 }
 
 export function getTargetSelectionWeight(runtime: TargetingRuntime, target: Fighter): number {
@@ -152,7 +157,7 @@ function pickOriginiumResponseTarget(
     eventTargets = targets.filter((target) =>
       target.isOriginiumCrystal ||
       target.isOriginiumCore ||
-      (target.isPuruisaishi && originium.puruisaishiShield > 1),
+      (target.isPuruisaishi && originium.puruisaishiBarrier > 1),
     );
   } else {
     eventTargets = targets.filter((target) => target.isPuruisaishi || target.isOriginiumCore);
@@ -188,7 +193,7 @@ function preferredTacticalTarget(user: Fighter, targets: Fighter[]): Fighter | u
     if (wounded) return wounded;
     if ((user.crosshairFocus ?? 0) >= 3) {
       return targets.find((target) =>
-        isCompetitiveTarget(target) && target.agl >= Math.max(160, user.agl * 0.75),
+        isCompetitiveTarget(target) && getEffectiveCombatStat(target, 'agl') >= Math.max(160, getEffectiveCombatStat(user, 'agl') * 0.75),
       );
     }
   }
@@ -204,7 +209,7 @@ export function resolveTarget(
 ): TargetSelectionResult | null {
   if (currentTargets.length === 0) return null;
 
-  const charmSourceId = user.status.find((status) => status.type === 'CHARMED')?.applierId;
+  const charmSourceId = findIdentity(user, 'CHARMED')?.attribution.applierId;
   const charmAlternatives = charmSourceId
     ? currentTargets.filter((candidate) => candidate.id !== charmSourceId)
     : currentTargets;
@@ -215,7 +220,7 @@ export function resolveTarget(
     ? availableTargets.some((candidate) => candidate.id === forcedTarget.id) && isSelectableTargetFor(runtime, user, forcedTarget)
     : false;
   const tauntingTargets = availableTargets.filter((candidate) =>
-    candidate.isYuzu && candidate.status.some((status) => status.type === 'YUZU_TAUNT'),
+    candidate.isYuzu && hasIdentity(candidate, 'YUZU_TAUNT'),
   );
   const markedWarThunderTarget = user.isWT && user.wtMarkedTargetId
     ? availableTargets.find((candidate) => candidate.id === user.wtMarkedTargetId)

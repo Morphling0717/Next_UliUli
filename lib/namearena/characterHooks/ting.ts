@@ -1,5 +1,6 @@
 import type { CharacterHook } from './types';
 import { isSelectableTargetFor } from '../targeting';
+import { hasIdentity } from '../statusSystem';
 
 const TING_TRANSFORM_SKILL_RATE = 0.92;
 
@@ -27,7 +28,7 @@ export const tingHook: CharacterHook = {
     }
 
     if (actor.hpPct < 0.5 && Math.random() < 0.65) return 'grudge_blood_feast';
-    if (enemies.some((enemy) => !enemy.status.some((status) => status.type === 'WEAK')) && Math.random() < 0.35) {
+    if (enemies.some((enemy) => !hasIdentity(enemy, 'WEAK')) && Math.random() < 0.35) {
       return 'grudge_wail';
     }
 

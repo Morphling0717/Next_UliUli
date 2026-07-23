@@ -19,48 +19,107 @@ export type SkillTag =
 // ---------------------------------------------------------------------------
 export type StatKey = 'atk' | 'def' | 'spd' | 'agl' | 'mag' | 'res' | 'wis';
 
-export type StatusTickMode = 'self' | 'global' | 'trigger' | 'permanent';
-export type StatusExpiryPoint = 'self_turn_end' | 'global_action_end' | 'trigger' | 'never';
+export type StatusTickMode =
+  | 'self_opportunity'
+  | 'attack_action'
+  | 'global_action'
+  | 'large_round'
+  | 'trigger'
+  | 'permanent';
+
+export type StatusExpiryPoint =
+  | 'self_opportunity_end'
+  | 'attack_action_end'
+  | 'global_action_end'
+  | 'large_round_end'
+  | 'trigger'
+  | 'never';
+
+export type StatusPolarity = 'positive' | 'negative' | 'neutral' | 'independent';
+export type StatusDispelTier = 'normal' | 'strong_only' | 'none';
+export type StatusStackMode = 'add' | 'multiply' | 'highest' | 'refresh' | 'overwrite' | 'replace' | 'exclusive';
+export type StatusCalculationStage =
+  | 'resource'
+  | 'target_selection'
+  | 'hit_check'
+  | 'panel_stat'
+  | 'effective_stat'
+  | 'standard_formula'
+  | 'post_formula'
+  | 'incoming_post_mitigation'
+  | 'barrier'
+  | 'aftermath'
+  | 'lifecycle';
+
+export type DamageSourceKind =
+  | 'standard'
+  | 'custom'
+  | 'manual'
+  | 'counter'
+  | 'reflect'
+  | 'transfer'
+  | 'share'
+  | 'status'
+  | 'self_cost'
+  | 'environment';
+
+export interface StatusAttribution {
+  effectSourceId: string;
+  effectSourceName?: string;
+  applierId?: string;
+  applierName?: string;
+  creditActorId?: string;
+  creditOwnerId?: string;
+}
 
 // ---------------------------------------------------------------------------
-// Status effect entry stored in fighter.status[]
-// The `type` is kept as `string` because the engine uses dynamic prefixes:
-// STYLE_*, CTR_*, PLUG_*  — a union would be exhaustively large.
+// Canonical status instance stored in fighter.statuses[].
+// Every identity is registered in the status catalog before it can be applied.
 // ---------------------------------------------------------------------------
-export interface StatusEntry {
-  type: string;
-  /**
-   * Legacy compatibility mirror. New code should read remainingTurns/charges
-   * according to tickMode instead of assuming this number always means turns.
-   */
-  duration: number;
-  /** Remaining owner/global turns for time-limited effects. */
+export interface StatusInstance {
+  instanceId: string;
+  identityId: string;
+  mechanicId: string;
+  /** Strength of one settlement or modifier. */
+  potency?: number;
+  /** Remaining settlements for dual-value mechanics. */
+  count?: number;
   remainingTurns?: number;
-  /** Remaining activations for consumable effects such as spell block. */
   charges?: number;
-  /** Explicit lifecycle semantics, derived from the status profile when absent. */
-  tickMode?: StatusTickMode;
-  expiresOn?: StatusExpiryPoint;
-  /**
-   * Flavor/mechanical source for defensive statuses such as SPELL_BLOCK,
-   * BKB and INVUL. This keeps combat logs from calling every shield
-   * "Linken" or every control immunity "BKB".
-   */
-  sourceId?: string;
-  /** Fighter that most recently applied this hostile status. */
-  applierId?: string;
-  /** Snapshot used by logs/UI even if the applier has already left the field. */
-  applierName?: string;
-  /** Mechanical stacks for statuses such as POISON. */
-  stacks?: number;
-  /** Engine turn when a globally-timed status was first observed. */
-  appliedTurn?: number;
-  /** Optional display metadata for generated temporary effects. */
-  displayName?: string;
-  displayIcon?: string;
-  displayDesc?: string;
-  /** Links a visible status to its reversible stat modifier. */
-  modifierId?: string;
+  tickMode: StatusTickMode;
+  expiresOn: StatusExpiryPoint;
+  polarity: StatusPolarity;
+  dispelTier: StatusDispelTier;
+  stackMode: StatusStackMode;
+  calculationStage: StatusCalculationStage;
+  attribution: StatusAttribution;
+  /** Monotonic per-fighter sequence used to detect refreshes during settlement. */
+  appliedSequence: number;
+  /** Last global/large-round clock that observed this instance. */
+  lastAdvancedAt?: number;
+  groupId?: string;
+  damageSourceMask?: DamageSourceKind[];
+  statScope?: Array<StatKey | 'physical' | 'magical' | 'all' | 'accuracy_only' | 'evasion_only'>;
+  barrierInteraction?: 'absorb' | 'bypass';
+}
+
+export interface BarrierEntry {
+  id: string;
+  identityId: string;
+  sourceId: string;
+  displayName: string;
+  icon?: string;
+  value: number;
+  maxValue: number;
+  remainingTurns?: number;
+  tickMode: StatusTickMode;
+  priority?: number;
+  appliedSequence: number;
+  /** First global action whose end observed this barrier; prevents same-action expiry. */
+  lastAdvancedAt?: number;
+  polarity: StatusPolarity;
+  dispelTier: StatusDispelTier;
+  attribution: StatusAttribution;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,15 +149,44 @@ export type DamageResolutionOutcome =
   | 'lockblood'
   | 'prevented';
 
+export interface DamageBarrierAbsorption {
+  barrierId: string;
+  sourceId: string;
+  displayName: string;
+  amount: number;
+  applierId?: string;
+  applierName?: string;
+}
+
 export interface DamageResolutionRecord {
+  eventId?: string;
+  rootEventId?: string;
   attempted: number;
   hpDamage: number;
   shieldDamage: number;
+  /** Exact barriers that absorbed this hit, in settlement order. */
+  barrierAbsorptions?: DamageBarrierAbsorption[];
   overkillDamage: number;
   outcome: DamageResolutionOutcome;
   source: string;
+  sourceKind?: DamageSourceKind;
+  /** Original attack kind retained when this record is a transfer/share child. */
+  originSourceKind?: DamageSourceKind;
+  /** Optional direct-damage school used by scoped output modifiers. */
+  damageScope?: 'physical' | 'magical';
+  actionName?: string;
   attackerId?: string;
+  originalTargetId?: string;
   targetId: string;
+  actualTargetId?: string;
+  statusHitIndex?: number;
+  statusHitCount?: number;
+  /** This hit was rewritten by a phase/death lock and must not receive same-hit status aftermath. */
+  phaseLockTriggered?: boolean;
+  /** Player-facing identity of the lock that rewrote this hit. */
+  lockbloodLabel?: string;
+  phaseTransition?: boolean;
+  defeated?: boolean;
 }
 
 export interface LastDamageRecord {
@@ -111,6 +199,17 @@ export interface LastDamageRecord {
 }
 
 export interface DamageApplicationOptions {
+  eventId?: string;
+  rootEventId?: string;
+  originalTargetId?: string;
+  sourceKind?: DamageSourceKind;
+  /** Original attack kind retained through transfer/share descendants. */
+  originSourceKind?: DamageSourceKind;
+  damageScope?: 'physical' | 'magical';
+  statusHitIndex?: number;
+  statusHitCount?: number;
+  /** Status damage and redistribution must not recursively trigger aftermath mechanics. */
+  suppressStatusAftermath?: boolean;
   deferTransform?: boolean;
   actionName?: string;
   respectDefenses?: boolean;
@@ -127,6 +226,12 @@ export interface DamageApplicationOptions {
   redirectedMomoTargetIds?: string[];
   /** Captains defeated while settling this |OMO share. */
   redirectedMomoDefeatedTargetIds?: string[];
+  /** Part or all of the hit was distributed to Yuzu's teammates through mirror sharing. */
+  redirectedByYuzu?: boolean;
+  /** Total HP damage actually suffered by Yuzu's teammates. */
+  redirectedYuzuDamage?: number;
+  redirectedYuzuTargetIds?: string[];
+  redirectedYuzuDefeatedTargetIds?: string[];
   /** Internal guard used while damage is already being paid by 帝王之征. */
   bypassOwlEmperorRedirect?: boolean;
   /** Mechanical costs and copied damage must not recursively create 过江协同. */
@@ -137,7 +242,13 @@ export interface DamageApplicationOptions {
   bypassOwlIncomingModifier?: boolean;
   /** Mechanical self-costs must reduce HP directly instead of consuming shared shields. */
   bypassShields?: boolean;
+  /** Filled by the barrier pipeline for causal logs, replay and attribution. */
+  barrierAbsorptions?: DamageBarrierAbsorption[];
   targetDefeatedDuringDamage?: boolean;
+  /** The hit was capped to preserve a phase or scripted death-save boundary. */
+  phaseLockTriggered?: boolean;
+  /** Player-facing identity of the phase or death-save boundary. */
+  lockbloodLabel?: string;
   /** A cleansing death-save consumed this hit, so its post-hit hostile statuses must not be re-applied. */
   suppressOnHitStatuses?: boolean;
   /** Defaults to true. Set false for mechanical self/team redistribution. */
@@ -146,12 +257,112 @@ export interface DamageApplicationOptions {
   resolution?: DamageResolutionRecord;
 }
 
-export interface StatusApplicationOptions {
-  sourceId?: string;
-  applierId?: string;
-  applierName?: string;
+export interface StatusApplication {
+  identityId: string;
   effectName?: string;
   logBlocked?: boolean;
+  potency?: number;
+  /** Per-mechanic strength overrides for composite identities. */
+  componentPotencies?: Readonly<Record<string, number>>;
+  count?: number;
+  charges?: number;
+  remainingTurns?: number;
+  groupId?: string;
+  attribution?: Partial<StatusAttribution>;
+  observedAt?: {
+    globalAction?: number;
+    largeRound?: number;
+  };
+  /** Callers that emit a domain-specific log may suppress the generic application log. */
+  silent?: boolean;
+}
+
+export type SkillEffectTarget = 'target' | 'user';
+
+export interface SkillStatusApplication extends Omit<StatusApplication, 'silent'> {
+  target?: SkillEffectTarget;
+}
+
+export interface SkillBarrierApplication {
+  target?: SkillEffectTarget;
+  identityId?: string;
+  value: number;
+  sourceId: string;
+  displayName: string;
+  icon?: string;
+  remainingTurns?: number;
+  tickMode?: StatusTickMode;
+  priority?: number;
+  polarity?: StatusPolarity;
+  dispelTier?: StatusDispelTier;
+  stackMode?: 'add' | 'refresh' | 'overwrite';
+  attribution?: Partial<StatusAttribution>;
+}
+
+export interface SkillDispelSpec {
+  strength: DispelStrength;
+  direction: DispelDirection;
+  target?: 'user' | 'target' | 'allies';
+  timing?: 'before_action' | 'after_damage' | 'after_recovery';
+  includeNeutral?: boolean;
+  includeIndependent?: boolean;
+  identityIds?: readonly string[];
+  excludeIdentityIds?: readonly string[];
+}
+
+export type StatusRemovalReason =
+  | 'expired'
+  | 'consumed'
+  | 'dispel'
+  | 'strong_dispel'
+  | 'absolute_dispel'
+  | 'replaced'
+  | 'death'
+  | 'revive'
+  | 'scripted';
+
+export type DispelStrength = 'normal' | 'strong' | 'absolute';
+export type DispelDirection = 'negative' | 'positive' | 'all';
+
+export interface DispelOptions {
+  strength: DispelStrength;
+  direction: DispelDirection;
+  reason?: StatusRemovalReason;
+  includeNeutral?: boolean;
+  includeIndependent?: boolean;
+  /** Select exact status instances when several sources share one mechanic. */
+  instanceIds?: readonly string[];
+  identityIds?: readonly string[];
+  mechanicIds?: readonly string[];
+  excludeIdentityIds?: readonly string[];
+  excludeMechanicIds?: readonly string[];
+  barrierSourceIds?: readonly string[];
+  excludeBarrierSourceIds?: readonly string[];
+  includeBarriers?: boolean;
+  /** Routes the exact dispel log through the caller's causal/deferred log queue. */
+  emitLog?: (type: string, text: string) => void;
+}
+
+export interface DispelResolution {
+  removed: StatusInstance[];
+  blocked: StatusInstance[];
+  removedBarriers: BarrierEntry[];
+  blockedBarriers: BarrierEntry[];
+}
+
+export type HealingKind = 'direct' | 'regen' | 'lifesteal' | 'summon' | 'status';
+export type HealingOutcome = 'healed' | 'blocked' | 'full' | 'no_effect';
+
+export interface HealingResolutionRecord {
+  attempted: number;
+  modified: number;
+  actual: number;
+  prevented: number;
+  outcome: HealingOutcome;
+  kind: HealingKind;
+  sourceId?: string;
+  healerId?: string;
+  targetId: string;
 }
 
 export interface PendingDamageEvent {
@@ -193,18 +404,6 @@ export interface BaseStats {
   agl: number;
 }
 
-export interface TimedStatModifier {
-  id: string;
-  statusType: string;
-  statusSourceId?: string;
-  multipliers: Partial<Record<StatKey, number>>;
-  critBonus: number;
-}
-
-export interface TimedStatBase extends BaseStats {
-  critRate: number;
-}
-
 export interface LargeRoundState {
   number: number;
   startedTurn: number;
@@ -239,6 +438,12 @@ export type BattleEventKind =
 export type SkillPresentation = 'basic' | 'skill' | 'finisher';
 
 export type BattleCombatEffectId =
+  | 'ting_blood_rite'
+  | 'ting_grudge_rend'
+  | 'ting_detonation'
+  | 'ting_detonation_charge'
+  | 'ting_rage'
+  | 'ting_wail'
   | 'toku_fan_strike'
   | 'toku_fan_rider_kick'
   | 'toku_fan_cross_beam'
@@ -324,6 +529,8 @@ export interface BattleFormIdentity {
   phase: number;
 }
 
+export type FormTransitionCause = 'phase_advance' | 'form_change' | 'revival' | 'redeploy';
+
 export type SummonCinematicKind = 'reveal' | 'tribute' | 'fusion' | 'exodia';
 
 export type BattleVisualCue =
@@ -333,6 +540,15 @@ export type BattleVisualCue =
       fighterName: string;
       from: BattleFormIdentity;
       to: BattleFormIdentity;
+      cause: FormTransitionCause;
+    }
+  | {
+      kind: 'form_shift';
+      fighterId: string;
+      fighterName: string;
+      from: BattleFormIdentity;
+      to: BattleFormIdentity;
+      cause: FormTransitionCause;
     }
   | {
       kind: 'summon_card';
@@ -345,19 +561,48 @@ export type BattleVisualCue =
       cardImage?: string;
     }
   | {
+      kind: 'combat_action';
+      sourceId: string;
+      targetIds: string[];
+      presentation: SkillPresentation;
+      effectId?: BattleCombatEffectId;
+    }
+  | {
       kind: 'combat_fx';
-      effectId: BattleCombatEffectId;
+      /** Omitted for a structured generic follow-up hit. */
+      effectId?: BattleCombatEffectId;
       sourceId: string;
       targetIds: string[];
       links?: Array<{ sourceId: string; targetId: string }>;
       label?: string;
       count?: number;
+    }
+  | {
+      /** A passive/self reaction which may occur outside an actor action. */
+      kind: 'reaction_fx';
+      effectId: BattleCombatEffectId;
+      sourceId: string;
+      targetIds: string[];
+      label?: string;
+      count?: number;
     };
 
-export type BattleLogMetadata = Partial<Pick<BattleEvent, 'targetIds' | 'visualCue' | 'displayInFeed'>>;
+export type BattleLogMetadata = Partial<Pick<BattleEvent,
+  | 'actorId'
+  | 'actorName'
+  | 'targetIds'
+  | 'skillId'
+  | 'skillName'
+  | 'presentation'
+  | 'visualCue'
+  | 'visualCueId'
+  | 'displayInFeed'
+>>;
 
 export interface BattleEvent {
   id: string;
+  /** Root action/event that owns this entire causal chain. */
+  rootEventId: string;
   sequence: number;
   kind: BattleEventKind;
   visible: boolean;
@@ -378,6 +623,8 @@ export interface BattleEvent {
   triggerDepth?: number;
   damage?: DamageResolutionRecord;
   visualCue?: BattleVisualCue;
+  /** Stable exact-once playback key for the attached visual cue. */
+  visualCueId?: string;
 }
 
 export type BattleLogEntry = BattleEvent & { visible: true };
@@ -471,7 +718,16 @@ export interface Fighter {
   color: string;
   isDead: boolean;
   isDeadAnnounced: boolean;
-  status: StatusEntry[];
+  statuses: StatusInstance[];
+  /** Monotonic local counters keep status/barrier ids deterministic per fighter. */
+  statusSequence?: number;
+  barrierSequence?: number;
+  barriers?: BarrierEntry[];
+  morale?: number;
+  maxMorale?: number;
+  moraleLostSinceOpportunity?: boolean;
+  stagger?: number;
+  staggerThreshold?: number;
   stats: FighterStats;
   teamId?: string;
 
@@ -508,7 +764,6 @@ export interface Fighter {
   puruisaishiPhaseTwoStartedTurn?: number;
   puruisaishiLastPhaseTwoPulseTurn?: number;
   puruisaishiAppeared?: boolean;
-  puruisaishiShield?: number;
   untargetableUntilTurn?: number;
   originiumParentId?: string;
   originiumSpawnTurn?: number;
@@ -518,8 +773,6 @@ export interface Fighter {
   originiumGrowthRoundActorIds?: string[];
   originiumWasAttackedTurn?: number;
   originiumWasAttackedThisGrowthRound?: boolean;
-  originiumInfectionStacks?: number;
-  originiumStatMultipliers?: Pick<BaseStats, 'atk' | 'def' | 'res'> & { maxHp: number };
   puruisaishiLastOverflowLargeRound?: number;
 
   // ── Battle-round state ─────────────────────────────────────────────────
@@ -531,9 +784,6 @@ export interface Fighter {
   defeatHooksResolved?: boolean;
   lastDamage?: LastDamageRecord;
   pendingDamageEvents?: PendingDamageEvent[];
-  timedStatBase?: TimedStatBase;
-  timedStatModifiers?: TimedStatModifier[];
-
   // ── Joker resurrection ─────────────────────────────────────────────────
   hasResurrected?: boolean;
   reviveTurns?: number;
@@ -590,7 +840,6 @@ export interface Fighter {
   tokusatsuInstantActionQueued?: boolean;
   tokusatsuThroneResonance?: number;
   monsterTurns?: number;
-  savedStats?: BaseStats;
 
   // ── Valorant Junior economy (丝瓜 2nd stage) ──────────────────────────
   ultPoints?: number;
@@ -598,8 +847,6 @@ export interface Fighter {
   crosshairFocus?: number;
   valoInstantActionQueued?: boolean;
   hasUsedValoRunItBack?: boolean;
-  savedSpd?: number;
-  savedAgl?: number;
 
   // ── War Thunder vehicle / spawn-point system (M1) ─────────────────────
   wtSpawnPoints?: number;
@@ -624,7 +871,6 @@ export interface Fighter {
 
   // ── Yuzu / mirror-world weapon and shield system ──────────────────────
   yuzuPhase?: number;
-  yuzuShield?: number;
   yuzuOpeningShieldApplied?: boolean;
   /** Preserves temporary FFA teammates after their dynamic team link is removed. */
   yuzuKnownTeammateIds?: string[];
@@ -651,26 +897,8 @@ export interface Fighter {
 
   // ── TuJuanJuan style-switch system ───────────────────────────────────
   styleTurnCounter?: number;
-  baseStatsForStyle?: BaseStats;
-
-  // ── Zero state (归零 debuff) ──────────────────────────────────────────
-  wasZeroed?: boolean;
-  baseStatsForZero?: Pick<BaseStats, 'atk' | 'def' | 'res'>;
-
-  // Fallback legacy field used in one dead-code branch (never actually read)
-  team?: string;
+  rabbitStyleBaseStats?: Record<StatKey, number>;
 }
-
-// ---------------------------------------------------------------------------
-// Status effect display info
-// ---------------------------------------------------------------------------
-export interface StatusEffectInfo {
-  name: string;
-  icon: string;
-  desc: string;
-}
-
-export type StatusEffectsMap = Record<string, StatusEffectInfo>;
 
 export interface DefeatOptions {
   message?: string;
@@ -686,6 +914,8 @@ export interface DefeatOptions {
 export interface SkillContext {
   user: Fighter;
   target: Fighter;
+  /** Planned primary-hit damage before the target's mitigation and redirection pipeline. */
+  preMitigationDamage?: number;
   targetWasIntercepted?: boolean;
   interceptedProtectedTargetId?: string;
   currentTargets: Fighter[];
@@ -693,7 +923,11 @@ export interface SkillContext {
   turnCount: number;
   largeRound: number;
   log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
+  /** Declares every intended target before the action's first player-visible log is emitted. */
+  setVisualTargets: (targets: readonly Fighter[]) => void;
   getTeamId: (f: Fighter) => string;
+  /** Reads a combat stat after all active generic stat modifiers. */
+  getEffectiveStat: (fighter: Fighter, key: StatKey) => number;
   applyDamage: (
     target: Fighter,
     amount: number,
@@ -705,10 +939,9 @@ export interface SkillContext {
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   applyStatus: (
     target: Fighter,
-    type: string,
-    duration: number,
-    options?: StatusApplicationOptions,
+    application: StatusApplication,
   ) => boolean;
+  dispelStatusEffects: (target: Fighter, options: DispelOptions) => DispelResolution;
   handleWaitCounter?: (target: Fighter, user: Fighter, actionName?: string) => boolean;
   handleCounterStatus?: (target: Fighter, user: Fighter) => boolean;
   flushDeferredDamageEvents?: () => void;
@@ -729,6 +962,12 @@ export interface SkillContext {
   redirectedMomoDamage?: number;
   redirectedMomoTargetIds?: string[];
   redirectedMomoDefeatedTargetIds?: string[];
+  /** The primary hit was distributed to Yuzu's teammates through mirror sharing. */
+  damageRedirectedByYuzu?: boolean;
+  /** Total HP damage suffered by Yuzu's teammates for the primary hit. */
+  redirectedYuzuDamage?: number;
+  redirectedYuzuTargetIds?: string[];
+  redirectedYuzuDefeatedTargetIds?: string[];
   /** Settlement result for the most recent hit in this skill context. */
   suppressOnHitStatuses?: boolean;
   suppressOnHitStatusTargetId?: string;
@@ -741,14 +980,22 @@ export interface SkillContext {
     target: Fighter | null,
     depth: number,
   ) => void;
+  runReactionAction: (
+    actor: Fighter,
+    descriptor: {
+      skillId: string;
+      skillName: string;
+      presentation?: SkillPresentation;
+      targets?: readonly Fighter[];
+      triggerDepth?: number;
+    },
+    callback: () => void,
+  ) => void;
   executeSummonSkill: (
     skill: SkillDefinition,
     user: Fighter,
     userTeamId: string,
   ) => void;
-  STATUS_EFFECTS: StatusEffectsMap;
-  /** @deprecated legacy callback stub — not used at runtime */
-  setLogs?: (updater: unknown) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -778,12 +1025,10 @@ export interface GachaEntry {
   ignoreDef?: boolean;
   minDamagePct?: number;
   lifesteal?: number;
-  status?: string;
-  statusSource?: string;
-  /** Attack skills default to affecting the target; set to user for post-attack self buffs. */
-  statusTarget?: 'target' | 'user';
-  statBuff?: Partial<Record<StatKey | 'crit', number>>;
-  cleanStatus?: boolean;
+  statusApplications?: readonly SkillStatusApplication[];
+  barrierApplications?: readonly SkillBarrierApplication[];
+  dispelSpecs?: readonly SkillDispelSpec[];
+  permanentStatMultiplier?: Partial<Record<StatKey | 'crit', number>>;
   selfDmgPct?: number;
   selfDmgCanKill?: boolean;
   isSummon?: boolean;
@@ -816,8 +1061,7 @@ export interface GachaEntry {
 // ---------------------------------------------------------------------------
 export interface StylePoolEntry {
   text: string;
-  status: string;
-  statBuff?: Partial<Record<StatKey, number>>;
+  identityId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -835,11 +1079,14 @@ export interface SkillDefinition {
   ignoreDef?: boolean;
   minDamagePct?: number;
   lifesteal?: number;
-  status?: string;
-  statusSource?: string;
-  /** Attack skills default to affecting the target; set to user for post-attack self buffs. */
-  statusTarget?: 'target' | 'user';
-  statBuff?: Partial<Record<StatKey | 'crit', number>>;
+  statusApplications?: readonly SkillStatusApplication[];
+  barrierApplications?: readonly SkillBarrierApplication[];
+  permanentStatMultiplier?: Partial<Record<StatKey | 'crit', number>>;
+  /** Number of status-aftermath settlements represented by one damage event. */
+  statusHitCount?: number;
+  /** Number of bleed settlements caused by this attack action. Defaults to one. */
+  bleedTriggerCount?: number;
+  damageSourceKind?: Extract<DamageSourceKind, 'standard' | 'custom' | 'manual'>;
   text?: string;
   /** Pool is GachaEntry[] for isGacha skills, string[] for isRandomText skills */
   pool?: GachaEntry[] | string[];
@@ -850,12 +1097,17 @@ export interface SkillDefinition {
   alwaysCrit?: boolean;
   alwaysHit?: boolean;
   /** Character-specific formula that still uses the shared targeting/defense pipeline. */
-  damageFormula?: (user: Fighter, target: Fighter, fighters: readonly Fighter[]) => number;
+  damageFormula?: (
+    user: Fighter,
+    target: Fighter,
+    fighters: readonly Fighter[],
+    getEffectiveStat: (fighter: Fighter, key: StatKey) => number,
+  ) => number;
   /** Some deterministic character attacks intentionally cannot roll critical hits. */
   cannotCrit?: boolean;
   /** A targeted utility skill that resolves guards and then applies status without damage. */
   noDamage?: boolean;
-  cleanStatus?: boolean;
+  dispelSpecs?: readonly SkillDispelSpec[];
   selfDmgPct?: number;
   selfDmgCanKill?: boolean;
   isSummon?: boolean;
@@ -890,7 +1142,6 @@ export interface SkillDefinition {
 // Subset of namerenaData that BattleEngine actually reads
 // ---------------------------------------------------------------------------
 export interface BattleEngineData {
-  STATUS_EFFECTS: StatusEffectsMap;
   SKILL_TAGS: Record<string, string>;
   GACHA_SSR_POOL: GachaEntry[];
   EXODIA_CARD: GachaEntry;

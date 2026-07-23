@@ -1,4 +1,5 @@
 import type { BattleState, Fighter, LargeRoundState } from './types';
+import { hasIdentity } from './statusSystem';
 
 const RNG_MODULUS = 2147483647;
 const RNG_MULTIPLIER = 16807;
@@ -65,7 +66,7 @@ export function isLargeRoundParticipant(fighter: Fighter): boolean {
     !fighter.isSummon &&
     !fighter.cannotAct &&
     !fighter.cannotWin &&
-    !fighter.status.some((status) => status.type === 'SYNERGY_SLACKING')
+    !hasIdentity(fighter, 'SYNERGY_SLACKING')
   );
 }
 

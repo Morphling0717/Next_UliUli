@@ -7,6 +7,7 @@ import type {
   SkillDefinition,
 } from './types';
 import { cloneJobDefinition, healFighter } from './combatState';
+import { hasIdentity, initializeEffectState, applyStatus } from './statusSystem';
 import {
   GACHA_ORDINARY_SUMMON_NAMES,
   GACHA_RA_PHOENIX_STATUS,
@@ -14,10 +15,9 @@ import {
   isAdvancedSummonName,
   isLuckEmperor,
 } from './gachaMechanics';
-import {
-  grantStatus,
-} from './defenseStatus';
+
 import { tryMomoBanishBlueEyes } from './momoMechanics';
+import { generateUniqueRuntimeId } from './core';
 
 export interface SummonResolutionRuntime {
   fighters: Fighter[];
@@ -43,6 +43,14 @@ function formatSummonName(runtime: SummonResolutionRuntime, baseName: string): s
     fighter.isSummon && getSummonBaseName(fighter) === baseName,
   ).length;
   return existingCount === 0 ? baseName : `${baseName}#${existingCount + 1}`;
+}
+
+function createSummonId(runtime: SummonResolutionRuntime): string {
+  return generateUniqueRuntimeId(
+    runtime.fighters.map((fighter) => fighter.id),
+    () => runtime.core.generateUUID?.() ?? `summon-${Math.random().toString(36).slice(2)}`,
+    'summon',
+  );
 }
 
 export function executeSummonSkill(
@@ -100,11 +108,9 @@ export function executeSummonSkill(
       runtime.log('info', `🚫 ${user.name} 试图召唤 ${skill.summonName}，但场上祭品不足！`);
       if (isLuckEmperor(user)) {
         grantGachaLuck(user, 1, runtime.log, '献祭失败');
-        grantStatus(user, 'SPELL_BLOCK', 2, 'gacha_tribute_compensation');
-        if (!user.status.some((status) => status.type === 'NO_HEAL')) {
-          const healed = healFighter(user, Math.floor(user.maxHp * 0.1), runtime.log);
-          if (healed > 0) runtime.log('heal', `🍀 祭品不足反而歪出补偿，${user.name} 恢复了 ${healed} 点生命并获得法术抵挡！`);
-        }
+        applyStatus(user, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'gacha_tribute_compensation' } });
+        const healed = healFighter(user, Math.floor(user.maxHp * 0.1), runtime.log);
+        if (healed > 0) runtime.log('heal', `🍀 祭品不足反而歪出补偿，${user.name} 恢复了 ${healed} 点生命并获得法术抵挡！`);
       }
       return;
     }
@@ -117,7 +123,7 @@ export function executeSummonSkill(
     });
   }
   if (skill.summonName === '小汀(傀儡)') {
-    if (!user.hasSpinalSword || !user.status.some((status) => status.type === 'SPINAL_SWORD')) {
+    if (!user.hasSpinalSword || !hasIdentity(user, 'SPINAL_SWORD')) {
       runtime.clearSpinalSword(user);
       runtime.log('info', `🚫 ${user.name} 试图唤醒脊髓剑怨念，但手中已经没有完整的脊髓剑了...`);
       return;
@@ -136,7 +142,7 @@ export function executeSummonSkill(
   const summonName = formatSummonName(runtime, summonBaseName);
   const isAdvancedSummon = !!skill.advancedSummon || isAdvancedSummonName(summonBaseName);
   const summon: Fighter = {
-    id: runtime.core.generateUUID ? runtime.core.generateUUID() : `summon-${Math.random()}`,
+    id: createSummonId(runtime),
     name: summonName,
     displayName: summonName,
     job: summonJobKey,
@@ -155,7 +161,7 @@ export function executeSummonSkill(
     color: user.color,
     isDead: false,
     isDeadAnnounced: false,
-    status: [],
+    statuses: [],
     stats: { kills: 0, dmgDealt: 0, dmgTaken: 0 },
     summonerId: user.id,
     summonBaseName,
@@ -171,11 +177,16 @@ export function executeSummonSkill(
   };
   if (skill.summonName === '翼神龙') {
     summon.raChantBoost = 1;
-    grantStatus(summon, GACHA_RA_PHOENIX_STATUS, 6);
-    grantStatus(summon, 'SPELL_BLOCK', 2, 'ra_divine_aura');
-    grantStatus(summon, 'BKB', 1, 'ra_divine_aura');
-    grantStatus(summon, 'REGEN', 3);
+    applyStatus(summon, {
+      identityId: GACHA_RA_PHOENIX_STATUS,
+      remainingTurns: 6,
+      attribution: { effectSourceId: GACHA_RA_PHOENIX_STATUS },
+    });
+    applyStatus(summon, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'ra_divine_aura' } });
+    applyStatus(summon, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'ra_divine_aura' } });
+    applyStatus(summon, { identityId: 'REGEN', remainingTurns: 3 });
   }
+  initializeEffectState(summon);
   runtime.fighters.push(summon);
   if (skill.summonName === '小汀(傀儡)') runtime.syncPuppetMasterStatus(user);
   const summonText = runtime.formatSkillText(skill, skill.text ?? '').replace(/{USER}/g, user.name);

@@ -9,7 +9,14 @@ import {
   grantEmoteAdaptStats,
   randomEmoteStatKeys,
 } from '../emoteMechanics';
-import { grantStatus } from '../defenseStatus';
+
+import { hasIdentity, removeEffects, applyStatus } from '../statusSystem';
+import { getStatusIdentityDefinition } from '../statusRegistry';
+import {
+  type DamageRedirectKind,
+  getDamageRedirectKind,
+  getResolvedDamageTotal,
+} from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -17,15 +24,11 @@ type EmoteDamageResult = {
   actual: number;
   interrupted: boolean;
   redirected: boolean;
-  redirectKind: 'joker' | 'originium' | 'owl_emperor' | 'momo' | null;
+  redirectKind: DamageRedirectKind;
 };
 
 function canContinueEmoteAction(fighter: Fighter): boolean {
   return fighter.currentHp > 0 && !fighter.isDead && !fighter.isDeadAnnounced;
-}
-
-function refreshStatus(fighter: Fighter, type: string, duration: number, sourceId?: string): void {
-  grantStatus(fighter, type, duration, sourceId);
 }
 
 function activePlayerTargets(ctx: SkillContext): Fighter[] {
@@ -70,25 +73,9 @@ function applyEmoteDamage(
     canTriggerWaitCounter: false,
   };
   const actual = ctx.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, ctx.user, damageOptions);
-  const redirectKind: EmoteDamageResult['redirectKind'] = damageOptions.redirectedByJoker
-    ? 'joker'
-    : damageOptions.redirectedByOriginiumCore
-      ? 'originium'
-      : damageOptions.redirectedByOwlEmperor
-        ? 'owl_emperor'
-        : damageOptions.redirectedByMomo
-          ? 'momo'
-          : null;
+  const redirectKind = getDamageRedirectKind(damageOptions);
   const redirected = redirectKind !== null;
-  const resolvedActual = redirectKind === 'joker'
-    ? damageOptions.redirectedJokerDamage ?? actual
-    : redirectKind === 'originium'
-      ? damageOptions.redirectedOriginiumDamage ?? actual
-      : redirectKind === 'owl_emperor'
-        ? damageOptions.redirectedOwlEmperorDamage ?? actual
-        : redirectKind === 'momo'
-          ? damageOptions.redirectedMomoDamage ?? actual
-          : actual;
+  const resolvedActual = getResolvedDamageTotal(actual, damageOptions);
   if (!canContinueEmoteAction(ctx.user)) {
     return { actual: resolvedActual, interrupted: true, redirected, redirectKind };
   }
@@ -98,6 +85,8 @@ function applyEmoteDamage(
       ? `🐲 【${actionName}】${ctx.user.name} 对 ${target.name} 的攻击被帝王之征全数接走，龙实际承受 ${resolvedActual} 点伤害。`
       : redirectKind === 'momo'
         ? `💗 【${actionName}】${target.name} 通过【|OMO】把伤害均摊给舰长，舰长合计损失 ${resolvedActual} 点生命。`
+        : redirectKind === 'yuzu'
+          ? `🪞 【${actionName}】${target.name} 通过【镜界分摊】把伤害交给队友，队友合计损失 ${resolvedActual} 点生命。`
         : logText(resolvedActual, redirectKind)
     : redirectKind === 'joker'
       ? `🎭 【${actionName}】攻击被 ${target.name} 的随机恶作剧带偏，但转移后仍被化解，没有单位损失生命。`
@@ -107,6 +96,8 @@ function applyEmoteDamage(
           ? `🐲 【${actionName}】攻击被帝王之征全数接走，但龙未损失生命。`
           : redirectKind === 'momo'
             ? `💗 【${actionName}】${target.name} 通过【|OMO】完成均摊，但舰长均未损失生命。`
+            : redirectKind === 'yuzu'
+              ? `🪞 【${actionName}】${target.name} 通过【镜界分摊】把伤害交给队友，但队友均未损失生命。`
             : `🛡️ 【${actionName}】${ctx.user.name} 的攻击被 ${target.name} 化解，没有造成生命伤害。`;
   ctx.log(resolvedActual > 0 ? 'skill' : 'info', outcomeText);
   if (resolvedActual > 0) ctx.flushDeferredDamageEvents?.();
@@ -120,12 +111,15 @@ function applyEmoteDamage(
 }
 
 function hasStatus(fighter: Fighter, type: string): boolean {
-  return fighter.status.some((status) => status.type === type);
+  return hasIdentity(fighter, type);
 }
 
 function executeMemeSlap(ctx: SkillContext): boolean {
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
-  const amount = ctx.user.mag * 1.2 + ctx.user.wis * 0.8 + ctx.user.maxHp * 0.045 + adaptTotal * 0.08;
+  const amount = ctx.getEffectiveStat(ctx.user, 'mag') * 1.2 +
+    ctx.getEffectiveStat(ctx.user, 'wis') * 0.8 +
+    ctx.user.maxHp * 0.045 +
+    adaptTotal * 0.08;
   const statusPool = ['WEAK', 'EMBARRASSED', 'NO_HEAL'];
   const status = statusPool[Math.floor(Math.random() * statusPool.length)] ?? 'WEAK';
   const { actual, interrupted, redirected } = applyEmoteDamage(
@@ -141,8 +135,8 @@ function executeMemeSlap(ctx: SkillContext): boolean {
   );
   if (interrupted) return true;
   if (actual > 0 && !redirected && Math.random() < 0.45 && ctx.target.currentHp > 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
-    if (ctx.applyStatus(ctx.target, status, 1)) {
-      ctx.log('debuff', `🫠 【表情污染】${ctx.target.name} 被表情干扰，获得【${ctx.STATUS_EFFECTS[status]?.name ?? status}】1 回合！`);
+    if (ctx.applyStatus(ctx.target, { identityId: status, remainingTurns: 1 })) {
+      ctx.log('debuff', `🫠 【表情污染】${ctx.target.name} 被表情干扰，获得【${getStatusIdentityDefinition(status).displayName}】1 回合！`);
     }
   }
   return true;
@@ -150,7 +144,10 @@ function executeMemeSlap(ctx: SkillContext): boolean {
 
 function executeTenthClaim(ctx: SkillContext): boolean {
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
-  const amount = ctx.user.atk * 1.5 + ctx.user.mag * 1.2 + ctx.user.maxHp * 0.055 + adaptTotal * 0.12;
+  const amount = ctx.getEffectiveStat(ctx.user, 'atk') * 1.5 +
+    ctx.getEffectiveStat(ctx.user, 'mag') * 1.2 +
+    ctx.user.maxHp * 0.055 +
+    adaptTotal * 0.12;
   const killsBefore = getEmoteClaimableKills(ctx.target);
   const { actual, interrupted, redirected } = applyEmoteDamage(
     ctx,
@@ -180,7 +177,7 @@ function executeTenthClaim(ctx: SkillContext): boolean {
 }
 
 function executeAdaptationWheel(ctx: SkillContext): boolean {
-  refreshStatus(ctx.user, 'EMOTE_ADAPT', 2);
+  applyStatus(ctx.user, { identityId: 'EMOTE_ADAPT', remainingTurns: 2 });
   ctx.log('buff', `🧿 【适应转轮】${ctx.user.name} 背后的轮盘开始转动：下一次受到玩家伤害时减免 30%，并复制攻击者 3% 属性。`);
   return true;
 }
@@ -189,7 +186,7 @@ function executeMarkOwner(ctx: SkillContext): boolean {
   if (!resolveEmoteAttackGuards(ctx, ctx.target, '先认个脸熟')) return true;
 
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
-  const amount = ctx.user.wis + ctx.user.maxHp * 0.025 + adaptTotal * 0.05;
+  const amount = ctx.getEffectiveStat(ctx.user, 'wis') + ctx.user.maxHp * 0.025 + adaptTotal * 0.05;
   const { actual, interrupted, redirected, redirectKind } = applyEmoteDamage(
     ctx,
     ctx.target,
@@ -206,25 +203,30 @@ function executeMarkOwner(ctx: SkillContext): boolean {
   );
   if (interrupted) return true;
   if (redirected) {
-    ctx.log('info', redirectKind === 'originium'
-      ? `👁️ 【脸熟失败】${ctx.user.name} 的视线被阿喃那转入源石网络，暂时没有记住这张脸。`
-      : `👁️ 【脸熟失败】${ctx.user.name} 的视线被 ${ctx.target.name} 的随机恶作剧转走，暂时没有记住这张脸。`);
+    const redirectedReason = redirectKind === 'originium'
+      ? '被阿喃那转入源石网络'
+      : redirectKind === 'owl_emperor'
+        ? `被 ${ctx.target.name} 的【帝王之征】全数接走`
+        : redirectKind === 'momo'
+          ? `被 ${ctx.target.name} 通过【|OMO】均摊给舰长`
+          : redirectKind === 'yuzu'
+            ? `被 ${ctx.target.name} 通过【镜界分摊】交给队友`
+          : `被 ${ctx.target.name} 的随机恶作剧转走`;
+    ctx.log('info', `👁️ 【脸熟失败】${ctx.user.name} 的视线${redirectedReason}，暂时没有记住这张脸。`);
     return true;
   }
   if (actual > 0 && ctx.target.currentHp > 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
-    const familiarApplied = ctx.applyStatus(ctx.target, 'EMOTE_FAMILIAR', 3, { sourceId: ctx.user.id });
+    const familiarApplied = ctx.applyStatus(ctx.target, { identityId: 'EMOTE_FAMILIAR', remainingTurns: 3, attribution: { effectSourceId: ctx.user.id } });
     if (!familiarApplied) {
       ctx.log('info', `👁️ 【脸熟失败】${ctx.target.name} 的保命净化抹掉了这次认脸标记，${ctx.user.name} 保留原来的认主记忆。`);
       return true;
     }
     ctx.fighters.forEach((fighter) => {
       if (fighter.id === ctx.target.id) return;
-      fighter.status = fighter.status.filter((status) =>
-        !(status.type === 'EMOTE_FAMILIAR' && status.sourceId === ctx.user.id),
-      );
+      removeEffects(fighter, { identityIds: ['EMOTE_FAMILIAR'], effectSourceIds: [ctx.user.id], reason: 'replaced' });
     });
     ctx.user.emoteFamiliarTargetId = ctx.target.id;
-    const weakened = ctx.applyStatus(ctx.target, 'WEAK', 1);
+    const weakened = ctx.applyStatus(ctx.target, { identityId: 'WEAK', remainingTurns: 1 });
     ctx.log('debuff', `👁️ 【脸熟】如果 ${ctx.user.name} 在 3 回合内死亡，认主会优先找 ${ctx.target.name}${weakened ? `；${ctx.target.name} 还被盯得有点虚弱` : '；但虚弱效果被抵抗'}。`);
   } else if (actual <= 0) {
     ctx.log('info', `👁️ 【脸熟失败】${ctx.user.name} 没能穿过 ${ctx.target.name} 的防护，暂时没有记住这张脸。`);
@@ -238,9 +240,9 @@ function executeWheelCleave(ctx: SkillContext): boolean {
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
   const zeroKillMultiplier = getEmoteClaimableKills(ctx.target) === 0 ? 1.2 : 1;
   const amount = (
-    ctx.user.atk * 2.0 +
-    ctx.user.spd * 1.2 +
-    ctx.user.agl * 1.2 +
+    ctx.getEffectiveStat(ctx.user, 'atk') * 2.0 +
+    ctx.getEffectiveStat(ctx.user, 'spd') * 1.2 +
+    ctx.getEffectiveStat(ctx.user, 'agl') * 1.2 +
     ctx.user.maxHp * 0.08 +
     adaptTotal * 0.35
   ) * zeroKillMultiplier;
@@ -270,9 +272,13 @@ function executeAllMastersReturn(ctx: SkillContext): boolean {
     return true;
   }
 
-  refreshStatus(ctx.user, 'EMOTE_ULT_COOLDOWN', 3);
+  ctx.setVisualTargets(targets);
+  applyStatus(ctx.user, { identityId: 'EMOTE_ULT_COOLDOWN', remainingTurns: 3 });
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
-  const amount = ctx.user.mag * 1.5 + ctx.user.wis * 1.5 + ctx.user.maxHp * 0.06 + adaptTotal * 0.18;
+  const amount = ctx.getEffectiveStat(ctx.user, 'mag') * 1.5 +
+    ctx.getEffectiveStat(ctx.user, 'wis') * 1.5 +
+    ctx.user.maxHp * 0.06 +
+    adaptTotal * 0.18;
   ctx.log('skill', `🔁 【万主归一】${ctx.user.name} 把认主账本摊开，${targets.length} 名有击杀数的玩家同时被轮盘点名：${targets.map((target) => target.name).join('、')}！`);
 
   let interrupted = false;
@@ -312,7 +318,7 @@ function executeAllMastersReturn(ctx: SkillContext): boolean {
   const killsAfter = getEmoteClaimableKills(chosen);
   ctx.log('debuff', `🔁 【认主账本回拨】${chosen.name} 被 ${ctx.user.name} 的账本划掉一笔，账本余额 ${killsBefore} -> ${killsAfter}；真实击杀统计不变。`);
   if (killsBefore > 0 && killsAfter === 0) {
-    const healed = healFighter(ctx.user, Math.floor(ctx.user.wis + adaptTotal * 0.08), ctx.log);
+    const healed = healFighter(ctx.user, Math.floor(ctx.getEffectiveStat(ctx.user, 'wis') + adaptTotal * 0.08), ctx.log);
     if (healed > 0) {
       ctx.log('heal', `🔁 【零杀锚点】场上出现新的“认主账本余额为 0”玩家，${ctx.user.name} 的复活锚点发亮，恢复 ${healed} 点生命。`);
     }
