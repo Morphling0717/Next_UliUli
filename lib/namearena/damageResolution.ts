@@ -55,6 +55,7 @@ export function calculateDamage(
   const ignoreDefOverride = !!skill.ignoreDef || sexyTrueDamage;
   const effectiveAtk = getEffectiveCombatStat(user, 'atk', 'standard');
   const effectiveMag = getEffectiveCombatStat(user, 'mag', 'standard');
+  const effectiveScalingStat = skill.scalingStat === 'atk' ? effectiveAtk : effectiveMag;
   const paralyzed = isParalyzedForAttack(user);
   const rollDamageMultiplier = () => paralyzed ? 1 : 1 + Math.random() * 0.2;
 
@@ -73,6 +74,7 @@ export function calculateDamage(
     let def = (hasMechanic(target, 'FREEZE') || ignoreDefOverride || sexyTrueDamage)
       ? 0
       : Math.floor(getEffectiveCombatStat(target, 'def', 'standard') * (user.jobData?.name === '欧皇' ? 0.5 : 1));
+    def = Math.max(0, def - Math.max(0, skill.flatDefensePenetration ?? 0));
     if (hasIdentity(target, 'WT_ERA')) def = Math.floor(def * 2.0);
     dmg = Math.max(1, Math.floor((atk * rollDamageMultiplier() - def * 0.5) * (skill.mult ?? 1)));
     if (hasIdentity(target, 'LIQUID_BODY')) dmg = Math.floor(dmg * 0.5);
@@ -81,7 +83,8 @@ export function calculateDamage(
     const res = (ignoreDefOverride || sexyTrueDamage)
       ? 0
       : Math.floor(getEffectiveCombatStat(target, 'res', 'standard') * (user.jobData?.name === '欧皇' ? 0.5 : 1));
-    dmg = Math.max(1, Math.floor((effectiveMag * standardFormulaOutput * rollDamageMultiplier() - res * 0.5) * (skill.mult ?? 1)));
+    const penetratedRes = Math.max(0, res - Math.max(0, skill.flatDefensePenetration ?? 0));
+    dmg = Math.max(1, Math.floor((effectiveScalingStat * standardFormulaOutput * rollDamageMultiplier() - penetratedRes * 0.5) * (skill.mult ?? 1)));
     if (skill.tag === runtime.skillTags.DEBUFF) dmg = Math.max(1, Math.floor(dmg * 0.5));
     if (hasIdentity(target, 'ETHEREAL')) {
       dmg = Math.floor(dmg * 2.0);

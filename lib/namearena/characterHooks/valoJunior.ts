@@ -4,6 +4,7 @@ import type { CharacterHook, CharacterHookRuntime } from './types';
 import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
 import { hasIdentity, removeEffects, applyStatus } from '../statusSystem';
 import { getEffectiveCombatStat } from '../statusMechanics';
+import { getSurtrTacticalCurrentHp, getSurtrTacticalHpPct } from '../surtrMechanics';
 
 const VALO_ULT_THRESHOLD = 4;
 const VALO_CLUTCH_ULT_THRESHOLD = 4;
@@ -84,8 +85,11 @@ function highEvasionEnemy(actor: Fighter, enemies: Fighter[]): Fighter | undefin
 
 function lowHealthEnemy(enemies: Fighter[]): Fighter | undefined {
   return enemies
-    .filter((enemy) => enemy.hpPct <= 0.42 || enemy.currentHp <= Math.max(900, enemy.maxHp * 0.35))
-    .sort((a, b) => a.currentHp - b.currentHp)[0];
+    .filter((enemy) =>
+      getSurtrTacticalHpPct(enemy) <= 0.42 ||
+      getSurtrTacticalCurrentHp(enemy) <= Math.max(900, enemy.maxHp * 0.35),
+    )
+    .sort((a, b) => getSurtrTacticalCurrentHp(a) - getSurtrTacticalCurrentHp(b))[0];
 }
 
 function hasDeadTeammate(actor: Fighter, runtime: ValorantRuntime): boolean {

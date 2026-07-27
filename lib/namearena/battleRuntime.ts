@@ -71,6 +71,7 @@ export interface BattleRuntimeHost {
   isPassiveCharmCounter: (fighter: Fighter, counterType: string) => boolean;
   spreadDivaSupport: (skill: SkillDefinition, user: Fighter, userTeamId: string) => void;
   syncPuppetMasterStatus: (fighter: Fighter) => void;
+  prepareYuzuProphetIncomingAction: (user: Fighter, target: Fighter) => boolean;
 }
 
 export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHookRuntime {
@@ -192,6 +193,8 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     executeSupportSkill: (skill, user, forcedTarget, userTeamId) =>
       host.executeSupportSkill(skill, user, forcedTarget, userTeamId),
     createCharacterHookRuntime: () => host.createCharacterHookRuntime(),
+    prepareYuzuProphetIncomingAction: (user, target) =>
+      host.prepareYuzuProphetIncomingAction(user, target),
   };
 }
 

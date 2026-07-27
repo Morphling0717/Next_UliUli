@@ -6,6 +6,7 @@ import type { CharacterHook, CharacterHookRuntime } from './types';
 import { isSelectableTargetFor } from '../targeting';
 import { applyStatus, hasIdentity, removeBarriers, removeEffects } from '../statusSystem';
 import { getStatusIdentityIdsByTag } from '../statusRegistry';
+import { getSurtrTacticalHpPct } from '../surtrMechanics';
 
 const WT_BACKUP_COST = 7;
 const WT_CAS_COST = 5;
@@ -69,8 +70,13 @@ function hasMarkedLiveTarget(actor: Fighter, runtime: CharacterHookRuntime): boo
 
 function woundedEnemy(enemies: Fighter[]): Fighter | undefined {
   return enemies
-    .filter((enemy) => enemy.hpPct < 0.38 || hasStatus(enemy, 'WT_AMMO_EXPOSED') || hasStatus(enemy, 'WT_ORIGINIUM_AMMO_EXPOSED') || hasStatus(enemy, 'WT_SCOUTED'))
-    .sort((a, b) => a.hpPct - b.hpPct)[0];
+    .filter((enemy) =>
+      getSurtrTacticalHpPct(enemy) < 0.38 ||
+      hasStatus(enemy, 'WT_AMMO_EXPOSED') ||
+      hasStatus(enemy, 'WT_ORIGINIUM_AMMO_EXPOSED') ||
+      hasStatus(enemy, 'WT_SCOUTED'),
+    )
+    .sort((a, b) => getSurtrTacticalHpPct(a) - getSurtrTacticalHpPct(b))[0];
 }
 
 function weightedPick(items: Array<[string, number]>): string | null {
@@ -228,7 +234,16 @@ export const warThunderHook: CharacterHook = {
     );
     if (revengeTarget) {
       fighter.wtMarkedTargetId = revengeTarget.id;
-      applyStatus(revengeTarget, { identityId: 'WT_SCOUTED', remainingTurns: 3 });
+      runtime.applyStatus(revengeTarget, {
+        identityId: 'WT_SCOUTED',
+        remainingTurns: 3,
+        attribution: {
+          effectSourceId: 'WT_SCOUTED',
+          applierId: fighter.id,
+          applierName: fighter.name,
+          creditActorId: fighter.id,
+        },
+      });
       runtime.log('info', `🔭 【复仇标记】${fighter.name} 的新车刚出出生点就锁定了 ${revengeTarget.name} 的方位！`);
     }
     return true;

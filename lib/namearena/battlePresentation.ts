@@ -29,6 +29,7 @@ const CINEMATIC_ADVANCED_SUMMONS = new Set([
 
 export function getBattlePhase(fighter: Fighter): number {
   if (fighter.isPuruisaishi) return Math.max(1, fighter.puruisaishiPhase ?? 1);
+  if (fighter.isYuzuProphet) return Math.max(1, fighter.yuzuProphetState?.phase ?? 1);
   if (fighter.isYuzu) return Math.max(1, fighter.yuzuPhase ?? 1);
   if (fighter.isOwl) return Math.max(1, fighter.owlState?.phase ?? 1);
   if (fighter.isMomo) return Math.max(1, fighter.momoState?.phase ?? 1);

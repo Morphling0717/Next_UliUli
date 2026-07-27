@@ -1,6 +1,10 @@
 import type { BattleLogMetadata, Fighter, StatusApplication } from './types';
 import type { ReactionActionDescriptor } from './characterHooks';
 import { isSelectableTargetFor } from './targeting';
+import {
+  findActiveYuzuProphet,
+  getYuzuProphetBoundYuzu,
+} from './yuzuProphetMechanics';
 import { commitFormTransition } from './battlePresentation';
 
 import { consumeBarriers, getBarrierTotal, grantBarrier, removeBarriers, removeEffects, applyStatus, withPersistentStatusShapesSuspended } from './statusSystem';
@@ -357,6 +361,31 @@ export function tryAdvanceYuzuPhaseByTeamLoss(runtime: YuzuRuntime, yuzu: Fighte
 export function ensureYuzuMarkedTarget(runtime: YuzuRuntime, yuzu: Fighter): Fighter | undefined {
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) < 3 || !runtime.isActiveCombatant(yuzu)) return undefined;
 
+  const prophet = findActiveYuzuProphet(runtime.fighters, runtime.isActiveCombatant);
+  const boundYuzu = prophet ? getYuzuProphetBoundYuzu(runtime.fighters, prophet) : undefined;
+  if (
+    prophet &&
+    boundYuzu?.id === yuzu.id &&
+    isSelectableTargetFor(runtime, yuzu, prophet)
+  ) {
+    if (yuzu.yuzuMarkedTargetId !== prophet.id) {
+      clearYuzuMark(runtime, yuzu);
+      yuzu.yuzuMarkedTargetId = prophet.id;
+      yuzu.yuzuMarkedHitCount = 0;
+      yuzu.yuzuFuriosoCountedTurn = undefined;
+      runtime.log('debuff', `🎯 【预言家标记覆盖】${prophet.name} 重新成为 ${yuzu.name} 的唯一目标。`, {
+        actorId: yuzu.id,
+        actorName: yuzu.name,
+        targetIds: [prophet.id],
+        skillId: 'yuzu_mirror_mark',
+        skillName: '镜界标记',
+        presentation: 'skill',
+      });
+    }
+    applyStatus(prophet, { identityId: 'YUZU_MARKED', attribution: { effectSourceId: yuzu.id } });
+    return prophet;
+  }
+
   const current = yuzu.yuzuMarkedTargetId
     ? runtime.fighters.find((fighter) =>
       fighter.id === yuzu.yuzuMarkedTargetId &&
@@ -412,8 +441,15 @@ export function registerYuzuMarkedSkill(runtime: YuzuRuntime, yuzu: Fighter, tar
   }
 }
 
-export function applyYuzuWeaponEffects(runtime: YuzuRuntime, user: Fighter, target: Fighter, weapon: YuzuWeapon, actualDamage: number): void {
-  if (actualDamage <= 0) return;
+export function applyYuzuWeaponEffects(
+  runtime: YuzuRuntime,
+  user: Fighter,
+  target: Fighter,
+  weapon: YuzuWeapon,
+  actualDamage: number,
+  hitConnected = actualDamage > 0,
+): void {
+  if (!hitConnected) return;
 
   const applyHostileStatus = (identityId: string, value: number) => {
     if (!runtime.isActiveCombatant(target)) return false;
@@ -442,7 +478,7 @@ export function applyYuzuWeaponEffects(runtime: YuzuRuntime, user: Fighter, targ
   if (weapon.evadeDownTurns && applyHostileStatus('YUZU_EVADE_DOWN', weapon.evadeDownTurns)) appliedEffects.push(`${weapon.evadeDownTurns} 回合闪避破坏`);
   if (weapon.defDownTurns && applyHostileStatus('YUZU_DEF_DOWN', weapon.defDownTurns)) appliedEffects.push(`${weapon.defDownTurns} 回合防御破坏`);
 
-  if (weapon.shieldFromDamageRatio) {
+  if (weapon.shieldFromDamageRatio && actualDamage > 0) {
     applyStatus(user, { identityId: 'YUZU_TAUNT', remainingTurns: 2, attribution: { effectSourceId: user.id } });
     const shieldAmount = Math.max(1, Math.floor(actualDamage * weapon.shieldFromDamageRatio));
     const targets = activeYuzuFriendlyUnits(runtime, user, true);

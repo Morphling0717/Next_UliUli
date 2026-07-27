@@ -1,7 +1,8 @@
 import type { DamageApplicationOptions, Fighter, HealingResolutionRecord, SkillContext, SkillDefinition, StatKey } from '../types';
 import { namerenaData as Data } from '../data';
 import { isActiveCombatant, resolveHealing } from '../combatState';
-import { isDamageRedirected } from '../damageRedirects';
+import { didDamageConnect, isDamageRedirected } from '../damageRedirects';
+import { getSurtrTacticalHpPct } from '../surtrMechanics';
 
 import { applyStatus, hasIdentity } from '../statusSystem';
 
@@ -126,17 +127,20 @@ function applyTrackedDamage(
   actionName: string,
   trueDamage: boolean,
   logPrefix: string,
-): { actualDmg: number; redirected: boolean } {
+): { actualDmg: number; connected: boolean; redirected: boolean } {
   const options: DamageApplicationOptions = { actionName, deferTransform: true, respectDefenses: true };
   const actualDmg = ctx.applyDamage(target, Math.max(0, amount), 'skill', trueDamage, ctx.user, options);
   if (isDamageRedirected(options)) {
     ctx.flushDeferredDamageEvents?.();
-    return { actualDmg: 0, redirected: true };
+    return { actualDmg: 0, connected: false, redirected: true };
   }
+  const connected = didDamageConnect(actualDmg, options);
   if (actualDmg > 0 && (options.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced)) {
     ctx.log('info', `${logPrefix}，这一击造成 ${actualDmg} 点${trueDamage ? '真实' : ''}伤害并触发了致死连锁；${target.name} 已在后续效果中退场！`);
   } else if (actualDmg > 0) {
     ctx.log('crit', `${logPrefix}，对 ${target.name} 实际造成 ${actualDmg} 点${trueDamage ? '真实' : ''}伤害！`);
+  } else if (connected) {
+    ctx.log('crit', `${logPrefix}，成功命中 ${target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命！`);
   } else {
     ctx.log('info', `${logPrefix}，但 ${target.name} 没有承受实际伤害！`);
   }
@@ -144,7 +148,7 @@ function applyTrackedDamage(
   if (target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     ctx.markDefeated(target, { message: `💀 【${actionName}】${target.name} 被玄凝的冠军操作带走！`, killer: ctx.user });
   }
-  return { actualDmg, redirected: false };
+  return { actualDmg, connected, redirected: false };
 }
 
 function livingEnemies(ctx: SkillContext, excludeTargetId?: string): Fighter[] {
@@ -164,7 +168,7 @@ function executeCrackConfirm(ctx: SkillContext, label = '破绽确认'): boolean
   const marked = ctx.user.gamerMarkedTargetId === ctx.target.id;
   const vulnerable =
     marked ||
-    ctx.target.hpPct <= (boosted ? 0.48 : 0.35) ||
+    getSurtrTacticalHpPct(ctx.target) <= (boosted ? 0.48 : 0.35) ||
     ['STUN', 'FREEZE', 'NEURAL_THEFT_DEBUFF', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED', 'BABY_WEAKNESS_MARK', 'BLIND']
       .some((identityId) => hasIdentity(ctx.target, identityId));
   const base = Math.max(ctx.getEffectiveStat(ctx.user, 'atk'), ctx.getEffectiveStat(ctx.user, 'mag'));
@@ -173,7 +177,7 @@ function executeCrackConfirm(ctx: SkillContext, label = '破绽确认'): boolean
   const prefix = boosted ? `强化${label}` : label;
   ctx.log('skill', `🥊 【${prefix}】${ctx.user.name} 消耗 ${cost} APM，把 ${ctx.target.name} 的硬直、血线和习惯全部读完！`);
   const result = applyTrackedDamage(ctx, ctx.target, dmg, label, true, `🥊 【${prefix}】确认命中`);
-  if (!result.redirected && marked) {
+  if (result.connected && marked) {
     delete ctx.user.gamerMarkedTargetId;
     ctx.log('info', `👁️ 【读输入】${ctx.user.name} 已经把 ${ctx.target.name} 的标记转化为确认伤害，标记解除。`);
   }
@@ -213,7 +217,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       if (cost === null) return false;
       const boosted = consumeBoost(ctx.user);
       const executeLine = boosted ? 0.45 : 0.35;
-      const hpRatio = ctx.target.currentHp / ctx.target.maxHp;
+      const hpRatio = getSurtrTacticalHpPct(ctx.target);
       const multiplier = boosted ? (hpRatio <= executeLine ? 3.28 : 2.72) : (hpRatio <= executeLine ? 2.72 : 2.22);
       const dmg = Math.floor(
         Math.max(ctx.getEffectiveStat(ctx.user, 'atk'), ctx.getEffectiveStat(ctx.user, 'mag')) * multiplier +
@@ -292,7 +296,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       ctx.setVisualTargets([ctx.target, ...extras]);
       ctx.log('skill', `⏸️ 【${boosted ? '强化开团指挥' : '开团指挥'}】${ctx.user.name} 消耗 ${cost} APM 强行暂停对局，主目标锁定 ${ctx.target.name}！`);
       const result = applyTrackedDamage(ctx, ctx.target, primary, '开团指挥', false, `⏸️ 【开团指挥】主控命中`);
-      if (!result.redirected && result.actualDmg > 0) applyControl(ctx, ctx.target, 'STUN', boosted ? 2 : 1, '开团眩晕');
+      if (result.connected) applyControl(ctx, ctx.target, 'STUN', boosted ? 2 : 1, '开团眩晕');
       if (boosted && isActiveCombatant(ctx.user)) {
         for (const enemy of extras) {
           if (!isActiveCombatant(enemy)) continue;
@@ -434,7 +438,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       ctx.user.gamerMarkedTargetId = ctx.target.id;
       ctx.log('skill', `👁️ 【${boosted ? '强化读输入' : '读输入'}】${ctx.user.name} 消耗 ${cost} APM，看穿 ${ctx.target.name} 的下一步，施加破绽标记！`);
       const result = applyTrackedDamage(ctx, ctx.target, dmg, '读输入', false, `👁️ 【读输入】情报打击命中`);
-      if (!result.redirected && result.actualDmg > 0) {
+      if (result.connected) {
         applyControl(ctx, ctx.target, 'NEURAL_THEFT_DEBUFF', boosted ? 3 : 2, '输入读取');
         if (boosted) {
           ctx.applyStatus(ctx.target, { identityId: 'GAMER_READ_INPUTS', remainingTurns: 3 });
@@ -502,7 +506,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       ctx.setVisualTargets([ctx.target, ...splashTargets]);
       ctx.log('crit', `🏆 【全平台冠军连段】${ctx.user.name} 消耗 ${cost} APM，FPS 爆头、MOBA 控制、魂系无敌帧、格斗确认与速通路线全部串联，主目标锁定 ${ctx.target.name}！`);
       const result = applyTrackedDamage(ctx, ctx.target, primary, '全平台冠军连段', true, `🏆 【冠军连段】主段命中`);
-      if (result.actualDmg > 0) applyControl(ctx, ctx.target, 'STUN', 1, '冠军连段压制');
+      if (result.connected) applyControl(ctx, ctx.target, 'STUN', 1, '冠军连段压制');
       if (!isActiveCombatant(ctx.user)) return true;
       const splash = Math.floor(primary * 0.28);
       for (const enemy of splashTargets) {

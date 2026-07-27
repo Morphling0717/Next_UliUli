@@ -7,6 +7,7 @@ import { buildStatusPresentationMember } from './statusPresentation';
 import { getStatusIdentityDefinition, getStatusIdentityIdsByTag } from './statusRegistry';
 import { formatTeamDisplayLabel } from './teamPresentation';
 import { findIdentity, hasIdentity, hasMechanic, queryMechanic } from './statusSystem';
+import { getSurtrWinnerOwnerNames, isSurtrJointLegacy } from './surtrMechanics';
 
 export interface TurnFlowRuntime {
   fighters: Fighter[];
@@ -84,13 +85,15 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
   }
 
   if (activeTeams.size <= 1 && !preventEnd) {
-    const winnerNames = winningCombatants.map((fighter) => {
+    const winnerNames = winningCombatants.flatMap((fighter) => {
+      if (fighter.isSurtr) return getSurtrWinnerOwnerNames(runtime, fighter);
       if (!fighter.isSummon || !fighter.summonerId) return fighter.name;
       return runtime.fighters.find((candidate) => candidate.id === fighter.summonerId)?.name ?? fighter.name;
     });
     const winners = [...new Set(winnerNames)].join(' & ');
-    const visibleTeam = winningCombatants.length > 0
-      ? formatTeamDisplayLabel(winningCombatants[0].teamId)
+    const firstWinner = winningCombatants[0];
+    const visibleTeam = firstWinner && !isSurtrJointLegacy(runtime, firstWinner)
+      ? formatTeamDisplayLabel(runtime.getTeamId(firstWinner))
       : undefined;
     const winTeam = visibleTeam ? `【${visibleTeam}】` : '';
     const winnerLabel = [winTeam, winners || '无（同归于尽）'].filter(Boolean).join(' ');

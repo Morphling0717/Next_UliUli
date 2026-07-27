@@ -32,7 +32,9 @@ import { getEffectiveCombatStat } from "@/lib/namearena/statusMechanics";
 import { getBarrierTotal, hasIdentity } from "@/lib/namearena/statusSystem";
 import { getStatusIdentityIdsByTag } from "@/lib/namearena/statusRegistry";
 import { YUZU_BARRIER_IDENTITY } from "@/lib/namearena/yuzuMechanics";
-import { formatTeamDisplayLabel } from "@/lib/namearena/teamPresentation";
+import { formatFighterTeamDisplayLabel } from "@/lib/namearena/teamPresentation";
+import { getSurtrDisplayHp } from "@/lib/namearena/surtrMechanics";
+import { isYuzuProphetSettlementSuppressed } from "@/lib/namearena/yuzuProphetMechanics";
 import {
   clearBattlePlaybackFeed,
   commitBattlePlaybackView,
@@ -849,18 +851,19 @@ function ResourceStrip({ fighter, fighters, turnCount, battleState }: { fighter:
 
 function HealthBar({ fighter }: { fighter: Fighter }) {
   const hpPct = Math.max(0, Math.min(100, fighter.hpPct * 100));
+  const displayHp = getSurtrDisplayHp(fighter);
   const shield = Math.max(0, Math.floor(getBarrierTotal(fighter)));
   const shieldPct = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (shield / fighter.maxHp) * 100)) : 0;
   const effectivePct = fighter.maxHp > 0
-    ? Math.max(0, Math.min(100, ((fighter.currentHp + shield) / fighter.maxHp) * 100))
+    ? Math.max(0, Math.min(100, ((displayHp + shield) / fighter.maxHp) * 100))
     : hpPct;
   const hasShield = shield > 0;
   const shieldLabel = [
     ...(fighter.barriers ?? []).filter((barrier) => barrier.value > 0).map((barrier) => `${barrier.displayName}：${Math.floor(barrier.value)}`),
   ].filter(Boolean).join('\n');
   const title = hasShield
-    ? `生命：${fighter.currentHp}/${fighter.maxHp}\n${shieldLabel}\n蓝色区域表示护盾覆盖量，护盾会先于生命承受伤害。`
-    : `生命：${fighter.currentHp}/${fighter.maxHp}`;
+    ? `生命：${displayHp}/${fighter.maxHp}\n${shieldLabel}\n蓝色区域表示护盾覆盖量，护盾会先于生命承受伤害。`
+    : `生命：${displayHp}/${fighter.maxHp}`;
 
   return (
     <div
@@ -1419,7 +1422,9 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         const settlementRows = buildSettlementRows(fighters);
         const sortedByDmg = [...settlementRows].sort((a, b) => b.stats.dmgDealt - a.stats.dmgDealt);
         const maxDmg = Math.max(1, sortedByDmg[0]?.stats.dmgDealt || 1);
-        const showPuruisaishiProphecy = hasPuruisaishiAppeared(fighters);
+        const showPuruisaishiProphecy =
+            hasPuruisaishiAppeared(fighters) &&
+            !isYuzuProphetSettlementSuppressed(fighters);
 
         const mvpDmg = sortedByDmg[0];
         const mvpTank = [...settlementRows].sort((a, b) => b.stats.dmgTaken - a.stats.dmgTaken)[0];
@@ -1767,10 +1772,10 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                                 <div className="mb-1 flex min-w-0 items-end justify-between gap-2">
                                                     <span title={f.name} className="min-w-0 truncate text-sm font-bold md:text-base">
                                                         {f.name}
-                                                        {formatTeamDisplayLabel(f.teamId) && <span className="text-[10px] ml-1.5 bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 hidden sm:inline-block border border-slate-600 shadow-sm">@{formatTeamDisplayLabel(f.teamId)}</span>}
+                                                        {formatFighterTeamDisplayLabel(f, fighters) && <span className="text-[10px] ml-1.5 bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 hidden sm:inline-block border border-slate-600 shadow-sm">@{formatFighterTeamDisplayLabel(f, fighters)}</span>}
                                                     </span>
                                                     <span className="inline-flex shrink-0 items-center gap-1 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-bold text-slate-400 shadow-inner">
-                                                        <span>{f.currentHp}/{f.maxHp}</span>
+                                                        <span>{getSurtrDisplayHp(f)}/{f.maxHp}</span>
                                                         {getBarrierTotal(f) > 0 ? (
                                                             <span className="rounded bg-sky-500/15 px-1 text-sky-200">+{Math.floor(getBarrierTotal(f))}</span>
                                                         ) : null}

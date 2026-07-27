@@ -820,21 +820,21 @@ export function runArchitectureCases(): string[] {
         name: '青眼白龙',
         kind: 'tribute',
         job: 'BLUE_EYES_WHITE_DRAGON',
-        materials: ['栗子球', '史尔特尔'],
+        materials: ['栗子球', 'Saber'],
         tributes: 2,
       },
       {
         name: '翼神龙',
         kind: 'tribute',
         job: 'RA_WINGED_DRAGON',
-        materials: ['栗子球', '史尔特尔', '海马'],
+        materials: ['栗子球', 'Saber', '海马'],
         tributes: 3,
       },
       {
         name: '青眼究极龙',
         kind: 'fusion',
         job: 'BLUE_EYES_ULTIMATE_DRAGON',
-        materials: ['青眼白龙', '栗子球', '史尔特尔'],
+        materials: ['青眼白龙', '栗子球', 'Saber'],
         tributes: 0,
       },
     ] as const;
@@ -981,7 +981,7 @@ export function runArchitectureCases(): string[] {
       assert(art.expectedPath.endsWith('.webp'), `${name} should expose its future card-art path`);
     });
     assert(new Set(SUMMON_CARD_ART_SLOTS.map((entry) => entry.expectedPath)).size === SUMMON_CARD_ART_SLOTS.length, 'Every summon and sealed component should own a distinct card-art path');
-    ['护主栗子球', '钟离', 'Saber', '萨姆', '巴哈姆特', '伊莫库', '史尔特尔', '史瓦罗'].forEach((name) => {
+    ['护主栗子球', '钟离', 'Saber', '萨姆', '巴哈姆特', '伊莫库', '史瓦罗'].forEach((name) => {
       const art = getSummonCardArt(name);
       assert(isVersionedAsset(art.imagePath, art.expectedPath), `${name} should load its versioned ordinary summon card`);
       assert(isVersionedWebp(art.avatarPath), `${name} should load a versioned battlefield avatar`);
@@ -993,7 +993,7 @@ export function runArchitectureCases(): string[] {
       summon.isAdvancedSummon = false;
       assert(getStageFighterImage(summon) === art.avatarPath, `${name} should replace its battlefield emoji with the supplied avatar`);
     });
-    ['青眼白龙', '青眼究极龙', '翼神龙', '黑暗大法师'].forEach((name) => {
+    ['史尔特尔', '青眼白龙', '青眼究极龙', '翼神龙', '黑暗大法师'].forEach((name) => {
       const art = getSummonCardArt(name);
       assert(isVersionedAsset(art.imagePath, art.expectedPath), `${name} should load its versioned card image`);
       assert(isVersionedWebp(art.cutinPath), `${name} should load a versioned transparent summon cut-in`);
@@ -1238,7 +1238,10 @@ export function runArchitectureCases(): string[] {
       `Runtime form fields must change only through commitFormTransition (initializers are explicitly allowlisted): ${unauthorizedFormMutations.join(', ')}`,
     );
     const manualTransformationCueFiles = collectTypeScriptFiles(join(projectRoot, 'lib/namearena'))
-      .filter((path) => !path.endsWith('/battlePresentation.ts') && !path.endsWith('/types.ts'))
+      .filter((path) => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        return !normalizedPath.endsWith('/battlePresentation.ts') && !normalizedPath.endsWith('/types.ts');
+      })
       .filter((path) => /visualCue\s*:\s*\{[\s\S]{0,240}?kind\s*:\s*['"]transformation['"]/.test(readFileSync(path, 'utf8')));
     assert(
       manualTransformationCueFiles.length === 0,
@@ -1259,7 +1262,7 @@ export function runArchitectureCases(): string[] {
     });
 
     productionFiles
-      .filter((path) => !path.endsWith('/statusSystem.ts'))
+      .filter((path) => !path.replace(/\\/g, '/').endsWith('/statusSystem.ts'))
       .forEach((path) => {
         const source = readFileSync(path, 'utf8');
       assert(
@@ -1276,11 +1279,12 @@ export function runArchitectureCases(): string[] {
       );
       });
 
-    const strictConsumerFiles = productionFiles.filter((path) =>
-      path.includes('/lib/namearena/skills/') ||
-      path.includes('/lib/namearena/characterHooks/') ||
-      path.includes('/components/namearena/'),
-    );
+    const strictConsumerFiles = productionFiles.filter((path) => {
+      const normalizedPath = path.replace(/\\/g, '/');
+      return normalizedPath.includes('/lib/namearena/skills/') ||
+        normalizedPath.includes('/lib/namearena/characterHooks/') ||
+        normalizedPath.includes('/components/namearena/');
+    });
     strictConsumerFiles.forEach((path) => {
       const source = readFileSync(path, 'utf8');
       assert(
@@ -1291,9 +1295,10 @@ export function runArchitectureCases(): string[] {
 
     const presentationConsumers = productionFiles.filter((path) => {
       const source = readFileSync(path, 'utf8');
+      const normalizedPath = path.replace(/\\/g, '/');
       return source.includes('STATUS_IDENTITY_PRESENTATION') &&
-        !path.endsWith('/statusRegistry.ts') &&
-        !path.endsWith('/data/constants.ts');
+        !normalizedPath.endsWith('/statusRegistry.ts') &&
+        !normalizedPath.endsWith('/data/constants.ts');
     });
     assert(
       presentationConsumers.length === 0,

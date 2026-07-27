@@ -3,7 +3,7 @@ import { namerenaData as Data } from '../data';
 import { clearZeroedStatPenalty, isActiveCombatant, resolveHealing } from '../combatState';
 import { consumeSpellBlock, formatPreSkillSpellBlock } from '../defenseStatus';
 import { applyStatus, hasIdentity } from '../statusSystem';
-import { isDamageRedirected } from '../damageRedirects';
+import { didDamageConnect, isDamageRedirected } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -66,6 +66,8 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
           if (isDamageRedirected(damageOptions)) continue;
           if (actualDmg > 0) {
             ctx.log('info', `💥 爆炸余波重创了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
+          } else if (didDamageConnect(actualDmg, damageOptions)) {
+            ctx.log('info', `💥 爆炸余波成功命中 ${e.name}；但【黄昏余命】期间未再损失生命！`);
           } else {
             ctx.log('info', `💥 爆炸余波扫过 ${e.name}，但没有造成实际伤害！`);
           }
@@ -118,6 +120,8 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
             if (isDamageRedirected(damageOptions)) continue;
             if (actualDmg > 0) {
               ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
+            } else if (didDamageConnect(actualDmg, damageOptions)) {
+              ctx.log('info', `🔥 轨道炮余波成功命中 ${e.name}；但【黄昏余命】期间未再损失生命！`);
             } else {
               ctx.log('info', `🔥 轨道炮余波溅射到了 ${e.name}，但没有造成实际伤害！`);
             }

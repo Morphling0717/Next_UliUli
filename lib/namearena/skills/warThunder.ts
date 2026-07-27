@@ -6,7 +6,8 @@ import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
 import { applyStatus, consumeStatusValue, hasIdentity, hasMechanic, queryMechanic } from '../statusSystem';
 import { getPanelCombatStat, WT_REPAIRING_PROFILE } from '../statusMechanics';
-import { isDamageRedirected } from '../damageRedirects';
+import { didDamageConnect, isDamageRedirected } from '../damageRedirects';
+import { getSurtrTacticalHpPct, isSurtrAfterglowActive } from '../surtrMechanics';
 
 const { SKILL_TAGS } = Data;
 
@@ -111,12 +112,12 @@ function exposeModule(ctx: SkillContext, target: Fighter, moduleIdentityId: stri
   const identityId = isOriginiumEntity(target)
     ? (WT_ORIGINIUM_MODULE_IDENTITIES[moduleIdentityId] ?? moduleIdentityId)
     : moduleIdentityId;
-  applyStatus(target, {
+  const applied = ctx.applyStatus(target, {
     identityId,
     remainingTurns,
     attribution: { effectSourceId: identityId, applierId: ctx.user.id, applierName: ctx.user.name },
   });
-  ctx.log('info', describeOriginiumModuleHit(ctx, target, moduleIdentityId) ?? text);
+  if (applied) ctx.log('info', describeOriginiumModuleHit(ctx, target, moduleIdentityId) ?? text);
 }
 
 function grantDamageSpawnPoint(ctx: SkillContext, actualDmg: number, target: Fighter): void {
@@ -133,7 +134,7 @@ function maybeAmmoRack(ctx: SkillContext, target: Fighter, actualDmg: number, ac
   const exposed = hasMechanic(target, 'WT_AMMO_EXPOSED') || hasStatus(target, 'WT_SCOUTED');
   const threshold = exposed ? 0.34 : 0.24;
   const chance = exposed ? 0.34 : 0.18;
-  if (target.hpPct >= threshold || Math.random() >= chance) return false;
+  if (getSurtrTacticalHpPct(target) >= threshold || Math.random() >= chance) return false;
   const originium = isOriginiumEntity(target);
   return tryExecuteDefeat(ctx, target, originium ? '源石核心崩解' : '弹药架殉爆', {
     message: originium
@@ -263,8 +264,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       return false;
     },
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
-      grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user) || !connected || !isActiveCombatant(ctx.target)) return;
+      if (actualDmg > 0) grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
       if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
       const moduleRoll = Math.random();
       if (moduleRoll < 0.5) {
@@ -272,7 +274,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       } else {
         exposeModule(ctx, ctx.target, 'WT_AMMO_EXPOSED', 3, `💥 【模块破坏】${ctx.user.name} 的钢针擦过弹药区，${ctx.target.name} 弹药架暴露！`);
       }
-      maybeAmmoRack(ctx, ctx.target, actualDmg, '脱壳穿甲弹');
+      if (actualDmg > 0) maybeAmmoRack(ctx, ctx.target, actualDmg, '脱壳穿甲弹');
     },
   },
   wt_magic_ricochet: {
@@ -306,7 +308,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     onExecute: (ctx) => {
       const target = preferredTarget(ctx);
       applyStatus(ctx.user, { identityId: 'AIM', charges: 2 });
-      applyStatus(target, { identityId: 'WT_SCOUTED', remainingTurns: 3 });
+      ctx.applyStatus(target, { identityId: 'WT_SCOUTED', remainingTurns: 3 });
       ctx.user.wtMarkedTargetId = target.id;
       const before = ctx.user.wtSpawnPoints ?? 0;
       const current = Math.random() < 0.45 ? gainSpawnPoints(ctx.user, 1) : before;
@@ -319,8 +321,9 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     name: 'BMPT死亡收割机', tag: SKILL_TAGS.PHYS, mult: 0.58, hits: 5, statusApplications: [{ identityId: 'WT_SUPPRESS' }], alwaysHit: true,
     text: '🚜 {USER} 召唤巨大 BMPT 终结者！双联装30毫米机炮狂啸！\n"哒哒哒哒哒！" 对 {TARGET} 倾泻 5 段火力（共 {VAL} 伤害）并形成绝对【火力压制】！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user) || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
-      grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user) || !connected || !isActiveCombatant(ctx.target)) return;
+      if (actualDmg > 0) grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
       if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
       exposeModule(ctx, ctx.target, 'WT_TRACK_DAMAGED', 2, `🛞 【履带断裂】${ctx.user.name} 的机炮扫断 ${ctx.target.name} 的机动部件，闪避归零！`);
       if (Math.random() < 0.35) {
@@ -333,12 +336,13 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     text: '💥 {USER} 召唤 T-58 重型坦克！155毫米线膛炮锁定！\n"一发入魂！" 粗壮的钢针瞬间粉碎了 {TARGET} 的装甲，造成 {VAL} 真实伤害并将其当场【击飞】！',
     afterExecute: (ctx, actualDmg) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !isTopTierWt(ctx.user)) return;
-      if (actualDmg > 0 && isActiveCombatant(ctx.target)) {
-        grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (connected && isActiveCombatant(ctx.target)) {
+        if (actualDmg > 0) grantDamageSpawnPoint(ctx, actualDmg, ctx.target);
         if (ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction) return;
         exposeModule(ctx, ctx.target, 'WT_AMMO_EXPOSED', 3, `💥 【弹药架暴露】T-58 大口径碎甲让 ${ctx.target.name} 的内部弹药区完全暴露！`);
       }
-      if (ctx.target.currentHp > 0 && ctx.target.hpPct < (hasMechanic(ctx.target, 'WT_AMMO_EXPOSED') ? 0.34 : 0.26) && !ctx.target.transformed && Math.random() < 0.36) {
+      if (connected && ctx.target.currentHp > 0 && getSurtrTacticalHpPct(ctx.target) < (hasMechanic(ctx.target, 'WT_AMMO_EXPOSED') ? 0.34 : 0.26) && !ctx.target.transformed && Math.random() < 0.36) {
         const originium = isOriginiumEntity(ctx.target);
         tryExecuteDefeat(ctx, ctx.target, originium ? '源石核心崩解' : '弹药架殉爆', {
           message: originium
@@ -404,16 +408,22 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         }
 
         let plannedDmg = isPrimary ? mainDmg : splashDmg;
-        if (!isPrimary && plannedDmg >= e.currentHp) {
+        if (!isPrimary && !isSurtrAfterglowActive(e) && plannedDmg >= e.currentHp) {
           plannedDmg = Math.max(0, e.currentHp - 1);
         }
 
         const damageOptions: DamageApplicationOptions = { actionName: '苏-30SM2 洗地' };
         const actualDmg = ctx.applyDamage(e, plannedDmg, 'skill', true, ctx.user, damageOptions);
         if (isDamageRedirected(damageOptions)) continue;
+        const connected = didDamageConnect(actualDmg, damageOptions);
         const airborneImmune = findDefenseStatus(e, 'BKB') || findDefenseStatus(e, 'INVUL');
-        if (actualDmg <= 0) {
+        if (!connected) {
           ctx.log('info', `💥 轰炸冲击被化解！${e.name} 没有承受实际伤害，也没有被【击飞】！`);
+        } else if (actualDmg <= 0 && airborneImmune) {
+          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！攻击命中 ${e.name}；【黄昏余命】令其不再损失生命，同时${formatControlBlocked(airborneImmune, e.name, isPrimary ? '击飞效果' : '火力压制效果').replace(/^🟡\s*/, '')}`);
+        } else if (actualDmg <= 0) {
+          const controlName = isPrimary ? '击飞' : '火力压制';
+          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！攻击命中 ${e.name}；【黄昏余命】期间未再损失生命，并被【${controlName}】！`);
         } else if (airborneImmune) {
           ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！${e.name} 承受了 ${actualDmg} 点真实伤害，但${formatControlBlocked(airborneImmune, e.name, isPrimary ? '击飞效果' : '火力压制效果').replace(/^🟡\s*/, '')}`);
         } else {
@@ -422,7 +432,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         }
 
         ctx.flushDeferredDamageEvents?.();
-        if (actualDmg > 0 && !airborneImmune && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
+        if (connected && !airborneImmune && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
           ctx.applyStatus(e, {
             identityId: isPrimary ? 'AIRBORNE' : 'WT_SUPPRESS',
             remainingTurns: 1,
@@ -433,7 +443,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         const ammoRackPct = isPrimary
           ? (hasLaserDesignation ? CAS_DESIGNATED_MAIN_AMMO_RACK_PCT : CAS_MAIN_AMMO_RACK_PCT)
           : (hasLaserDesignation ? CAS_DESIGNATED_SPLASH_AMMO_RACK_PCT : CAS_SPLASH_AMMO_RACK_PCT);
-        if (!lethalOutcomeTriggered && actualDmg > 0 && e.currentHp > 0 && e.hpPct < ammoRackPct) {
+        if (!lethalOutcomeTriggered && actualDmg > 0 && e.currentHp > 0 && getSurtrTacticalHpPct(e) < ammoRackPct) {
           const originium = isOriginiumEntity(e);
           lethalOutcomeTriggered = tryExecuteDefeat(ctx, e, originium ? '源石核心崩解' : '弹药架殉爆', {
             message: originium

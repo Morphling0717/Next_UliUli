@@ -316,6 +316,11 @@ export function executeSkillAction(
   };
 
   const isSupportAction = skill.tag === runtime.skillTags.HEAL || skill.tag === runtime.skillTags.BUFF;
+  if (!isSupportAction && runtime.prepareYuzuProphetIncomingAction(user, target)) {
+    refundInterruptedGacha('被预言家裁定取消');
+    settleAction();
+    return;
+  }
   if (!isSupportAction) {
     resolveDeclarativeSkillDispel(runtime, skill, user, target, 'before_action', 'before_action');
   }
@@ -551,9 +556,12 @@ export function executeSkillAction(
   skillCtx.redirectedYuzuDefeatedTargetIds = damageOptions.redirectedYuzuDefeatedTargetIds;
   skillCtx.suppressOnHitStatuses = !!damageOptions.suppressOnHitStatuses;
   skillCtx.suppressOnHitStatusTargetId = target.id;
+  skillCtx.primaryHitConnectedWithoutHpDamage = !!damageOptions.hitWithoutHpDamage;
   if (isIntercepted) {
     if (actualDmg > 0) {
       runtime.log('info', `🛡️ ${interceptionLabel}，实际承受 ${actualDmg} 点伤害！`);
+    } else if (damageOptions.hitWithoutHpDamage) {
+      runtime.log('info', `🛡️ ${interceptionLabel}，攻击成功命中；但【黄昏余命】期间显示生命已为 0，不再产生生命损失！`);
     } else {
       runtime.log('info', `🛡️ ${interceptionLabel}，但没有造成实际伤害！`);
     }
@@ -564,10 +572,12 @@ export function executeSkillAction(
     !damageOptions.redirectedByOwlEmperor &&
     !damageOptions.redirectedByMomo &&
     !yuzuFullyRedirected &&
-    !damageOptions.targetDefeatedDuringDamage
+    !damageOptions.targetWithdrawnDuringDamage
   ) {
     if (actualDmg > 0) {
       runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
+    } else if (damageOptions.hitWithoutHpDamage) {
+      runtime.log('info', `📌 实际结算：攻击成功命中 ${target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命（原始预估 ${preMitigationDmg}）。`);
     } else {
       runtime.log('info', `📌 实际结算：${target.name} 完全抵消了这次伤害（原始预估 ${preMitigationDmg}），没有承受实际伤害。`);
     }
@@ -581,10 +591,12 @@ export function executeSkillAction(
     !damageOptions.redirectedByOwlEmperor &&
     !damageOptions.redirectedByMomo &&
     !yuzuFullyRedirected &&
-    !damageOptions.targetDefeatedDuringDamage
+    !damageOptions.targetWithdrawnDuringDamage
   ) {
     if (actualDmg > 0) {
       runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
+    } else if (damageOptions.hitWithoutHpDamage) {
+      runtime.log('info', `📌 实际结算：攻击成功命中 ${target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命（原始预估 ${preMitigationDmg}）。`);
     } else {
       runtime.log('info', `📌 实际结算：${target.name} 完全抵消了这次伤害（原始预估 ${preMitigationDmg}），没有承受实际伤害。`);
     }
@@ -594,7 +606,7 @@ export function executeSkillAction(
     const sharedCount = damageOptions.redirectedYuzuTargetIds?.length ?? 0;
     runtime.log('info', `🪞 【镜界分摊完成】${target.name} 本人没有损失生命；${sharedCount} 名队友合计实际承受 ${sharedDamage} 点生命伤害。`);
   }
-  if (preMitigationDmg > 0) {
+  if (preMitigationDmg > 0 && !damageOptions.targetWithdrawnDuringDamage) {
     runtime.log('system', `state-sync:${target.id}`, {
       displayInFeed: false,
       targetIds: [target.id],
@@ -609,11 +621,12 @@ export function executeSkillAction(
   const targetBarrierApplications = (skill.barrierApplications ?? []).filter((application) => application.target !== 'user');
   const selfStatusResolvedThroughShield = (selfStatusApplications.length > 0 || selfBarrierApplications.length > 0) && (damageOptions.resolution?.shieldDamage ?? 0) > 0;
   const targetedUtilityStatusReady = !!skill.noDamage && (targetStatusApplications.length > 0 || targetBarrierApplications.length > 0);
-  if ((actualDmg > 0 || selfStatusResolvedThroughShield || targetedUtilityStatusReady) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor && !damageOptions.redirectedByMomo) {
-    if (selfStatusApplications.length > 0 || selfBarrierApplications.length > 0 || (targetedUtilityStatusReady && runtime.isActiveCombatant(target)) || (actualDmg > 0 && target.currentHp > 0)) {
+  const connectedWithoutHpDamage = !!damageOptions.hitWithoutHpDamage;
+  if ((actualDmg > 0 || connectedWithoutHpDamage || selfStatusResolvedThroughShield || targetedUtilityStatusReady) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor && !damageOptions.redirectedByMomo) {
+    if (selfStatusApplications.length > 0 || selfBarrierApplications.length > 0 || (targetedUtilityStatusReady && runtime.isActiveCombatant(target)) || ((actualDmg > 0 || connectedWithoutHpDamage) && target.currentHp > 0)) {
       applySkillStatusEffect(runtime, skill, user, target, !damageOptions.suppressOnHitStatuses);
     }
-    if (!skill.noDamage && actualDmg > 0 && target.currentHp > 0) {
+    if (!skill.noDamage && (actualDmg > 0 || connectedWithoutHpDamage) && target.currentHp > 0) {
       applyAttackerStyleEffects(runtime, user, target, !damageOptions.suppressOnHitStatuses);
     }
   }
@@ -621,7 +634,9 @@ export function executeSkillAction(
     targetStatusApplications.length > 0 &&
     preMitigationDmg > 0 &&
     actualDmg <= 0 &&
-    !skill.noDamage
+    !connectedWithoutHpDamage &&
+    !skill.noDamage &&
+    !damageOptions.targetDefeatedDuringDamage
   ) {
     const statusName = targetStatusApplications.map((application) => getStatusIdentityDefinition(application.identityId).displayName).join('、');
     const redirected = isDamageRedirected(damageOptions);
@@ -629,7 +644,7 @@ export function executeSkillAction(
       ? `📌 状态结算：攻击伤害已从 ${target.name} 身上转移，本次【${statusName}】不会跟随伤害转移，未生效。`
       : `📌 状态结算：${target.name} 没有承受生命伤害，本次【${statusName}】未生效。`);
   }
-  if (actualDmg > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(target);
+  if (actualDmg > 0 || connectedWithoutHpDamage || (target.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(target);
 
   handleValorantWeaponDrop(runtime, target, targetActualDmg);
   handlePhysicalCounterReflect(runtime, skill, user, target, targetActualDmg);

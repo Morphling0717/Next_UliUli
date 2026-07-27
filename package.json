@@ -25,6 +25,8 @@
     "test:namearena:stress": "node scripts/namearena-mega-stress.js",
     "test:namearena:emote": "node scripts/namearena-emote-stress.js",
     "test:namearena:emote-interactions": "node scripts/namearena-emote-interaction-stress.js",
+    "test:namearena:surtr": "node scripts/namearena-surtr-stress.js",
+    "test:namearena:yuzu-prophet": "node scripts/namearena-yuzu-prophet-stress.js",
     "test:namearena:compare": "node scripts/namearena-compare-logs.js",
     "db:backup": "node scripts/backup-db.js",
     "clean": "rimraf .next out build node_modules"

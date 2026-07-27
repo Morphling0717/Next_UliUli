@@ -15,6 +15,11 @@ export function isDamageRedirected(options: DamageApplicationOptions): boolean {
   return getDamageRedirectKind(options) !== null;
 }
 
+/** The intended target was hit even if a scripted active state prevented HP loss. */
+export function didDamageConnect(actualTargetDamage: number, options: DamageApplicationOptions): boolean {
+  return actualTargetDamage > 0 || options.hitWithoutHpDamage === true;
+}
+
 /** Total HP damage caused by this hit, including any share/redirect recipient. */
 export function getResolvedDamageTotal(actualTargetDamage: number, options: DamageApplicationOptions): number {
   switch (getDamageRedirectKind(options)) {

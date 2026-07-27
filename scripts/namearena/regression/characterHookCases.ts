@@ -416,6 +416,41 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const tingJoker = makeFighter('小汀@A');
+    const croc = makeFighter('牢鳄@B');
+    const ra = makeFighter('翼神龙转伤测试体@B');
+    bindAsGachaSummon(croc, ra, '翼神龙', true);
+    const { engine, logs } = makeDeathEngine([tingJoker, croc, ra]);
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for Ra guardian redirect tests');
+    const engineTing = engine.fighters[0];
+    const engineCroc = engine.fighters[1];
+    const engineRa = engine.fighters[2];
+    engineTing.job = 'GOD_OF_TROLLS';
+    engineTing.jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    engineTing.transformed = true;
+    engineTing.maxHp = 10000;
+    localProject.setCurrentHp(engineTing, 10000);
+    forceLuckEmperor(engineCroc);
+    engineCroc.maxHp = 3000;
+    localProject.setCurrentHp(engineCroc, 500);
+    engineRa.maxHp = 5000;
+    engineRa.atk = 1000;
+    engineRa.mag = 1000;
+    localProject.setCurrentHp(engineRa, 5000);
+
+    withRandomSequence([0, 0], () => {
+      engine.applyDamage(engineCroc, 2000, 'skill', true, engineTing, { actionName: '翼神龙转伤测试' });
+    });
+
+    assert(logs.some((entry) => entry.text.includes('随机恶作剧') && entry.text.includes('护主神炎')), 'Ra guardian retaliation should expose the Joker redirect cause');
+    assert(logs.some((entry) => entry.text.includes('【护主神炎】') && entry.text.includes('被转伤机制接管')), 'Ra guardian outer log should acknowledge redirected retaliation');
+    assert(!logs.some((entry) => entry.text.includes('【护主神炎】') && entry.text.includes(`被 ${engineTing.name} 化解`)), 'Redirected Ra retaliation must not be mislabeled as target mitigation');
+    assert(!engineTing.statuses.some((status) => status.identityId === 'BURN'), 'A fully redirected Ra retaliation must not burn the original target');
+    cases.push('Ra guardian retaliation preserves redirect context and on-hit ownership');
+  }
+
+  {
     const ting = makeFighter('小汀@A');
     const croc = makeFighter('牢鳄@B');
     const exodia = makeFighter('黑暗大法师@B');
@@ -1867,7 +1902,7 @@ export function runCharacterHookCases(): string[] {
     const { engine, logs } = makeDeathEngine([gacha, summon, joker]);
     localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
     engine.handleTransformations(engine.fighters[0]);
-    bindAsGachaSummon(engine.fighters[0], engine.fighters[1], '史尔特尔');
+    bindAsGachaSummon(engine.fighters[0], engine.fighters[1], 'Saber');
     engine.fighters[1].atk = 400;
     engine.fighters[1].mag = 400;
     engine.fighters[2].maxHp = 10000;

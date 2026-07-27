@@ -18,6 +18,12 @@ import {
 
 import { tryMomoBanishBlueEyes } from './momoMechanics';
 import { generateUniqueRuntimeId } from './core';
+import {
+  initializeSurtrState,
+  syncSurtrAffiliation,
+  pickSurtrTributeGroup,
+  type SurtrTributeGroup,
+} from './surtrMechanics';
 
 export interface SummonResolutionRuntime {
   fighters: Fighter[];
@@ -60,6 +66,19 @@ export function executeSummonSkill(
   userTeamId: string,
 ): void {
   let summonMaterials: string[] = [];
+  let surtrTributeGroup: SurtrTributeGroup | undefined;
+  let surtrOwlTeamId: string | undefined;
+  if (
+    skill.summonName === '史尔特尔' &&
+    runtime.fighters.some((fighter) =>
+      fighter.isSurtr &&
+      fighter.surtrState?.primaryOwnerId === user.id &&
+      runtime.isActiveCombatant(fighter),
+    )
+  ) {
+    runtime.log('info', `🚫 ${user.name} 已经拥有一名仍在场的史尔特尔，不能重复完成上级召唤！`);
+    return;
+  }
   if ((skill.unique || skill.summonName === '黑暗大法师') && runtime.fighters.some((fighter) => getSummonBaseName(fighter) === skill.summonName && runtime.isActiveCombatant(fighter))) {
     runtime.log('info', `🚫 场上已经存在 ${skill.summonName}，无法重复召唤！`);
     return;
@@ -91,6 +110,78 @@ export function executeSummonSkill(
       runtime.markDefeated(victim, { awardKill: false });
       victim.isDead = true;
     });
+  }
+
+  if (skill.summonName === '史尔特尔') {
+    surtrTributeGroup = pickSurtrTributeGroup(runtime);
+    if (!surtrTributeGroup) {
+      runtime.log('info', `🚫 ${user.name} 试图上级召唤史尔特尔，但场上找不到同一名鸮所属的诗怀雅与幽灵鲨！`);
+      if (isLuckEmperor(user)) {
+        grantGachaLuck(user, 1, runtime.log, '史尔特尔上级召唤失败');
+        applyStatus(user, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'surtr_tribute_compensation' } });
+        const healed = healFighter(user, Math.floor(user.maxHp * 0.1), runtime.log);
+        runtime.log(
+          healed > 0 ? 'heal' : 'info',
+          `🍀 【上级召唤补偿】${user.name} 获得 1 点欧气与 2 层法术抵挡${healed > 0 ? `，并恢复 ${healed} 点生命` : '，但没有恢复生命'}。`,
+        );
+      }
+      return;
+    }
+
+    const { owl, swire, specter } = surtrTributeGroup;
+    surtrOwlTeamId = runtime.getTeamId(owl);
+    summonMaterials = [swire.name, specter.name];
+    const crossTeamText = surtrOwlTeamId !== userTeamId
+      ? `两名祭品来自 ${owl.name} 一方的敌对阵营，本次为跨阵营献祭。`
+      : '两名祭品与召唤者属于同一阵营。';
+    runtime.log(
+      'crit',
+      `🔥 【史尔特尔上级召唤】${user.name} 锁定 ${owl.name} 所属的 ${swire.name} 与 ${specter.name}。${crossTeamText}`,
+      { actorId: user.id, actorName: user.name, targetIds: [swire.id, specter.id] },
+    );
+
+    runtime.log('death', `💀 【第一祭品】${swire.name} 被献作史尔特尔的上级召唤素材；这是一场无击杀者的真实死亡。`);
+    const swireSacrificed = runtime.markDefeated(swire, {
+      awardKill: false,
+      setHpZero: true,
+      bypassDeathSaves: true,
+    });
+    swire.isDead = true;
+
+    const specterStillLegal =
+      runtime.isActiveCombatant(specter) &&
+      specter.summonerId === owl.id &&
+      specter.owlSummonState?.kind === 'specter';
+    if (!swireSacrificed || !specterStillLegal) {
+      runtime.log('info', `🚫 【上级召唤中断】第一祭品死亡后的连锁使幽灵鲨不再合法，史尔特尔不会生成；已经发生的诗怀雅死亡不回滚。`);
+      grantGachaLuck(user, 1, runtime.log, '史尔特尔献祭连锁中断');
+      applyStatus(user, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'surtr_tribute_compensation' } });
+      const healed = healFighter(user, Math.floor(user.maxHp * 0.1), runtime.log);
+      runtime.log(
+        healed > 0 ? 'heal' : 'info',
+        `🍀 【献祭中断补偿】${user.name} 获得 1 点欧气与 2 层法术抵挡${healed > 0 ? `，并恢复 ${healed} 点生命` : '，但没有恢复生命'}。`,
+      );
+      return;
+    }
+
+    runtime.log('death', `💀 【第二祭品】${specter.name} 被献作史尔特尔的上级召唤素材；濒死锁血无法阻止这场无击杀者的真实死亡。`);
+    const specterSacrificed = runtime.markDefeated(specter, {
+      awardKill: false,
+      setHpZero: true,
+      bypassDeathSaves: true,
+    });
+    specter.isDead = true;
+    if (!specterSacrificed) {
+      runtime.log('info', `🚫 【上级召唤中断】幽灵鲨未能完成真实死亡，史尔特尔不会生成；两名祭品的既有死亡结算不回滚。`);
+      grantGachaLuck(user, 1, runtime.log, '史尔特尔第二祭品异常');
+      applyStatus(user, { identityId: 'SPELL_BLOCK', charges: 2, attribution: { effectSourceId: 'surtr_tribute_compensation' } });
+      const healed = healFighter(user, Math.floor(user.maxHp * 0.1), runtime.log);
+      runtime.log(
+        healed > 0 ? 'heal' : 'info',
+        `🍀 【献祭异常补偿】${user.name} 获得 1 点欧气与 2 层法术抵挡${healed > 0 ? `，并恢复 ${healed} 点生命` : '，但没有恢复生命'}。`,
+      );
+      return;
+    }
   }
 
   if ((skill.tributes ?? 0) > 0) {
@@ -175,6 +266,16 @@ export function executeSummonSkill(
     blueEyesUltimateStrain: 0,
     blueEyesUltimateGuardCount: 0,
   };
+  if (skill.summonName === '史尔特尔' && surtrTributeGroup && surtrOwlTeamId) {
+    summon.isSurtr = true;
+    summon.teamId = userTeamId;
+    summon.surtrState = initializeSurtrState(
+      user,
+      userTeamId,
+      surtrTributeGroup.owl,
+      surtrOwlTeamId,
+    );
+  }
   if (skill.summonName === '翼神龙') {
     summon.raChantBoost = 1;
     applyStatus(summon, {
@@ -194,7 +295,7 @@ export function executeSummonSkill(
     ? 'exodia'
     : skill.summonName === '青眼究极龙'
       ? 'fusion'
-      : (skill.tributes ?? 0) > 0
+      : (skill.tributes ?? 0) > 0 || skill.summonName === '史尔特尔'
         ? 'tribute'
         : GACHA_ORDINARY_SUMMON_NAMES.includes(skill.summonName ?? '')
           ? 'reveal'
@@ -213,6 +314,20 @@ export function executeSummonSkill(
   } : { targetIds: [summon.id] });
   if (skill.summonName === '翼神龙') {
     runtime.log('buff', `☀️ 【太阳神降临】${summonName} 入场即获得 1 层太阳神力、法术抵挡、神性金身与再生，并点燃一次【神不死鸟】复燃！`);
+  }
+  if (skill.summonName === '史尔特尔' && surtrTributeGroup) {
+    const ownerRelation = userTeamId === surtrOwlTeamId ? '同阵营共同主人' : '敌对阵营共同主人';
+    runtime.log(
+      'crit',
+      `🔥 【共同主人确立】${summonName} 同时认 ${user.name} 与 ${surtrTributeGroup.owl.name} 为主人（${ownerRelation}）。黄昏的尽头，莱万汀将烧尽一切。`,
+      { actorId: summon.id, actorName: summon.name, targetIds: [user.id, surtrTributeGroup.owl.id] },
+    );
+    syncSurtrAffiliation({
+      fighters: runtime.fighters,
+      getTeamId: runtime.getTeamId,
+      isActiveCombatant: runtime.isActiveCombatant,
+      log: runtime.log,
+    }, summon, { announceInitial: true, resetBaseline: true });
   }
   tryMomoBanishBlueEyes(runtime, summon, user);
 }

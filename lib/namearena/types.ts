@@ -245,12 +245,22 @@ export interface DamageApplicationOptions {
   /** Filled by the barrier pipeline for causal logs, replay and attribution. */
   barrierAbsorptions?: DamageBarrierAbsorption[];
   targetDefeatedDuringDamage?: boolean;
+  /** The original target was script-withdrawn during damage, so outer hit narration must stop. */
+  targetWithdrawnDuringDamage?: boolean;
   /** The hit was capped to preserve a phase or scripted death-save boundary. */
   phaseLockTriggered?: boolean;
   /** Player-facing identity of the phase or death-save boundary. */
   lockbloodLabel?: string;
   /** A cleansing death-save consumed this hit, so its post-hit hostile statuses must not be re-applied. */
   suppressOnHitStatuses?: boolean;
+  /** The hit connected during a scripted zero-HP active state without removing HP. */
+  hitWithoutHpDamage?: boolean;
+  /** Yuzu Prophet rejected this branch because its final source did not belong to the bound Yuzu. */
+  blockedByYuzuProphetSource?: boolean;
+  /** Yuzu Prophet won its defensive clash and canceled this branch. */
+  blockedByYuzuProphetClash?: boolean;
+  /** Yuzu Prophet lost its defensive clash; all damage segments in this action use this multiplier. */
+  yuzuProphetClashDamageMultiplier?: number;
   /** Defaults to true. Set false for mechanical self/team redistribution. */
   creditAttacker?: boolean;
   /** Filled by the damage pipeline for callers that need exact settlement data. */
@@ -666,6 +676,58 @@ export interface OwlSummonState {
   wildStacks?: number;
 }
 
+export type SurtrAffiliationMode =
+  | 'same_team'
+  | 'conflict'
+  | 'primary_side'
+  | 'owl_side'
+  | 'legacy'
+  | 'suspended';
+
+export interface SurtrState {
+  primaryOwnerId: string;
+  primaryOwnerTeamId: string;
+  owlOwnerId?: string;
+  owlOwnerTeamId?: string;
+  twilightUsed: boolean;
+  twilightActivatedTurn?: number;
+  twilightDrainOpportunities: number;
+  afterglowActive: boolean;
+  afterglowEnteredTurn?: number;
+  afterglowOpportunities: number;
+  zeroedById?: string;
+  zeroedByName?: string;
+  actualKills: number;
+  ownershipSuspended?: boolean;
+  lastAffiliationMode?: SurtrAffiliationMode;
+}
+
+export type YuzuProphetPhase = 1 | 2;
+
+export interface YuzuProphetState {
+  phase: YuzuProphetPhase;
+  boundYuzuId: string;
+  appearedTurn: number;
+  phaseTransitionPending?: boolean;
+  phaseTransitionReason?: string;
+  retreating?: boolean;
+  retreatCompleted?: boolean;
+  retreatQuotePlayed?: boolean;
+  syntheticSurtrId?: string;
+  clashCount?: number;
+}
+
+export interface YuzuProphetControlState {
+  prophetId: string;
+  originalSummonerId?: string;
+  originalTeamId?: string;
+  originalCannotWin?: boolean;
+  originalSurtrOwnershipSuspended?: boolean;
+  originalSurtrAffiliationMode?: SurtrAffiliationMode;
+  synthetic?: boolean;
+  disposition?: 'controlled' | 'returned' | 'erased' | 'withdrawn';
+}
+
 export type MomoTeamMode = 'uninitialized' | 'explicit' | 'dynamic' | 'water';
 
 export interface MomoState {
@@ -746,6 +808,7 @@ export interface Fighter {
   isYuzu?: boolean;        // 柚子（镜世界的食指父辈）
   isOwl?: boolean;         // 鸮（雾隐罅中鸮）
   isMomo?: boolean;        // 萌月沫沫（泡沫之神）
+  isSurtr?: boolean;       // 史尔特尔（牢鳄与鸮共同高级召唤物）
   isSummon?: boolean;      // Summoned unit
   isAdvancedSummon?: boolean;
   isSon?: boolean;         // Water god's son
@@ -764,6 +827,8 @@ export interface Fighter {
   puruisaishiPhaseTwoStartedTurn?: number;
   puruisaishiLastPhaseTwoPulseTurn?: number;
   puruisaishiAppeared?: boolean;
+  yuzuProphetSpawnChecked?: boolean;
+  yuzuProphetAppeared?: boolean;
   untargetableUntilTurn?: number;
   originiumParentId?: string;
   originiumSpawnTurn?: number;
@@ -884,6 +949,14 @@ export interface Fighter {
   owlState?: OwlState;
   owlSummonState?: OwlSummonState;
 
+  // ── Surtr / joint-owner Twilight lifecycle ────────────────────────────
+  surtrState?: SurtrState;
+
+  // ── Yuzu Prophet / Puruisaishi event takeover system ─────────────────
+  isYuzuProphet?: boolean;
+  yuzuProphetState?: YuzuProphetState;
+  yuzuProphetControlState?: YuzuProphetControlState;
+
   // ── Momo / Captain, crowd-joy and contract-dragon system ─────────────
   momoState?: MomoState;
   momoDragonVariant?: MomoDragonVariant;
@@ -906,6 +979,10 @@ export interface DefeatOptions {
   logType?: string;
   awardKill?: boolean;
   setHpZero?: boolean;
+  bypassSurtrAfterglow?: boolean;
+  bypassDeathSaves?: boolean;
+  bypassYuzuProphetSourceImmunity?: boolean;
+  bypassYuzuProphetRetreat?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -971,6 +1048,8 @@ export interface SkillContext {
   /** Settlement result for the most recent hit in this skill context. */
   suppressOnHitStatuses?: boolean;
   suppressOnHitStatusTargetId?: string;
+  /** The standard primary hit connected during a scripted active state without removing HP. */
+  primaryHitConnectedWithoutHpDamage?: boolean;
   /** The primary target was defeated during this action, even if a hook immediately revived it. */
   targetDefeatedDuringAction?: boolean;
   triggerDepth: number;
@@ -1021,6 +1100,8 @@ export interface GachaEntry {
   visualEffect?: BattleCombatEffectId;
   tag?: SkillTag;
   mult?: number;
+  scalingStat?: 'atk' | 'mag';
+  flatDefensePenetration?: number;
   hits?: number;
   ignoreDef?: boolean;
   minDamagePct?: number;
@@ -1075,6 +1156,10 @@ export interface SkillDefinition {
   presentation?: Exclude<SkillPresentation, 'basic'>;
   rate?: number;
   mult?: number;
+  /** Overrides the default attack/magic scaling stat without changing damage school. */
+  scalingStat?: 'atk' | 'mag';
+  /** Flat reduction to the target's relevant defense or resistance in the standard formula. */
+  flatDefensePenetration?: number;
   hits?: number;
   ignoreDef?: boolean;
   minDamagePct?: number;

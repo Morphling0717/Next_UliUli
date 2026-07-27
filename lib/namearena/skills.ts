@@ -14,11 +14,13 @@ import { rabbitSkills } from './skills/rabbit';
 import { siguaSkills } from './skills/sigua';
 import { slackingSkills } from './skills/slacking';
 import { succubusSkills } from './skills/succubus';
+import { surtrSkills } from './skills/surtr';
 import { tingSkills } from './skills/ting';
 import { tokusatsuSkills } from './skills/tokusatsu';
 import { valoJuniorSkills } from './skills/valoJunior';
 import { warThunderSkills } from './skills/warThunder';
 import { yuzuSkills } from './skills/yuzu';
+import { yuzuProphetSkills } from './skills/yuzuProphet';
 
 const SKILLS: Record<string, SkillDefinition> = {
   ...slackingSkills,
@@ -27,6 +29,7 @@ const SKILLS: Record<string, SkillDefinition> = {
   ...babySkills,
   ...jokerSkills,
   ...succubusSkills,
+  ...surtrSkills,
   ...chimeraSkills,
   ...duelMonsterSkills,
   ...emoteSkills,
@@ -40,6 +43,7 @@ const SKILLS: Record<string, SkillDefinition> = {
   ...rabbitSkills,
   ...warThunderSkills,
   ...yuzuSkills,
+  ...yuzuProphetSkills,
   ...baseJobSkills,
 };
 

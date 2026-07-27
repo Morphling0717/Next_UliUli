@@ -19,6 +19,8 @@ import { runRuleContractCases } from './ruleContracts';
 import { runSlackingIsolation } from './slackingCases';
 import { runStatusClockCases } from './statusClockCases';
 import { runStatusReworkCases } from './statusReworkCases';
+import { runSurtrCases } from './surtrCases';
+import { runYuzuProphetCases } from './yuzuProphetCases';
 
 const FAILURE_DIR = path.join(projectRoot, '.tmp', 'namearena-regression-failures');
 
@@ -51,6 +53,8 @@ type RegressionSummary = {
   owlCaseCount: number;
   momoCaseCount: number;
   architectureCaseCount: number;
+  surtrCaseCount: number;
+  yuzuProphetCaseCount: number;
   battleCount: number;
   failures: FailureSummary[];
 };
@@ -75,6 +79,8 @@ export function main(): void {
   const owlCases = runOwlCases();
   const momoCases = runMomoCases();
   const architectureCases = runArchitectureCases();
+  const surtrCases = runSurtrCases();
+  const yuzuProphetCases = runYuzuProphetCases();
   const specs = buildRegressionSpecs();
   const failures: Failure[] = [];
 
@@ -103,6 +109,8 @@ export function main(): void {
     owlCaseCount: owlCases.length,
     momoCaseCount: momoCases.length,
     architectureCaseCount: architectureCases.length,
+    surtrCaseCount: surtrCases.length,
+    yuzuProphetCaseCount: yuzuProphetCases.length,
     battleCount: specs.length,
     failures: failures.map((failure) => ({
       label: failure.result.label,

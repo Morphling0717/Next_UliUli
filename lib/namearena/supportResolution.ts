@@ -25,7 +25,7 @@ import { getEffectiveCombatStat } from './statusMechanics';
 import { resolveDeclarativeSkillDispel } from './skillDispel';
 import { primaryStatusIdentity, statusApplicationsOf } from './skillEffects';
 import type { ReactionActionDescriptor } from './characterHooks';
-import { getResolvedDamageTotal, isDamageRedirected } from './damageRedirects';
+import { didDamageConnect, getResolvedDamageTotal, isDamageRedirected } from './damageRedirects';
 
 export interface SupportResolutionRuntime {
   fighters: Fighter[];
@@ -236,10 +236,12 @@ function applyChimeraSideDamage(
         : `🪞 【${actionName}】${target.name} 通过【镜界分摊】把伤害交给队友，但队友均未损失生命！`, visualMetadata);
     } else if (actual > 0) {
       runtime.log('skill', logText(actual), visualMetadata);
+    } else if (didDamageConnect(actual, damageOptions)) {
+      runtime.log('skill', `⚔️ 【${actionName}】${user.name} 的攻击成功命中 ${target.name}；但【黄昏余命】期间未再损失生命！`, visualMetadata);
     } else {
       runtime.log('info', `🛡️ 【${actionName}】${user.name} 的攻击被 ${target.name} 化解，没有造成生命伤害！`, visualMetadata);
     }
-    const landedOnTarget = !isDamageRedirected(damageOptions) && actual > 0;
+    const landedOnTarget = !isDamageRedirected(damageOptions) && didDamageConnect(actual, damageOptions);
     if (landedOnTarget && target.currentHp > 0) onLanded?.();
     runtime.flushDeferredDamageEvents(target);
     if (landedOnTarget && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {

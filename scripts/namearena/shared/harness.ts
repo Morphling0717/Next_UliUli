@@ -16,9 +16,17 @@ import type {
   StatusInstance,
 } from '../../../lib/namearena/types';
 import { createBattleState, withBattleRandom } from '../../../lib/namearena/battleState';
-import { spawnPuruisaishiEvent } from '../../../lib/namearena/puruisaishiMechanics';
+import {
+  grantPuruisaishiBarrier,
+  spawnPuruisaishiEvent,
+} from '../../../lib/namearena/puruisaishiMechanics';
 import { getBarrierIdentityDefinition, getStatusIdentityDefinition, getStatusMechanicDefinition } from '../../../lib/namearena/statusRegistry';
 import { applyStatus, removeEffects } from '../../../lib/namearena/statusSystem';
+import {
+  enterYuzuProphetPhaseTwo,
+  getYuzuProphetBoundYuzu,
+  trySpawnYuzuProphet,
+} from '../../../lib/namearena/yuzuProphetMechanics';
 import { installTypeScriptHook, projectRoot } from './register';
 
 installTypeScriptHook(projectRoot);
@@ -89,6 +97,9 @@ export type RunBattleOptions = {
   scanLogs?: boolean;
   scanRosterNames?: boolean;
   forcePuruisaishi?: boolean;
+  forceYuzuProphet?: boolean;
+  forceYuzuProphetPhaseTwo?: boolean;
+  forceYuzuProphetUnboundPhaseTwo?: boolean;
 };
 
 export type LogIssue = {
@@ -335,7 +346,11 @@ export function checkInvariants(fighters: Fighter[], label: string, options: { i
   fighters.forEach((fighter) => {
     if (fighterIds.has(fighter.id)) errors.push(`duplicate fighter id ${fighter.id} (${fighter.name})${suffix}`);
     fighterIds.add(fighter.id);
-    const hpPct = fighter.maxHp > 0 ? Math.max(0, fighter.currentHp) / fighter.maxHp : 0;
+    const hpPct = fighter.isSurtr && fighter.surtrState?.afterglowActive
+      ? 0
+      : fighter.maxHp > 0
+        ? Math.max(0, fighter.currentHp) / fighter.maxHp
+        : 0;
     const hpPctDelta = Math.abs((fighter.hpPct ?? 0) - hpPct);
     if (!Number.isFinite(fighter.currentHp) || !Number.isFinite(fighter.maxHp) || !Number.isFinite(fighter.hpPct)) errors.push(`${fighter.name} has non-finite HP${suffix}`);
     if (COMBAT_STAT_KEYS.some((key) => !Number.isFinite(fighter[key]))) errors.push(`${fighter.name} has non-finite stat${suffix}`);
@@ -842,8 +857,39 @@ export function runProjectBattle(project: LoadedProject, spec: BattleSpec, optio
     for (let i = 0; i < maxTurns; i += 1) {
       const engine = makeProjectEngine(project, project.cloneFighters(fighters), logs, turnCount, battleState, events);
       try {
-        if (options.forcePuruisaishi && i === 0) {
-          spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '机制压力测试强制出场');
+        if (
+          (
+            options.forcePuruisaishi ||
+            options.forceYuzuProphet ||
+            options.forceYuzuProphetPhaseTwo ||
+            options.forceYuzuProphetUnboundPhaseTwo
+          ) &&
+          i === 0
+        ) {
+          const puruisaishi = spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '机制压力测试强制出场');
+          if (
+            options.forceYuzuProphet ||
+            options.forceYuzuProphetPhaseTwo ||
+            options.forceYuzuProphetUnboundPhaseTwo
+          ) {
+            puruisaishi.puruisaishiPhase = 2;
+            puruisaishi.puruisaishiPhaseTwoStartedTurn = engine.turnCount;
+            delete puruisaishi.untargetableUntilTurn;
+            grantPuruisaishiBarrier(puruisaishi, 6000, '预言家压力测试');
+            const prophet = trySpawnYuzuProphet(engine.createYuzuProphetRuntime(), puruisaishi, { force: true });
+            if (prophet && (options.forceYuzuProphetPhaseTwo || options.forceYuzuProphetUnboundPhaseTwo)) {
+              enterYuzuProphetPhaseTwo(engine.createYuzuProphetRuntime(), prophet, '机制压力测试强制进入二阶段');
+              if (options.forceYuzuProphetUnboundPhaseTwo) {
+                const boundYuzu = getYuzuProphetBoundYuzu(engine.fighters, prophet);
+                if (boundYuzu) {
+                  project.setCurrentHp(boundYuzu, 0);
+                  boundYuzu.isDead = true;
+                  boundYuzu.isDeadAnnounced = true;
+                  boundYuzu.defeatHooksResolved = true;
+                }
+              }
+            }
+          }
         }
         ended = engine.step(spinalSwordRef);
         turnCount = engine.turnCount;

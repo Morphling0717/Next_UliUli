@@ -14,14 +14,19 @@ import { isSelectableTargetFor } from './targeting';
 import { applyStatus, hasIdentity, removeBarriers, removeEffects } from './statusSystem';
 import { hasStatusApplication } from './skillEffects';
 import { getEffectiveCombatStat } from './statusMechanics';
-import { isDamageRedirected } from './damageRedirects';
+import { didDamageConnect, isDamageRedirected } from './damageRedirects';
+import {
+  findSurtrTributeGroups,
+  isSurtrOwnedBy,
+  SURTR_BASE_STATS,
+} from './surtrMechanics';
 
 export const GACHA_LUCK_MAX = 5;
 export const GACHA_SUMMON_LIFESTEAL_STATUS = 'GACHA_SUMMON_LIFESTEAL';
 export const GACHA_RA_PHOENIX_STATUS = 'RA_PHOENIX';
 const GACHA_SUMMON_LIFESTEAL_PCT = 0.30;
 export const EXODIA_PIECES = ['被封印者的右腕', '被封印者的左腕', '被封印者的右足', '被封印者的左足', '被封印者本体'] as const;
-export const GACHA_ADVANCED_SUMMON_NAMES = ['青眼白龙', '翼神龙', '黑暗大法师', '青眼究极龙'] as const;
+export const GACHA_ADVANCED_SUMMON_NAMES = ['青眼白龙', '史尔特尔', '翼神龙', '黑暗大法师', '青眼究极龙'] as const;
 const EXODIA_NORMAL_PIECE_CHANCES = [0.055, 0.11, 0.21, 0.38, 0.62] as const;
 const EXODIA_SMALL_PITY_PIECE_CHANCES = [0.09, 0.18, 0.36, 0.68, 1] as const;
 const EXODIA_MAJOR_PITY_PIECE_CHANCES = [0, 0.16, 0.46, 0.86, 1] as const;
@@ -159,8 +164,13 @@ function activeFriendlySummons(runtime: LuckDrawRuntime, user: Fighter): Fighter
   const userTeamId = runtime.getTeamId?.(user) ?? user.teamId ?? user.id;
   return activeFighters(runtime).filter((fighter) =>
     fighter.isSummon &&
-    fighter.summonerId === user.id &&
-    (runtime.getTeamId?.(fighter) ?? fighter.teamId ?? fighter.id) === userTeamId,
+    (
+      isSurtrOwnedBy(fighter, user) ||
+      (
+        fighter.summonerId === user.id &&
+        (runtime.getTeamId?.(fighter) ?? fighter.teamId ?? fighter.id) === userTeamId
+      )
+    ),
   );
 }
 
@@ -191,6 +201,12 @@ function activeTributableSummons(runtime: LuckDrawRuntime, user: Fighter, entry:
 }
 
 function canPayTributes(runtime: LuckDrawRuntime, user: Fighter, entry: GachaEntry): boolean {
+  if (entry.summonName === '史尔特尔') return findSurtrTributeGroups({
+    fighters: runtime.fighters ?? [],
+    isActiveCombatant: (fighter) => runtime.isActiveCombatant
+      ? runtime.isActiveCombatant(fighter)
+      : isActiveCombatant(fighter),
+  }).length > 0;
   if (entry.summonName === '青眼究极龙') return hasBlueEyesFusionMaterials(runtime, user);
   return (entry.tributes ?? 0) <= activeTributableSummons(runtime, user, entry).length;
 }
@@ -200,7 +216,9 @@ function usableSummonEntries(runtime: LuckDrawRuntime, user: Fighter, pool: Gach
 }
 
 function tributeSummonEntries(runtime: LuckDrawRuntime, user: Fighter, pool: GachaEntry[]): GachaEntry[] {
-  return usableSummonEntries(runtime, user, pool).filter((entry) => (entry.tributes ?? 0) > 0);
+  return usableSummonEntries(runtime, user, pool).filter((entry) =>
+    (entry.tributes ?? 0) > 0 || entry.summonName === '史尔特尔',
+  );
 }
 
 function usableEntries(runtime: LuckDrawRuntime, user: Fighter, pool: GachaEntry[]): GachaEntry[] {
@@ -237,6 +255,14 @@ function hasBlueEyesFusionMaterials(runtime: LuckDrawRuntime, user: Fighter): bo
 }
 
 function canUseGachaEntry(runtime: LuckDrawRuntime, user: Fighter, entry: GachaEntry): boolean {
+  if (entry.summonName === '史尔特尔') {
+    if (!isLuckEmperor(user)) return false;
+    if ((runtime.fighters ?? []).some((fighter) =>
+      fighter.isSurtr &&
+      fighter.surtrState?.primaryOwnerId === user.id &&
+      (runtime.isActiveCombatant ? runtime.isActiveCombatant(fighter) : isActiveCombatant(fighter)),
+    )) return false;
+  }
   if (entry.requiresFriendlySummon && !activeFriendlySummonByBaseName(runtime, user, entry.requiresFriendlySummon)) return false;
   if (entry.requiresAnyFriendlySummon && activeFriendlySummons(runtime, user).length === 0) return false;
   if (entry.requiresOrdinarySummon && activeOrdinaryFriendlySummons(runtime, user).length === 0) return false;
@@ -396,11 +422,16 @@ function activeContextFriendlySummons(ctx: SkillContext): Fighter[] {
   const myTeamId = ctx.getTeamId(ctx.user);
   return ctx.fighters.filter((fighter) =>
     fighter.isSummon &&
-    fighter.summonerId === ctx.user.id &&
     !fighter.isDead &&
     !fighter.isDeadAnnounced &&
     fighter.currentHp > 0 &&
-    ctx.getTeamId(fighter) === myTeamId,
+    (
+      isSurtrOwnedBy(fighter, ctx.user) ||
+      (
+        fighter.summonerId === ctx.user.id &&
+        ctx.getTeamId(fighter) === myTeamId
+      )
+    ),
   );
 }
 
@@ -446,7 +477,7 @@ function damageFromSummon(
     deferOutcome?: boolean;
     effectId?: BattleCombatEffectId;
     openingText?: string;
-    afterDamage?: (actualDamage: number, redirected: boolean) => void;
+    afterDamage?: (actualDamage: number, redirected: boolean, connected: boolean) => void;
   } = {},
 ): number {
   let actualDmg = 0;
@@ -465,7 +496,11 @@ function damageFromSummon(
     actualDmg = ctx.applyDamage(target, amount, 'skill', trueDamage, summon, damageOptions);
     redirected = isDamageRedirected(damageOptions);
     if (!redirected && !options.deferOutcome) finalizeSummonDamage(ctx, summon, target, actionName);
-    options.afterDamage?.(redirected ? 0 : actualDmg, redirected);
+    options.afterDamage?.(
+      redirected ? 0 : actualDmg,
+      redirected,
+      !redirected && didDamageConnect(actualDmg, damageOptions),
+    );
   });
   return redirected ? 0 : actualDmg;
 }
@@ -482,7 +517,14 @@ function commandSummon(ctx: SkillContext, summon: Fighter, label: string): void 
     ctx.log('info', `🎴 【${label}】${ctx.user.name} 命令 ${summon.name} 行动，但 ${summon.name} 正被控制，无法响应召唤指令！`);
     return;
   }
-  const enemies = activeContextEnemies(ctx);
+  const enemies = ctx.fighters.filter((fighter) =>
+    isSelectableTargetFor({
+      fighters: ctx.fighters,
+      turnCount: ctx.turnCount,
+      getTeamId: ctx.getTeamId,
+      isActiveCombatant,
+    }, summon, fighter),
+  );
   if (enemies.length === 0) {
     ctx.log('info', `🎴 【${label}】${ctx.user.name} 发出指令，但场上已经没有可攻击目标。`);
     return;
@@ -551,7 +593,6 @@ export const GACHA_ORDINARY_SUMMON_CARDS: GachaEntry[] = [
   { text: "🤖 {USER} 机甲点燃大海！召唤「流萤 (SAM)」！焦土作战开始！", isSummon: true, summonName: '萨姆', summonJob: 'HSR_HUNTER', stats: { hp: 1500, atk: 85, spd: 45 } },
   { text: "🐉 {USER} 究极龙降临！召唤「巴哈姆特」！毁灭一切！", isSummon: true, summonName: '巴哈姆特', summonJob: 'LEGEND_DRAGON', stats: { hp: 1800, atk: 100, spd: 30 } },
   { text: "🦑 {USER} 撕裂万古！召唤「伊莫库」！奥札奇泰坦降临！", isSummon: true, summonName: '伊莫库', summonJob: 'ELDRAZI_TITAN', stats: { hp: 2000, atk: 75, mag: 75, spd: 25 } },
-  { text: "🔥 {USER} 莱瓦汀！召唤「史尔特尔」！黄昏的尽头！", isSummon: true, summonName: '史尔特尔', summonJob: 'ARKNIGHTS_OP', stats: { hp: 800, atk: 125, spd: 32 } },
   { text: "🤖 {USER} 帮帮我，史瓦罗先生！召唤「克拉拉 & 史瓦罗」！", isSummon: true, summonName: '史瓦罗', summonJob: 'HSR_HUNTER', stats: { hp: 1800, atk: 60, def: 100 } },
 ];
 
@@ -566,6 +607,15 @@ export const GACHA_BLUE_EYES_CARD: GachaEntry = {
   summonJob: 'BLUE_EYES_WHITE_DRAGON',
   stats: { hp: 2800, atk: 180, def: 150, spd: 140, agl: 130, mag: 190, res: 150, wis: 160 },
   tributes: 2,
+  advancedSummon: true,
+};
+
+export const GACHA_SURTR_CARD: GachaEntry = {
+  text: '🔥 {USER} 以诗怀雅与幽灵鲨为祭，完成上级召唤！「史尔特尔」——黄昏的尽头，莱万汀将烧尽一切。',
+  isSummon: true,
+  summonName: '史尔特尔',
+  summonJob: 'ARKNIGHTS_OP',
+  stats: { ...SURTR_BASE_STATS },
   advancedSummon: true,
 };
 
@@ -669,10 +719,13 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
           });
           return;
         }
+        const connected = didDamageConnect(actualDmg, damageOptions);
         ctx.log(
-          actualDmg > 0 ? 'skill' : 'info',
+          connected ? 'skill' : 'info',
           actualDmg > 0
             ? `⚔️ ${summon.name} 命中 ${target.name}，实际造成 ${actualDmg} 点伤害！`
+            : connected
+              ? `⚔️ ${summon.name} 命中 ${target.name}；但【黄昏余命】期间未再损失生命！`
             : `⚔️ ${summon.name} 的进击被 ${target.name} 化解，没有造成实际伤害！`,
           { actorId: summon.id, actorName: summon.name, targetIds: [target.id] },
         );
@@ -874,9 +927,15 @@ export const GACHA_BLUE_EYES_BURST_CARD: GachaEntry = {
       deferOutcome: true,
       effectId: 'gacha_blue_eyes_burst',
       openingText: `🐲 【毁灭爆裂疾风弹】${ctx.user.name} 翻开支援牌，${blueEyes.name} 向 ${ctx.target.name} 轰出白色龙息！`,
-      afterDamage: (actualDmg, redirected) => {
+      afterDamage: (actualDmg, redirected, connected) => {
         if (!redirected && actualDmg > 0) {
           ctx.log('crit', `🐲 白龙龙息贯穿 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`, {
+            actorId: blueEyes.id,
+            actorName: blueEyes.name,
+            targetIds: [ctx.target.id],
+          });
+        } else if (connected) {
+          ctx.log('crit', `🐲 白龙龙息贯穿 ${ctx.target.name}；但【黄昏余命】期间未再损失生命！`, {
             actorId: blueEyes.id,
             actorName: blueEyes.name,
             targetIds: [ctx.target.id],
@@ -971,9 +1030,15 @@ export const GACHA_BLAZE_CANNON_CARD: GachaEntry = {
       deferOutcome: true,
       effectId: 'gacha_blaze_cannon',
       openingText: `🔥 【太阳神火焰加农】${ra.name} 燃烧 ${actualBurnHp} 点生命，向 ${ctx.target.name} 释放神炎！（古之咒文强化 ${boost} 层）`,
-      afterDamage: (actualDmg, redirected) => {
+      afterDamage: (actualDmg, redirected, connected) => {
         if (!redirected && actualDmg > 0) {
           ctx.log('crit', `🔥 神炎命中 ${ctx.target.name}，实际造成 ${actualDmg} 点真实伤害！`, {
+            actorId: ra.id,
+            actorName: ra.name,
+            targetIds: [ctx.target.id],
+          });
+        } else if (connected) {
+          ctx.log('crit', `🔥 神炎命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命！`, {
             actorId: ra.id,
             actorName: ra.name,
             targetIds: [ctx.target.id],

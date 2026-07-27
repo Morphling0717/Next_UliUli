@@ -50,12 +50,12 @@ export function getEmoteAdaptTotal(fighter: Fighter): number {
 }
 
 export function getEmoteClaimableKills(fighter: Fighter): number {
-  return Math.max(0, Math.floor(fighter.stats.kills) - Math.floor(fighter.emoteClaimedKills ?? 0));
+  return Math.max(0, fighter.stats.kills - (fighter.emoteClaimedKills ?? 0));
 }
 
 export function consumeEmoteClaimableKills(fighter: Fighter, amount = 1): number {
   const before = getEmoteClaimableKills(fighter);
-  const consumed = Math.min(before, Math.max(0, Math.floor(amount)));
+  const consumed = Math.min(before, Math.max(0, amount));
   if (consumed > 0) fighter.emoteClaimedKills = (fighter.emoteClaimedKills ?? 0) + consumed;
   return consumed;
 }

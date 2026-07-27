@@ -1,5 +1,6 @@
 import type { DefeatOptions, Fighter, SkillContext } from './types';
 import { hasIdentity } from './statusSystem';
+import { isSurtrAfterglowActive } from './surtrMechanics';
 
 interface ExecuteDefeatGuardOptions {
   ignoreActiveDeathSave?: boolean;
@@ -29,6 +30,10 @@ export function tryExecuteDefeat(
   }
   if (!guardOptions.ignoreActiveDeathSave && hasActiveDeathSave(target)) {
     ctx.log('info', `🛡️ 【${actionName}】${target.name} 的保命机制刚刚生效，强行改写了处决结果！`);
+    return false;
+  }
+  if (isSurtrAfterglowActive(target)) {
+    ctx.log('info', `🌇 【${actionName}】${target.name} 已处于黄昏余命，普通处决无法令其提前退场。`);
     return false;
   }
   return ctx.markDefeated(target, options);

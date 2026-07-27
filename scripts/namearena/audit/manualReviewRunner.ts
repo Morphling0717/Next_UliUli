@@ -37,6 +37,9 @@ const specs: ReviewSpec[] = [
   { phase: '5v5', label: '5v5-b', names: ['水人@A', '克蕾儿丝菲尔@A', 'M1A2_abrams_sep@A', '萌月沫沫@A', '牢鳄@A', '玄凝@B', '小汀@B', '丝瓜uli@B', '刺猬人@B', '柚子@B'], seed: 1_450_037, reviewFocus: '10 人含水组队、救援与多层防御' },
   { phase: 'focused', label: 'crossing-and-redistribution', names: NO_WATER, seed: 992020, reviewFocus: '过江协同与伤害分摊的完整因果链' },
   { phase: 'focused', label: 'zhao-and-momo-share', names: NO_WATER, seed: 992087, reviewFocus: '赵云冲阵、沫沫均摊与召唤物承伤' },
+  { phase: 'focused', label: 'surtr-twilight-lifecycle', names: NO_WATER, seed: 2_761_030, reviewFocus: '史尔特尔跨阵营献祭、一次性黄昏、递增流失、余命与共同击杀' },
+  { phase: 'focused', label: 'surtr-joint-kill-conflict', names: NO_WATER, seed: 2_760_024, reviewFocus: '史尔特尔共同主人敌对、目标关系与多次 0.5 击杀分账' },
+  { phase: 'focused', label: 'surtr-long-twilight-drain', names: NO_WATER, seed: 2_761_009, reviewFocus: '史尔特尔长线黄昏流失、受控行动计数与最终余命归属' },
 ];
 
 export function main(): void {

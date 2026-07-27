@@ -21,7 +21,7 @@ import {
 import { findActivePuppetProtector, isSelectableTargetFor } from '../targeting';
 import { findIdentity } from '../statusSystem';
 import { getStatusIdentityDefinition } from '../statusRegistry';
-import { getDamageRedirectKind, getResolvedDamageTotal } from '../damageRedirects';
+import { didDamageConnect, getDamageRedirectKind, getResolvedDamageTotal } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -269,6 +269,7 @@ function executeYuzuHit(
   const redirectKind = getDamageRedirectKind(options);
   const redirected = redirectKind !== null;
   const resolvedActual = getResolvedDamageTotal(actual, options);
+  const connected = !redirected && didDamageConnect(actual, options);
 
   const hitLabel = `${index + 1}/${plan.hits}`;
   const followUpVisual = index > 0 ? {
@@ -299,6 +300,8 @@ function executeYuzuHit(
     ctx.log(resolvedActual > 0 ? 'skill' : 'info', resolvedActual > 0
       ? `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【镜界分摊】把伤害交给队友，队友合计损失 ${resolvedActual} 点生命。`
       : `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，${target.name} 通过【镜界分摊】把伤害交给队友，但队友均未损失生命。`, followUpVisual);
+  } else if (resolvedActual <= 0 && connected) {
+    ctx.log('skill', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，成功命中 ${target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命。`, followUpVisual);
   } else if (resolvedActual <= 0) {
     const outcome = options.resolution?.outcome;
     const outcomeText = outcome === 'spell_blocked'
@@ -316,11 +319,11 @@ function executeYuzuHit(
   } else {
     ctx.log(resolvedActual > 0 ? 'skill' : 'info', `🪞 【${plan.actionName}】第 ${hitLabel} 击抽到 ${weaponName}，命中 ${target.name}，实际造成 ${resolvedActual} 点伤害。`, followUpVisual);
   }
-  if (resolvedActual > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) {
+  if (resolvedActual > 0 || connected || (target.pendingDamageEvents?.length ?? 0) > 0) {
     ctx.flushDeferredDamageEvents?.();
   }
-  if (resolvedActual > 0 && !redirected) {
-    applyYuzuWeaponEffects(yuzuRuntime(ctx), ctx.user, target, weapon, resolvedActual);
+  if (connected) {
+    applyYuzuWeaponEffects(yuzuRuntime(ctx), ctx.user, target, weapon, resolvedActual, true);
     if (plan.applyRandomDebuff && isActive(target)) applyRandomYuzuDebuff(ctx, target);
   }
 
@@ -332,7 +335,7 @@ function executeYuzuHit(
   }
   return {
     canContinue: isActive(ctx.user),
-    hitMarkedTarget: resolvedActual > 0 && !redirected && (
+    hitMarkedTarget: connected && (
       isCurrentMarkedTarget(ctx, target) ||
       (!!protectedTarget && isCurrentMarkedTarget(ctx, protectedTarget))
     ),

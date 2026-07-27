@@ -54,7 +54,7 @@ export const SUMMON_CARD_ART_SLOTS: readonly SummonCardArtSlot[] = [
   slot('sam', '萨姆', 'ordinary', '#ff784f', '炎', 'summons', { card: true, avatar: true }),
   slot('bahamut', '巴哈姆特', 'ordinary', '#8d76ff', '龙', 'summons', { card: true, avatar: true }),
   slot('emrakul', '伊莫库', 'ordinary', '#c884ff', '界', 'summons', { card: true, avatar: true }),
-  slot('surtr', '史尔特尔', 'ordinary', '#ff5d4a', '火', 'summons', { card: true, avatar: true }),
+  slot('surtr', '史尔特尔', 'advanced', '#ff5d4a', '火', 'summons', { card: true, cutin: true, avatar: true }),
   slot('svarog', '史瓦罗', 'ordinary', '#7e9bb8', '机', 'summons', { card: true, avatar: true }),
   slot('puppet-ting', '小汀(傀儡)', 'special', '#d34b5b', '怨'),
   slot('blue-eyes-white-dragon', '青眼白龙', 'advanced', '#75d8ff', '白', 'summons', { card: true, cutin: true, avatar: true }),

@@ -21,6 +21,7 @@ import { buildStatusPresentationMember } from '../statusPresentation';
 import { applyStatus, hasIdentity, hasMechanic, queryDispellableStatuses, queryMechanic } from '../statusSystem';
 import {
   type DamageRedirectKind,
+  didDamageConnect,
   getDamageRedirectKind,
   getResolvedDamageTotal,
 } from '../damageRedirects';
@@ -101,9 +102,25 @@ function applyNamedDamageDetailed(
   actionName: string,
   trueDamage = true,
   respectDefenses = true,
-): { actual: number; redirected: boolean; redirectedActual: number; redirectKind: DamageRedirectKind; defeatedDuringDamage: boolean } {
+): {
+  actual: number;
+  connected: boolean;
+  redirected: boolean;
+  redirectedActual: number;
+  redirectKind: DamageRedirectKind;
+  defeatedDuringDamage: boolean;
+  withdrawnDuringDamage: boolean;
+} {
   if (!isActive(target) || amount <= 0) {
-    return { actual: 0, redirected: false, redirectedActual: 0, redirectKind: null, defeatedDuringDamage: false };
+    return {
+      actual: 0,
+      connected: false,
+      redirected: false,
+      redirectedActual: 0,
+      redirectKind: null,
+      defeatedDuringDamage: false,
+      withdrawnDuringDamage: false,
+    };
   }
   const damageOptions: DamageApplicationOptions = {
     actionName,
@@ -114,10 +131,12 @@ function applyNamedDamageDetailed(
   const redirectedActual = getResolvedDamageTotal(actual, damageOptions);
   return {
     actual,
+    connected: redirectKind === null && didDamageConnect(actual, damageOptions),
     redirected: redirectKind !== null,
     redirectedActual,
     redirectKind,
     defeatedDuringDamage: !!damageOptions.targetDefeatedDuringDamage || target.isDead || target.isDeadAnnounced,
+    withdrawnDuringDamage: !!damageOptions.targetWithdrawnDuringDamage,
   };
 }
 
@@ -228,19 +247,24 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       ctx.log('skill', `🌑 【黑气斩波】${ctx.user.name} 挥出漆黑剑气，主斩 ${ctx.target.name}，余波追向附近敌人！`, tokusatsuVisual('toku_black_mist_wave', ctx.user, [ctx.target, ...splashTargets]));
       const primaryResult = applyNamedDamageDetailed(ctx, ctx.target, base, '黑气斩波', true);
       if (!userCanContinue(ctx)) return true;
-      if (!primaryResult.redirected) {
-        ctx.log(primaryResult.actual > 0 ? 'skill' : 'info', primaryResult.actual > 0
+      if (!primaryResult.redirected && !primaryResult.withdrawnDuringDamage) {
+        ctx.log(primaryResult.connected ? 'skill' : 'info', primaryResult.actual > 0
           ? `🌑 【黑气斩波】${ctx.target.name} 实际承受 ${primaryResult.actual} 点真实伤害！`
+          : primaryResult.connected
+            ? `🌑 【黑气斩波】主斩成功命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命！`
           : `🌑 【黑气斩波】主斩被 ${ctx.target.name} 化解，没有造成生命伤害！`);
         ctx.flushDeferredDamageEvents?.();
         markIfDefeated(ctx, ctx.target, '黑气斩波');
       }
       for (const enemy of splashTargets) {
+        if (!isActive(enemy)) continue;
         const splashResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * 0.3), '黑气斩波余波', true);
         if (!userCanContinue(ctx)) return true;
-        if (!splashResult.redirected) {
-          ctx.log(splashResult.actual > 0 ? 'skill' : 'info', splashResult.actual > 0
+        if (!splashResult.redirected && !splashResult.withdrawnDuringDamage) {
+          ctx.log(splashResult.connected ? 'skill' : 'info', splashResult.actual > 0
             ? `🌑 黑气余波扫过 ${enemy.name}，实际造成 ${splashResult.actual} 点真实伤害！`
+            : splashResult.connected
+              ? `🌑 黑气余波成功命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`
             : `🌑 黑气余波被 ${enemy.name} 化解，没有造成生命伤害！`);
           ctx.flushDeferredDamageEvents?.();
           markIfDefeated(ctx, enemy, '黑气斩波');
@@ -273,11 +297,13 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
             : `${ctx.user.name} 生命已满，悲愿回流溢出`
         : '悲愿没有形成有效回流';
       if (!damageResult.redirected) {
-        ctx.log(actual > 0 ? 'heal' : 'info', actual > 0
+        ctx.log(actual > 0 && healing.actual > 0 ? 'heal' : damageResult.connected ? 'skill' : 'info', actual > 0
           ? `⚔️ 【悲愿居合】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`
+          : damageResult.connected
+            ? `⚔️ 【悲愿居合】居合斩成功命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命，${recovery}！`
           : `⚔️ 【悲愿居合】居合斩被 ${ctx.target.name} 化解，没有造成生命伤害，${recovery}！`);
         ctx.flushDeferredDamageEvents?.();
-        if (isActive(ctx.target) && !hasIdentity(ctx.target, 'WEAK') && actual > 0) {
+        if (isActive(ctx.target) && !hasIdentity(ctx.target, 'WEAK') && damageResult.connected) {
           if (ctx.applyStatus(ctx.target, { identityId: 'WEAK', remainingTurns: 2 })) ctx.log('debuff', `⚔️ 【悲愿居合】${ctx.target.name} 被悲愿压制，虚弱 2 回合！`);
         }
         markIfDefeated(ctx, ctx.target, '悲愿居合');
@@ -347,18 +373,20 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const actual = damageResult.actual;
       if (!userCanContinue(ctx)) return true;
       if (damageResult.redirected) return true;
-      const removedStatus = actual > 0 ? removeOnePositiveStatus(ctx, ctx.target) : null;
+      const removedStatus = damageResult.connected ? removeOnePositiveStatus(ctx, ctx.target) : null;
       const removedName = removedStatus ? buildStatusPresentationMember(removedStatus).name : '';
       const statusText = removedStatus
         ? actual > 0
           ? `，并粉碎了【${removedName}】`
-          : `；虽然伤害被挡下，炼金崩解仍粉碎了【${removedName}】`
+          : `；虽未造成生命损失，炼金崩解仍粉碎了【${removedName}】`
         : '';
-      ctx.log(actual > 0 ? 'skill' : 'info', actual > 0
+      ctx.log(damageResult.connected ? 'skill' : 'info', actual > 0
         ? `🦀 【能量粉碎】${ctx.target.name} 实际承受 ${actual} 点真实伤害${statusText}！`
+        : damageResult.connected
+          ? `🦀 【能量粉碎】炼金冲击成功命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命${statusText}！`
         : `🦀 【能量粉碎】炼金冲击被 ${ctx.target.name} 化解，没有造成生命伤害${statusText}！`);
       ctx.flushDeferredDamageEvents?.();
-      if (actual > 0 && isActive(ctx.target) && !hasIdentity(ctx.target, 'WEAK')) {
+      if (damageResult.connected && isActive(ctx.target) && !hasIdentity(ctx.target, 'WEAK')) {
         if (ctx.applyStatus(ctx.target, { identityId: 'WEAK', remainingTurns: 2 })) ctx.log('debuff', `🦀 【能量粉碎】${ctx.target.name} 被炼金冲击压制，虚弱 2 回合！`);
       }
       markIfDefeated(ctx, ctx.target, '能量粉碎');
@@ -397,8 +425,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         const damageResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * (index === 0 ? 1 : 0.72)), '武神怪兽连斩', true);
         if (!userCanContinue(ctx)) return true;
         if (!damageResult.redirected) {
-          ctx.log(damageResult.actual > 0 ? 'skill' : 'info', damageResult.actual > 0
+          ctx.log(damageResult.connected ? 'skill' : 'info', damageResult.actual > 0
             ? `🗡️ 第 ${index + 1} 斩命中 ${enemy.name}，实际造成 ${damageResult.actual} 点真实伤害！`
+            : damageResult.connected
+              ? `🗡️ 第 ${index + 1} 斩成功命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`
             : `🗡️ 第 ${index + 1} 斩被 ${enemy.name} 化解，没有造成生命伤害！`);
           ctx.flushDeferredDamageEvents?.();
           markIfDefeated(ctx, enemy, '武神怪兽连斩');
@@ -427,15 +457,17 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         const actual = damageResult.actual;
         if (!userCanContinue(ctx)) return true;
         if (damageResult.redirected) continue;
-        ctx.log(actual > 0 ? 'skill' : 'info', actual > 0
+        ctx.log(damageResult.connected ? 'skill' : 'info', actual > 0
           ? `📣 咆哮冲击命中 ${enemy.name}，实际造成 ${actual} 点真实伤害！`
+          : damageResult.connected
+            ? `📣 咆哮冲击成功命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`
           : `📣 咆哮冲击被 ${enemy.name} 化解，没有造成生命伤害！`);
         ctx.flushDeferredDamageEvents?.();
         const appliedEffects: string[] = [];
-        if (actual > 0 && isActive(enemy) && !hasIdentity(enemy, 'WEAK')) {
+        if (damageResult.connected && isActive(enemy) && !hasIdentity(enemy, 'WEAK')) {
           if (ctx.applyStatus(enemy, { identityId: 'WEAK', remainingTurns: 2 })) appliedEffects.push('虚弱 2 回合');
         }
-        if (actual > 0 && isActive(enemy) && Math.random() < 0.35 && !hasMechanic(enemy, 'AIRBORNE')) {
+        if (damageResult.connected && isActive(enemy) && Math.random() < 0.35 && !hasMechanic(enemy, 'AIRBORNE')) {
           if (ctx.applyStatus(enemy, { identityId: 'AIRBORNE', remainingTurns: 1 })) appliedEffects.push('击飞 1 回合');
         }
         if (appliedEffects.length > 0) {
@@ -481,6 +513,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
             ? `${ctx.user.name} 的星光回流治疗被完全阻止`
             : `${ctx.user.name} 生命已满，星光回流溢出`
         : '星光没有形成有效回流';
+      if (damageResult.withdrawnDuringDamage) return true;
       if (damageResult.redirected) {
         const redirectText = damageResult.redirectKind === 'owl_emperor'
           ? damageResult.redirectedActual > 0
@@ -507,8 +540,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
           ? `⭐ 【GREAT MONSTER VICTORY】星光造成 ${actual} 点真实伤害并触发致死连锁，后续退场已单独结算；${recovery}！`
           : `⭐ 【GREAT MONSTER VICTORY】星光未直接造成生命伤害，但触发了单独的致死连锁；${recovery}！`);
       } else {
-        ctx.log(actual > 0 ? 'heal' : 'info', actual > 0
+        ctx.log(damageResult.connected ? 'heal' : 'info', actual > 0
           ? `⭐ 【GREAT MONSTER VICTORY】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`
+          : damageResult.connected
+            ? `⭐ 【GREAT MONSTER VICTORY】终结星光成功命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命，${recovery}！`
           : `⭐ 【GREAT MONSTER VICTORY】终结星光被 ${ctx.target.name} 化解，没有造成生命伤害，${recovery}！`);
         ctx.flushDeferredDamageEvents?.();
         markIfDefeated(ctx, ctx.target, 'GREAT MONSTER VICTORY');
@@ -544,8 +579,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const primary = primaryResult.actual;
       if (!userCanContinue(ctx)) return true;
       if (!primaryResult.redirected) {
-        ctx.log(primary > 0 ? 'crit' : 'info', primary > 0
+        ctx.log(primaryResult.connected ? 'crit' : 'info', primary > 0
           ? `🌈 【彩虹狂热】${ctx.target.name} 实际承受 ${primary} 点真实伤害！`
+          : primaryResult.connected
+            ? `🌈 【彩虹狂热】火车头骑士踢成功命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命！`
           : `🌈 【彩虹狂热】火车头骑士踢被 ${ctx.target.name} 化解，没有造成生命伤害！`);
         ctx.flushDeferredDamageEvents?.();
         markIfDefeated(ctx, ctx.target, '彩虹狂热');
@@ -555,8 +592,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         const splashResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * 0.18), '彩虹狂热余波', true);
         if (!userCanContinue(ctx)) return true;
         if (!splashResult.redirected) {
-          ctx.log(splashResult.actual > 0 ? 'skill' : 'info', splashResult.actual > 0
+          ctx.log(splashResult.connected ? 'skill' : 'info', splashResult.actual > 0
             ? `🌈 彩虹列车余波撞上 ${enemy.name}，实际造成 ${splashResult.actual} 点真实伤害！`
+            : splashResult.connected
+              ? `🌈 彩虹列车余波成功命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`
             : `🌈 彩虹列车余波被 ${enemy.name} 化解，没有造成生命伤害！`);
           ctx.flushDeferredDamageEvents?.();
           markIfDefeated(ctx, enemy, '彩虹狂热');

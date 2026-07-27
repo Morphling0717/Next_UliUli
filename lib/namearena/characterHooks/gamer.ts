@@ -4,6 +4,7 @@ import type { CharacterHook, CharacterHookRuntime } from './types';
 
 import { isSelectableTargetFor } from '../targeting';
 import { applyStatus, hasIdentity } from '../statusSystem';
+import { getSurtrTacticalCurrentHp, getSurtrTacticalHpPct } from '../surtrMechanics';
 
 type GamerRuntime = Pick<CharacterHookRuntime, 'fighters' | 'turnCount' | 'getTeamId' | 'isActiveCombatant' | 'jobs' | 'log' | 'dispelStatusEffects'>;
 
@@ -91,8 +92,11 @@ function canAfford(actor: Fighter, skillId: string): boolean {
 
 function lowHealthEnemy(enemies: Fighter[]): Fighter | undefined {
   return enemies
-    .filter((enemy) => enemy.hpPct <= 0.42 || enemy.currentHp <= Math.max(900, enemy.maxHp * 0.34))
-    .sort((a, b) => a.currentHp - b.currentHp)[0];
+    .filter((enemy) =>
+      getSurtrTacticalHpPct(enemy) <= 0.42 ||
+      getSurtrTacticalCurrentHp(enemy) <= Math.max(900, enemy.maxHp * 0.34),
+    )
+    .sort((a, b) => getSurtrTacticalCurrentHp(a) - getSurtrTacticalCurrentHp(b))[0];
 }
 
 function markedEnemy(actor: Fighter, enemies: Fighter[]): Fighter | undefined {

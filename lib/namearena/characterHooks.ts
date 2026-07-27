@@ -21,6 +21,7 @@ import { owlHook } from './characterHooks/owl';
 import { siguaHook } from './characterHooks/sigua';
 import { slackingBondHook } from './characterHooks/slacking';
 import { succubusHook } from './characterHooks/succubus';
+import { surtrHook } from './characterHooks/surtr';
 import { tingHook } from './characterHooks/ting';
 import { tokusatsuHook } from './characterHooks/tokusatsu';
 import { valoJuniorHook } from './characterHooks/valoJunior';
@@ -46,6 +47,7 @@ export type {
 
 const CHARACTER_HOOKS: CharacterHook[] = [
   morphlingHook,
+  surtrHook,
   owlHook,
   slackingBondHook,
   momoHook,

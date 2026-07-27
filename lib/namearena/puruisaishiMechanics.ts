@@ -40,7 +40,7 @@ export const PURUISAISHI_BARRIER_IDENTITY = 'PURUISAISHI_BARRIER';
 const ANANNA_UNTARGETABLE_TURNS = 5;
 const ANANNA_GROWTH_TURNS = 20;
 const CRYSTAL_UNTARGETABLE_TURNS = 1;
-const CRYSTAL_MAX_COUNT = 12;
+export const ORIGINIUM_CRYSTAL_MAX_COUNT = 12;
 const CRYSTAL_THRESHOLD_COUNT = 10;
 const CRYSTAL_ATTACK_INFECTION_CHANCE = 0.35;
 
@@ -50,6 +50,31 @@ export function isPuruisaishiBarrier(barrier: NonNullable<Fighter['barriers']>[n
 
 export function getPuruisaishiBarrierTotal(fighter: Fighter): number {
   return getBarrierTotal(fighter, { identityIds: [PURUISAISHI_BARRIER_IDENTITY] });
+}
+
+export function grantPuruisaishiBarrier(
+  puruisaishi: Fighter,
+  value: number,
+  sourceName = '柚子·预言家',
+): number {
+  const amount = Math.max(0, Math.floor(value));
+  if (!puruisaishi.isPuruisaishi || amount <= 0 || puruisaishi.isDead || puruisaishi.isDeadAnnounced) return 0;
+  grantBarrier(puruisaishi, amount, {
+    identityId: PURUISAISHI_BARRIER_IDENTITY,
+    sourceId: PURUISAISHI_BARRIER_SOURCE,
+    displayName: '源石映像护盾',
+    icon: '🜲',
+    tickMode: 'permanent',
+    dispelTier: 'none',
+    stackMode: 'add',
+    attribution: {
+      effectSourceId: PURUISAISHI_BARRIER_SOURCE,
+      effectSourceName: sourceName,
+      applierId: puruisaishi.id,
+      applierName: puruisaishi.name,
+    },
+  });
+  return amount;
 }
 const CRYSTAL_ATTACK_INFECTION_STACKS = 3;
 const CRYSTAL_OVERFLOW_INFECTION_STACKS = 2;
@@ -80,6 +105,9 @@ export interface PuruisaishiRuntime {
   ) => number;
   flushDeferredDamageEvents?: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
+  onPuruisaishiPhaseTwoStarted?: (puruisaishi: Fighter) => void;
+  onPuruisaishiRetreat?: (puruisaishi: Fighter, reason: string) => boolean;
+  canApplyOriginiumInfection?: (target: Fighter, reason: string) => boolean;
 }
 
 type PuruisaishiSpawnRuntime = Pick<PuruisaishiRuntime, 'fighters' | 'core' | 'turnCount' | 'log' | 'largeRound'>;
@@ -174,7 +202,9 @@ function createOriginiumCrystal(runtime: PuruisaishiRuntime, parentId: string): 
   return crystal;
 }
 
-function activeCrystals(runtime: Pick<PuruisaishiRuntime, 'fighters' | 'isActiveCombatant'>): Fighter[] {
+export function getActiveOriginiumCrystals(
+  runtime: Pick<PuruisaishiRuntime, 'fighters' | 'isActiveCombatant'>,
+): Fighter[] {
   return runtime.fighters.filter((fighter) => fighter.isOriginiumCrystal && runtime.isActiveCombatant(fighter));
 }
 
@@ -256,6 +286,7 @@ export function addOriginiumInfection(
 ): number {
   if (stacks <= 0 || !runtime.isActiveCombatant(target)) return 0;
   if (target.isPuruisaishi || target.isOriginiumCore || target.isOriginiumCrystal) return 0;
+  if (runtime.canApplyOriginiumInfection && !runtime.canApplyOriginiumInfection(target, reason)) return 0;
 
   const before = getOriginiumInfectionStacks(target);
   const next = Math.min(ORIGINIUM_MAX_STACKS, before + stacks);
@@ -300,12 +331,26 @@ function roll<T>(items: T[]): T | undefined {
   return items[Math.floor(Math.random() * items.length)];
 }
 
-function growCrystal(runtime: PuruisaishiRuntime, parentId: string, reason: string): boolean {
-  if (activeCrystals(runtime).length >= CRYSTAL_MAX_COUNT) return false;
+export function trySpawnOriginiumCrystal(
+  runtime: PuruisaishiRuntime,
+  parentId: string,
+  reason: string,
+  options: { logType?: string; logAtCapacity?: boolean } = {},
+): Fighter | undefined {
+  if (getActiveOriginiumCrystals(runtime).length >= ORIGINIUM_CRYSTAL_MAX_COUNT) {
+    if (options.logAtCapacity) {
+      runtime.log('info', `◆ 【源石网络已达上限】${reason}，普通源石结晶已达到 ${ORIGINIUM_CRYSTAL_MAX_COUNT} 枚，本次不再生成。`);
+    }
+    return undefined;
+  }
   const crystal = createOriginiumCrystal(runtime, parentId);
   runtime.fighters.push(crystal);
-  runtime.log('skill', `◆ 【源石增殖】${reason}，新的 ${crystal.name} 在战场上生成。`);
-  return true;
+  runtime.log(options.logType ?? 'skill', `◆ 【源石增殖】${reason}，新的 ${crystal.name} 在战场上生成。`);
+  return crystal;
+}
+
+function growCrystal(runtime: PuruisaishiRuntime, parentId: string, reason: string): boolean {
+  return !!trySpawnOriginiumCrystal(runtime, parentId, reason);
 }
 
 function shouldTriggerInterval(runtime: PuruisaishiRuntime, startTurn: number, intervalTurns: number): boolean {
@@ -327,7 +372,7 @@ function processOriginiumCrystalGrowth(runtime: PuruisaishiRuntime): void {
   if (runtime.completedLargeRound !== undefined) {
     const completedRound = runtime.completedLargeRound;
     const core = runtime.fighters.find((fighter) => fighter.isOriginiumCore && runtime.isActiveCombatant(fighter));
-    activeCrystals(runtime).forEach((source) => {
+    getActiveOriginiumCrystals(runtime).forEach((source) => {
       if (source.originiumLastGrowthLargeRound === completedRound) return;
       source.originiumLastGrowthLargeRound = completedRound;
       const wasAttacked = !!source.originiumWasAttackedThisGrowthRound;
@@ -353,7 +398,7 @@ function processOriginiumCrystalGrowth(runtime: PuruisaishiRuntime): void {
   if (actors.length === 0) return;
   const actorIds = new Set(actors.map((actor) => actor.id));
   const core = runtime.fighters.find((fighter) => fighter.isOriginiumCore && runtime.isActiveCombatant(fighter));
-  const growthSources = activeCrystals(runtime)
+  const growthSources = getActiveOriginiumCrystals(runtime)
     .filter((source) => (source.originiumSpawnTurn ?? runtime.turnCount) < runtime.turnCount);
 
   growthSources.forEach((source) => {
@@ -375,7 +420,7 @@ export function processPuruisaishiLargeRoundEnd(runtime: PuruisaishiRuntime): vo
 }
 
 function processCrystalOverflowInfection(runtime: PuruisaishiRuntime): void {
-  const count = activeCrystals(runtime).length;
+  const count = getActiveOriginiumCrystals(runtime).length;
   if (count <= CRYSTAL_THRESHOLD_COUNT) return;
   const puruisaishi = activePuruisaishi(runtime);
   if (!puruisaishi) return;
@@ -415,7 +460,7 @@ function processPuruisaishiPhase(runtime: PuruisaishiRuntime): void {
 
   if (phase < 2 && runtime.turnCount >= phaseTwoTurn) {
     let shield = 0;
-    commitFormTransition({
+    const changed = commitFormTransition({
       fighter: puruisaishi,
       log: runtime.log,
       message: () => `🜲 【这里万籁俱寂，太安静了，别丢下我】${puruisaishi.name} 出场 50 回合后进入二阶段，生成 ${shield} 点护盾。`,
@@ -441,6 +486,7 @@ function processPuruisaishiPhase(runtime: PuruisaishiRuntime): void {
         });
       },
     });
+    if (changed) runtime.onPuruisaishiPhaseTwoStarted?.(puruisaishi);
   }
 }
 
@@ -499,6 +545,9 @@ function formatOriginiumDamageSettlement(
   const shieldDamage = options.resolution?.shieldDamage ?? 0;
   if (shieldDamage > 0) {
     return `${target.name} 的屏障吸收 ${shieldDamage} 点伤害，本体生命未减少（${stackText}）`;
+  }
+  if (options.hitWithoutHpDamage) {
+    return `${target.name} 被矿石病侵蚀命中；但【黄昏余命】期间未再损失生命（${stackText}）`;
   }
   return `${target.name} 生命未减少（${stackText}）`;
 }
@@ -581,7 +630,7 @@ export function redirectOriginiumCoreDamage(
   options?: DamageApplicationOptions,
 ): { handled: boolean; actualDamage: number } {
   if (!target.isOriginiumCore || source === 'originium_share') return { handled: false, actualDamage: amount };
-  const crystals = activeCrystals(runtime);
+  const crystals = getActiveOriginiumCrystals(runtime);
   if (crystals.length === 0) return { handled: false, actualDamage: amount };
   if (options) options.redirectedByOriginiumCore = true;
 
@@ -645,7 +694,7 @@ export function consumePuruisaishiShield(runtime: PuruisaishiRuntime, target: Fi
     return { handled: false, remaining: amount, absorbed: 0, retreated: false, absorptions: [] };
   }
 
-  const crystalsExist = activeCrystals(runtime).length > 0;
+  const crystalsExist = getActiveOriginiumCrystals(runtime).length > 0;
   const floor = crystalsExist ? 1 : 0;
   const absorbable = Math.min(Math.max(0, amount), Math.max(0, before - floor));
   const result = consumeBarriers(target, absorbable, { identityIds: [PURUISAISHI_BARRIER_IDENTITY] });
@@ -702,7 +751,7 @@ export function spawnCrystalFromInfectedDeath(runtime: PuruisaishiRuntime, carri
   if (getOriginiumInfectionStacks(carrier) <= 0) return;
   if (carrier.isPuruisaishi || carrier.isOriginiumCore || carrier.isOriginiumCrystal) return;
   if (!runtime.fighters.some((fighter) => fighter.isPuruisaishi)) return;
-  if (activeCrystals(runtime).length >= CRYSTAL_MAX_COUNT) return;
+  if (getActiveOriginiumCrystals(runtime).length >= ORIGINIUM_CRYSTAL_MAX_COUNT) return;
   const parent = runtime.fighters.find((fighter) => fighter.isOriginiumCore) ?? activePuruisaishi(runtime);
   const crystal = createOriginiumCrystal(runtime, parent?.id ?? carrier.id);
   runtime.fighters.push(crystal);
@@ -739,6 +788,8 @@ export function grantOriginiumCrystalBreakReward(
 }
 
 export function clearAllOriginiumAndRetreat(runtime: PuruisaishiRuntime, puruisaishi: Fighter): void {
+  if (runtime.onPuruisaishiRetreat?.(puruisaishi, '普瑞赛斯护盾归零')) return;
+
   runtime.fighters.forEach((fighter) => {
     if (hasIdentity(fighter, ORIGINIUM_DISEASE_STATUS)) {
       clearOriginiumInfection(fighter);

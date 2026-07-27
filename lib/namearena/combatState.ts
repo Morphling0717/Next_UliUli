@@ -1,5 +1,6 @@
 import type { Fighter, HealingKind, HealingResolutionRecord, JobDefinition, StatKey, StatusInstance } from './types';
 import { hasIdentity, queryMechanic, removeEffects, withPersistentStatusShapesSuspended } from './statusSystem';
+import { isSurtrAfterglowActive } from './surtrMechanics';
 
 export function cloneJobDefinition(job: JobDefinition): JobDefinition {
   return { ...job, skills: [...job.skills] };
@@ -15,7 +16,16 @@ export function cloneStatuses(status: StatusInstance[] = []): StatusInstance[] {
 }
 
 export function syncHpPct(fighter: Fighter): void {
-  fighter.hpPct = fighter.maxHp > 0 ? Math.max(0, fighter.currentHp) / fighter.maxHp : 0;
+  if (isSurtrAfterglowActive(fighter)) {
+    // Afterglow uses one internal HP only to remain in the turn scheduler.
+    // Normalize direct HP writes so buffs and full resets cannot heal it.
+    fighter.currentHp = 1;
+    fighter.hpPct = 0;
+    return;
+  }
+  fighter.hpPct = fighter.maxHp > 0
+    ? Math.max(0, fighter.currentHp) / fighter.maxHp
+    : 0;
 }
 
 export function setCurrentHp(fighter: Fighter, hp: number): void {
@@ -39,7 +49,11 @@ export function resolveHealing(
   const multiplier = Math.max(0, (1 + vitality / 100) * Math.max(0, 1 - exhaustion / 100));
   // Ordinary healing must never double as an implicit revival. Explicit
   // revival handlers restore the combatant state before invoking healing.
-  const canReceiveHealing = !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0;
+  const canReceiveHealing =
+    !fighter.isDead &&
+    !fighter.isDeadAnnounced &&
+    fighter.currentHp > 0 &&
+    !isSurtrAfterglowActive(fighter);
   const effectiveAmount = canReceiveHealing
     ? Math.max(0, Math.floor(attempted * multiplier))
     : 0;
@@ -95,7 +109,9 @@ export function isWinningCombatant(fighter: Fighter): boolean {
 }
 
 export function canActNormally(fighter: Fighter): boolean {
-  return isActiveCombatant(fighter) && !fighter.cannotAct && !fighter.isNpc;
+  return isActiveCombatant(fighter) &&
+    !fighter.cannotAct &&
+    (!fighter.isNpc || !!fighter.isYuzuProphet);
 }
 
 export function hasStatus(fighter: Fighter, type: string): boolean {
@@ -136,6 +152,11 @@ export function cloneFighter(fighter: Fighter): Fighter {
     emoteOwnerBonus: fighter.emoteOwnerBonus ? { ...fighter.emoteOwnerBonus } : fighter.emoteOwnerBonus,
     owlState: fighter.owlState ? { ...fighter.owlState } : fighter.owlState,
     owlSummonState: fighter.owlSummonState ? { ...fighter.owlSummonState } : fighter.owlSummonState,
+    surtrState: fighter.surtrState ? { ...fighter.surtrState } : fighter.surtrState,
+    yuzuProphetState: fighter.yuzuProphetState ? { ...fighter.yuzuProphetState } : fighter.yuzuProphetState,
+    yuzuProphetControlState: fighter.yuzuProphetControlState
+      ? { ...fighter.yuzuProphetControlState }
+      : fighter.yuzuProphetControlState,
     momoState: fighter.momoState ? {
       ...fighter.momoState,
       assignedMemberIds: fighter.momoState.assignedMemberIds ? [...fighter.momoState.assignedMemberIds] : undefined,

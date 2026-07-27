@@ -5,7 +5,8 @@ import { tryExecuteDefeat } from '../executionGuards';
 import { filterImportantRemovedStatuses, formatRemovedStatusList } from '../statusRemovalLog';
 import { hasIdentity, removeEffects } from '../statusSystem';
 import { getStatusIdentityIdsByTag } from '../statusRegistry';
-import { getResolvedDamageTotal } from '../damageRedirects';
+import { didDamageConnect, getResolvedDamageTotal } from '../damageRedirects';
+import { getSurtrTacticalHpPct } from '../surtrMechanics';
 
 const { SKILL_TAGS } = Data;
 
@@ -23,13 +24,14 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     name: '深渊水牢', tag: SKILL_TAGS.MAG, mult: 1.5,
     text: '💧 {USER} 抬手升起一座深渊水牢！{TARGET} 引以为傲的反击姿态瞬间瓦解！只能在无尽的窒息中挣扎...',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || actualDmg <= 0 || ctx.target.currentHp <= 0) return;
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !connected || ctx.target.currentHp <= 0) return;
       if (!ctx.applyStatus(ctx.target, { identityId: 'WATER_PRISON', remainingTurns: 3 })) return;
       removeEffects(ctx.target, {
         identityIds: ['WAIT_COUNTER', ...getStatusIdentityIdsByTag('counter_stance')],
         reason: 'scripted',
       });
-      if (ctx.target.hpPct < 0.2) {
+      if (getSurtrTacticalHpPct(ctx.target) < 0.2) {
         tryExecuteDefeat(ctx, ctx.target, '溺毙处决', {
           message: `💀 【溺毙处决】${ctx.target.name} 在深渊水牢中彻底停止了呼吸...`,
           killer: ctx.user,
@@ -51,6 +53,7 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
         if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '神罚·灭世大洪水' };
         const actualDmg = ctx.applyDamage(e, floodDamage, 'skill', false, ctx.user, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) continue;
         if (damageOptions.redirectedByJoker) {
           const redirectedDamage = damageOptions.redirectedJokerDamage ?? 0;
           ctx.log('info', redirectedDamage > 0
@@ -88,6 +91,8 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
         }
         if (actualDmg > 0) {
           ctx.log('info', `🌊 狂暴洪水吞噬了 ${e.name}，实际造成 ${actualDmg} 点真实伤害！`);
+        } else if (didDamageConnect(actualDmg, damageOptions)) {
+          ctx.log('info', `🌊 狂暴洪水成功命中 ${e.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命！`);
         } else {
           ctx.log('info', `🌊 狂暴洪水卷过 ${e.name}，但没有造成实际伤害！`);
         }
@@ -120,7 +125,8 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     name: '斯嘉蒂之眼', tag: SKILL_TAGS.MAG, mult: 2.5, statusApplications: [{ identityId: 'FREEZE' }],
     text: '👁️ 感受极北的寒意！{USER} 凝聚斯嘉蒂之眼，射出霜寒水弹！{TARGET} 被绝对零度击中，生机与速度被彻底封印！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || actualDmg <= 0 || ctx.target.currentHp <= 0) return;
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || !connected || ctx.target.currentHp <= 0) return;
       ctx.applyStatus(ctx.target, { identityId: 'YUZU_SLOW', remainingTurns: 3 });
       ctx.applyStatus(ctx.target, { identityId: 'WEAK', remainingTurns: 3 });
       ctx.applyStatus(ctx.target, { identityId: 'NO_HEAL', remainingTurns: 3 });

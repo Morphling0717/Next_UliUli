@@ -9,6 +9,7 @@ import type {
   StatusInstance,
 } from './types';
 import { healFighter } from './combatState';
+import { didDamageConnect } from './damageRedirects';
 import {
   findDefenseStatus,
   formatControlCleanse,
@@ -239,19 +240,24 @@ export function resolveAirborneLanding(
     actionName: '击飞坠地',
   };
   const actualDamage = runtime.applyDamage(actor, damage, 'status', false, applier, damageOptions);
+  const connected = didDamageConnect(actualDamage, damageOptions);
   const isWarThunder = !!applier?.isWT || status.attribution.effectSourceId === 'war_thunder_airborne';
   runtime.flushDeferredDamageEvents(actor, 'mitigation');
   runtime.log(
-    actualDamage > 0 ? 'poison' : 'info',
+    connected ? 'poison' : 'info',
     actualDamage > 0
       ? isWarThunder
         ? `🚀 【炮震坠落】${actor.name} 从大口径冲击中重重落地，实际损失 ${actualDamage} 点生命！`
         : `🚀 【击飞坠地】${actor.name} 重重砸回战场，实际损失 ${actualDamage} 点生命！`
+      : connected
+        ? isWarThunder
+          ? `🚀 【炮震坠落】${actor.name} 重重落地并承受冲击；但【黄昏余命】期间未再损失生命！`
+          : `🚀 【击飞坠地】${actor.name} 重重砸回战场；但【黄昏余命】期间未再损失生命！`
       : isWarThunder
         ? `🚀 【炮震坠落】${actor.name} 完成落地，但防护吸收了全部冲击，未损失生命！`
         : `🚀 【击飞坠地】${actor.name} 砸回战场，但落地冲击被全部化解，未损失生命！`,
   );
-  if (actualDamage > 0 || (actor.pendingDamageEvents?.length ?? 0) > 0) {
+  if (connected || (actor.pendingDamageEvents?.length ?? 0) > 0) {
     runtime.flushDeferredDamageEvents(actor);
   }
   if (actor.currentHp <= 0) {
@@ -465,6 +471,7 @@ export function processStatusTurn(
         };
         const applier = findStatusApplier(runtime, settlementStatus);
         const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true, applier, damageOptions);
+        const connected = didDamageConnect(actualDmg, damageOptions);
         runtime.flushDeferredDamageEvents(actor, 'mitigation');
         const sourceName = settlementStatus.attribution.applierName ?? applier?.name ?? settlementStatus.attribution.effectSourceName;
         const sourceText = sourceName ? `；最新施加者 ${sourceName}` : '';
@@ -481,10 +488,12 @@ export function processStatusTurn(
           runtime.log('info', `${statusPresentation.icon} ${actor.name} 的【${statusPresentation.name}】触发【|OMO】，舰长合计损失 ${damageOptions.redirectedMomoDamage ?? 0} 点生命；${actor.name} 本体未受伤。（${timingText}）`);
         } else if (damageOptions.redirectedByYuzu) {
           runtime.log('info', `${statusPresentation.icon} ${actor.name} 的【${statusPresentation.name}】触发【镜界分摊】，队友合计损失 ${damageOptions.redirectedYuzuDamage ?? 0} 点生命；${actor.name} 本体未受伤。（${timingText}）`);
+        } else if (connected) {
+          runtime.log('info', `${statusPresentation.icon} 【${statusPresentation.name}】${actor.name} ${actionText}并被成功命中；但【黄昏余命】期间未再损失生命。（${timingText}）`);
         } else {
           runtime.log('info', `${statusPresentation.icon} ${actor.name} 的【${statusPresentation.name}】本次没有穿透防护，生命未减少。（${timingText}）`);
         }
-        if (actualDmg > 0 || (actor.pendingDamageEvents?.length ?? 0) > 0) {
+        if (connected || (actor.pendingDamageEvents?.length ?? 0) > 0) {
           runtime.flushDeferredDamageEvents(actor);
         }
         if (actor.currentHp <= 0) {

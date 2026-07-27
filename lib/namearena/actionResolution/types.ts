@@ -63,4 +63,5 @@ export interface ActionResolutionRuntime {
     userTeamId: string,
   ) => boolean;
   createCharacterHookRuntime: () => CharacterHookRuntime;
+  prepareYuzuProphetIncomingAction: (user: Fighter, target: Fighter) => boolean;
 }

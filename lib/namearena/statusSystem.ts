@@ -17,6 +17,7 @@ import {
   statusHasTag,
   type StatusTag,
 } from './statusRegistry';
+import { isSurtrAfterglowActive } from './surtrMechanics';
 
 export interface StatusRemovalResult {
   removed: StatusInstance[];
@@ -174,7 +175,12 @@ function transitionPersistentStatShape(
     fighter[key] = Math.max(1, Math.floor(unshaped * to) - flat);
   }
   if (fighter.currentHp > fighter.maxHp) fighter.currentHp = fighter.maxHp;
-  fighter.hpPct = fighter.maxHp > 0 ? Math.max(0, fighter.currentHp) / fighter.maxHp : 0;
+  if (isSurtrAfterglowActive(fighter)) {
+    fighter.currentHp = 1;
+    fighter.hpPct = 0;
+  } else {
+    fighter.hpPct = fighter.maxHp > 0 ? Math.max(0, fighter.currentHp) / fighter.maxHp : 0;
+  }
 }
 
 export function withPersistentStatusShapesSuspended<T>(fighter: Fighter, callback: () => T): T {

@@ -2,6 +2,13 @@ import type { Fighter } from './types';
 import { getAggroMultiplier, getEffectiveCombatStat } from './statusMechanics';
 import { getPuruisaishiBarrierTotal } from './puruisaishiMechanics';
 import { findIdentity, hasIdentity, hasMechanic } from './statusSystem';
+import {
+  getSurtrTacticalCurrentHp,
+  getSurtrTacticalHpPct,
+  isSurtrJointConflict,
+  isSurtrOwnedBy,
+} from './surtrMechanics';
+import { getYuzuProphetPriorityTarget } from './yuzuProphetMechanics';
 
 export interface TargetingRuntime {
   fighters: Fighter[];
@@ -39,7 +46,21 @@ export function isSelectableTargetFor(
 ): boolean {
   if (target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) return false;
   if ((target.untargetableUntilTurn ?? -1) >= runtime.turnCount) return false;
+  if (user.isSurtr && isSurtrOwnedBy(user, target)) return false;
   const confusedFriendlyTarget = user.confusedForcedTargetId === target.id;
+  if (!confusedFriendlyTarget) {
+    if (user.isSurtr && isSurtrJointConflict(runtime, user)) {
+      return runtime.isActiveCombatant(target) &&
+        target.id !== user.id &&
+        !hasIdentity(target, 'SYNERGY_SLACKING');
+    }
+    if (target.isSurtr && isSurtrJointConflict(runtime, target)) {
+      if (isSurtrOwnedBy(target, user)) return false;
+      return runtime.isActiveCombatant(target) &&
+        target.id !== user.id &&
+        !hasIdentity(target, 'SYNERGY_SLACKING');
+    }
+  }
   return runtime.isActiveCombatant(target) &&
     target.id !== user.id &&
     (confusedFriendlyTarget || runtime.getTeamId(target) !== runtime.getTeamId(user)) &&
@@ -58,6 +79,7 @@ export function getConfusionTargets(runtime: TargetingRuntime, user: Fighter): F
     target.owlSummonState?.kind !== 'meal' &&
     target.owlSummonState?.kind !== 'rice' &&
     (target.untargetableUntilTurn ?? -1) < runtime.turnCount &&
+    !(user.isSurtr && isSurtrOwnedBy(user, target)) &&
     !hasIdentity(target, 'SYNERGY_SLACKING'),
   );
   const charmSourceId = findIdentity(user, 'CHARMED')?.attribution.applierId;
@@ -175,9 +197,12 @@ function lowestHealthTarget(targets: Fighter[], hpPctThreshold: number, flatHpFl
   return targets
     .filter((target) =>
       isCompetitiveTarget(target) &&
-      (target.hpPct <= hpPctThreshold || target.currentHp <= Math.max(flatHpFloor, target.maxHp * 0.35)),
+      (
+        getSurtrTacticalHpPct(target) <= hpPctThreshold ||
+        getSurtrTacticalCurrentHp(target) <= Math.max(flatHpFloor, target.maxHp * 0.35)
+      ),
     )
-    .sort((a, b) => a.currentHp - b.currentHp)[0];
+    .sort((a, b) => getSurtrTacticalCurrentHp(a) - getSurtrTacticalCurrentHp(b))[0];
 }
 
 function preferredTacticalTarget(user: Fighter, targets: Fighter[]): Fighter | undefined {
@@ -222,12 +247,14 @@ export function resolveTarget(
   const tauntingTargets = availableTargets.filter((candidate) =>
     candidate.isYuzu && hasIdentity(candidate, 'YUZU_TAUNT'),
   );
+  const prophetPriorityTarget = getYuzuProphetPriorityTarget(runtime, user, availableTargets);
   const markedWarThunderTarget = user.isWT && user.wtMarkedTargetId
     ? availableTargets.find((candidate) => candidate.id === user.wtMarkedTargetId)
     : undefined;
   const tacticalTarget = preferredTacticalTarget(user, availableTargets);
   let target: Fighter;
   if (forcedTargetValid) target = forcedTarget!;
+  else if (prophetPriorityTarget) target = prophetPriorityTarget;
   else if (tauntingTargets.length > 0) target = pickWeightedTarget(runtime, tauntingTargets);
   else {
     const originium = getOriginiumTargetingState(runtime);

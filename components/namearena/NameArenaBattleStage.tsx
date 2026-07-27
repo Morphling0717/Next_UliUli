@@ -49,7 +49,8 @@ import { BATTLE_CINEMATIC_DURATION_MS } from "@/lib/namearena/battleVisualTiming
 import { getEffectiveCombatStat } from "@/lib/namearena/statusMechanics";
 import type { StatusPresentationDetail } from "@/lib/namearena/statusPresentation";
 import { getBarrierTotal } from "@/lib/namearena/statusSystem";
-import { formatTeamDisplayLabel } from "@/lib/namearena/teamPresentation";
+import { formatFighterTeamDisplayLabel } from "@/lib/namearena/teamPresentation";
+import { getSurtrDisplayHp } from "@/lib/namearena/surtrMechanics";
 import {
   getTokusatsuFormAvatar,
   getTokusatsuFullBodyForJob,
@@ -248,7 +249,7 @@ function getShield(fighter: Fighter) {
 
 function getFighterAccent(fighter?: Fighter) {
   if (!fighter) return "#39d9ff";
-  if (fighter.isPuruisaishi || fighter.isOriginiumCore || fighter.isOriginiumCrystal) return "#d8ff65";
+  if (fighter.isPuruisaishi || fighter.isOriginiumCore || fighter.isOriginiumCrystal || fighter.isYuzuProphet) return "#d8ff65";
   if (fighter.isTing) return "#ff6767";
   if (fighter.isGacha) return "#ffc84a";
   if (fighter.isSuccubus) return "#ff8c3a";
@@ -349,7 +350,13 @@ function readDevelopmentSummonPreview(): SummonCardCinematic | null {
     ...base,
     summonKind: "tribute",
     summonName: "青眼白龙",
-    materials: ["史尔特尔", "史瓦罗"],
+    materials: ["Saber", "史瓦罗"],
+  };
+  if (preview === "surtr") return {
+    ...base,
+    summonKind: "tribute",
+    summonName: "史尔特尔",
+    materials: ["诗怀雅", "幽灵鲨"],
   };
   if (preview === "zhongli") return {
     ...base,
@@ -361,7 +368,7 @@ function readDevelopmentSummonPreview(): SummonCardCinematic | null {
     ...base,
     summonKind: "fusion",
     summonName: "青眼究极龙",
-    materials: ["青眼白龙", "史尔特尔", "史瓦罗"],
+    materials: ["青眼白龙", "Saber", "史瓦罗"],
   };
   if (preview === "ra") return {
     ...base,
@@ -636,6 +643,7 @@ function colorWithAlpha(color: string, alpha: number) {
 
 type StageFighterCardProps = {
   fighter: Fighter;
+  teamLabel?: string;
   position: StagePosition;
   isActive: boolean;
   isTarget: boolean;
@@ -649,6 +657,7 @@ type StageFighterCardProps = {
 
 const StageFighterCard = React.memo(function StageFighterCard({
   fighter,
+  teamLabel,
   position,
   isActive,
   isTarget,
@@ -664,14 +673,13 @@ const StageFighterCard = React.memo(function StageFighterCard({
   }, [fighter.id, registerNode]);
   const accent = getFighterAccent(fighter);
   const shield = getShield(fighter);
-  const hpPercent = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (fighter.currentHp / fighter.maxHp) * 100)) : 0;
+  const displayHp = getSurtrDisplayHp(fighter);
+  const hpPercent = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (displayHp / fighter.maxHp) * 100)) : 0;
   const shieldPercent = fighter.maxHp > 0 ? Math.max(0, Math.min(100, (shield / fighter.maxHp) * 100)) : 0;
   const allStatusBadges = getStatusBadges(fighter);
   const statusBadges = allStatusBadges.slice(0, visibleStatusCount);
   const hiddenStatusCount = Math.max(0, allStatusBadges.length - statusBadges.length);
   const image = getStageFighterImage(fighter);
-  const teamLabel = formatTeamDisplayLabel(fighter.teamId);
-
   return (
     <button
       ref={setNodeRef}
@@ -690,7 +698,7 @@ const StageFighterCard = React.memo(function StageFighterCard({
       <span className={styles.unitHud}>
         <span className={styles.unitName}>
           <span title={fighter.displayName ?? fighter.name}>{fighter.displayName ?? fighter.name}</span>
-          <small>{fighter.currentHp}/{fighter.maxHp}</small>
+          <small>{displayHp}/{fighter.maxHp}</small>
         </span>
         <span className={styles.hpBar} style={{ "--bar-value": `${hpPercent}%` } as CSSProperties}><i /></span>
         <span className={styles.shieldBar} style={{ "--bar-value": `${shieldPercent}%` } as CSSProperties}><i /></span>
@@ -747,6 +755,7 @@ const StageFighterLayer = React.memo(function StageFighterLayer({
           <StageFighterCard
             key={fighter.id}
             fighter={fighter}
+            teamLabel={formatFighterTeamDisplayLabel(fighter, fighters)}
             position={position}
             isActive={isActive}
             isTarget={isTarget}
@@ -934,7 +943,7 @@ const StageDossier = React.memo(function StageDossier({
               ) : null}
             </div>
             <strong>{fighter.displayName ?? fighter.name}</strong>
-            <small className={styles.dossierVital}>生命 {fighter.currentHp.toLocaleString()} / {fighter.maxHp.toLocaleString()}</small>
+            <small className={styles.dossierVital}>生命 {getSurtrDisplayHp(fighter).toLocaleString()} / {fighter.maxHp.toLocaleString()}</small>
           </div>
           <dl>
             <div><dt>攻</dt><dd>{getEffectiveCombatStat(fighter, 'atk')}</dd></div>
@@ -2211,7 +2220,7 @@ export function NameArenaBattleStage({
     const created: Popup[] = [];
 
     fighters.forEach((fighter) => {
-      const current = { hp: fighter.currentHp, shield: getShield(fighter), dead: fighter.isDead };
+      const current = { hp: getSurtrDisplayHp(fighter), shield: getShield(fighter), dead: fighter.isDead };
       next.set(fighter.id, current);
       const before = previous.get(fighter.id);
       if (!before) return;

@@ -8,7 +8,7 @@ import {
 import type { CharacterHook } from './types';
 import { hasIdentity, removeBarriers, removeEffects, withPersistentStatusShapesSuspended } from '../statusSystem';
 import { getEffectiveCombatStat } from '../statusMechanics';
-import { getDamageRedirectKind, getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
+import { didDamageConnect, getDamageRedirectKind, getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
 
 export const jokerHook: CharacterHook = {
   id: 'joker',
@@ -159,12 +159,15 @@ export const jokerHook: CharacterHook = {
             }
             continue;
           }
+          const connected = didDamageConnect(actualDmg, damageOptions);
           if (actualDmg > 0) {
             runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害！`);
+          } else if (connected) {
+            runtime.log('info', `💥 地狱笑话命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`);
           } else {
             runtime.log('info', `💥 地狱笑话扫过 ${enemy.name}，但没有造成实际伤害，【混乱】没有生效！`);
           }
-          const confused = actualDmg > 0 &&
+          const confused = connected &&
             enemy.currentHp > 0 &&
             !enemy.isDead &&
             !enemy.isDeadAnnounced &&
@@ -173,7 +176,7 @@ export const jokerHook: CharacterHook = {
           if (confused) {
             runtime.log('debuff', `🌀 【谢幕返场】${enemy.name} 被地狱笑话扰乱，陷入 1 回合混乱！`);
           }
-          if (actualDmg > 0 || (enemy.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(enemy);
+          if (connected || (enemy.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(enemy);
           if (enemy.currentHp <= 0 && !enemy.isDead) {
             runtime.finalizeFighterDeath(enemy, spinalSwordRef, `💀 【击杀】${enemy.name} 被地狱笑话震死了！`, fighter);
           }

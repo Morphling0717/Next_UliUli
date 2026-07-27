@@ -3,9 +3,10 @@ import { namerenaData as Data } from '../data';
 import { healFighter, isActiveCombatant } from '../combatState';
 import { findDefenseStatus, formatControlBlocked } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
-import { getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
+import { didDamageConnect, getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
 import { filterImportantRemovedStatuses, formatRemovedStatusList } from '../statusRemovalLog';
 import { hasIdentity, queryMechanic, removeEffects, applyStatus } from '../statusSystem';
+import { getSurtrTacticalHpPct } from '../surtrMechanics';
 
 const { SKILL_TAGS } = Data;
 
@@ -83,29 +84,36 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
 
       const roll = rolls[Math.floor(Math.random() * rolls.length)];
 
-      const doDamage = (baseDmg: number, actionName = '计算器盲按'): { actualDmg: number; resolvedDmg: number; redirected: boolean } => {
+      const doDamage = (
+        baseDmg: number,
+        actionName = '计算器盲按',
+      ): { actualDmg: number; resolvedDmg: number; redirected: boolean; connected: boolean } => {
         const targetRes = ctx.getEffectiveStat(ctx.target, 'res');
         const res = ctx.user.jobData?.name === '欧皇' ? Math.floor(targetRes * 0.5) : targetRes;
         let finalDmg = Math.max(1, Math.floor(baseDmg * (1 + Math.random() * 0.2) - res * 0.5));
         if (hasIdentity(ctx.target, 'ETHEREAL')) finalDmg = Math.floor(finalDmg * 2.0);
         const damageOptions: DamageApplicationOptions = { actionName };
         const actualDmg = ctx.applyDamage(ctx.target, finalDmg, 'skill', false, ctx.user, damageOptions);
+        const redirected = isDamageRedirected(damageOptions);
         return {
           actualDmg,
           resolvedDmg: getResolvedDamageTotal(actualDmg, damageOptions),
-          redirected: isDamageRedirected(damageOptions),
+          redirected,
+          connected: !redirected && didDamageConnect(actualDmg, damageOptions),
         };
       };
 
       if (roll.type === '114514') {
         ctx.log('skill', `🧮 滴—— 1 1 4 5 1 4... ${ctx.user.name} 播放极其生草的恶臭数字，精神污染朝 ${ctx.target.name} 扩散！`);
-        const { actualDmg: dmg, redirected } = doDamage(Math.floor(ctx.getEffectiveStat(ctx.user, 'mag') * 1.5), '恶臭数字');
+        const { actualDmg: dmg, redirected, connected } = doDamage(Math.floor(ctx.getEffectiveStat(ctx.user, 'mag') * 1.5), '恶臭数字');
         if (redirected) {
           // 屑的转移日志已经说明完整结果。
-        } else if (dmg <= 0) {
+        } else if (!connected) {
           ctx.log('info', `🧮 恶臭数字扫过 ${ctx.target.name}，但没有造成实际伤害，中毒没有生效！`);
         } else {
-          ctx.log('skill', `🧮 恶臭数字命中 ${ctx.target.name}，实际造成 ${dmg} 点精神伤害！`);
+          ctx.log('skill', dmg > 0
+            ? `🧮 恶臭数字命中 ${ctx.target.name}，实际造成 ${dmg} 点精神伤害！`
+            : `🧮 恶臭数字命中 ${ctx.target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命！`);
           ctx.flushDeferredDamageEvents?.();
           if (isActiveCombatant(ctx.target) && ctx.applyStatus(ctx.target, { identityId: 'POISON', remainingTurns: 3 })) {
             ctx.log('debuff', `🦠 【恶臭数字】${ctx.target.name} 陷入 3 回合深度中毒！`);
@@ -115,6 +123,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         ctx.log('skill', `🧮 滴—— 6 6 6 6 6 6... 弹幕共鸣！${ctx.user.name} 召唤弹幕狂潮，准备对 ${ctx.target.name} 打出 6 段魔法打击！`);
         let totalDmg = 0;
         let redirectedAny = false;
+        let connectedAny = false;
         for (let i = 0; i < 6; i++) {
           if (!isActiveCombatant(ctx.user)) break;
           if (ctx.target.currentHp > 0) {
@@ -122,9 +131,12 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
             if (Math.random() < 0.5) segDmg = Math.floor(segDmg * 1.5);
             const segment = doDamage(segDmg, '弹幕共鸣');
             redirectedAny ||= segment.redirected;
+            connectedAny ||= segment.connected;
             totalDmg += segment.resolvedDmg;
             if (segment.actualDmg > 0 && !segment.redirected) {
               ctx.log('skill', `🧮 【弹幕共鸣】第 ${i + 1}/6 段命中 ${ctx.target.name}，实际造成 ${segment.actualDmg} 点伤害！`);
+            } else if (segment.connected) {
+              ctx.log('skill', `🧮 【弹幕共鸣】第 ${i + 1}/6 段命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命！`);
             }
             ctx.flushDeferredDamageEvents?.();
           }
@@ -135,6 +147,8 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
           ctx.log('crit', `🧮 【弹幕共鸣】${ctx.user.name} 的 6 段魔法打击结算完毕，对 ${ctx.target.name} 总计造成 ${totalDmg} 点实际伤害！`);
         } else if (redirectedAny) {
           ctx.log('info', `🧮 【弹幕共鸣】6 段打击已被分摊或转移，但所有承受者都没有损失生命！`);
+        } else if (connectedAny) {
+          ctx.log('info', `🧮 【弹幕共鸣】6 段打击均成功命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命！`);
         } else {
           ctx.log('info', `🧮 【弹幕共鸣】弹幕狂潮扫过 ${ctx.target.name}，但没有造成实际伤害！`);
         }
@@ -166,13 +180,15 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         ctx.log('heal', logMsg);
       } else if (roll.type === '5201314') {
         ctx.log('skill', `🧮 滴—— 5 2 0 1 3 1 4... ${ctx.user.name} 发射极致的爱心飞吻，试图深度魅惑 ${ctx.target.name}！`);
-        const { actualDmg: dmg, redirected } = doDamage(Math.floor(ctx.getEffectiveStat(ctx.user, 'mag') * 0.1), '爱心飞吻');
+        const { actualDmg: dmg, redirected, connected } = doDamage(Math.floor(ctx.getEffectiveStat(ctx.user, 'mag') * 0.1), '爱心飞吻');
         if (redirected) {
           // 屑的转移日志已经说明完整结果。
-        } else if (dmg <= 0) {
+        } else if (!connected) {
           ctx.log('info', `🧮 爱心飞吻擦过 ${ctx.target.name}，但没有造成实际伤害，魅惑没有生效！`);
         } else {
-          ctx.log('skill', `🧮 爱心飞吻命中 ${ctx.target.name}，实际造成 ${dmg} 点物理伤害！`);
+          ctx.log('skill', dmg > 0
+            ? `🧮 爱心飞吻命中 ${ctx.target.name}，实际造成 ${dmg} 点物理伤害！`
+            : `🧮 爱心飞吻命中 ${ctx.target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命！`);
           ctx.flushDeferredDamageEvents?.();
           if (isActiveCombatant(ctx.target) && ctx.applyStatus(ctx.target, { identityId: 'CHARMED', remainingTurns: 3 })) {
             ctx.log('debuff', `💕 【爱心飞吻】${ctx.target.name} 陷入 3 回合深度魅惑！`);
@@ -183,13 +199,15 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         applyStatus(ctx.user, { identityId: 'COUNTER', remainingTurns: 2 });
       } else if (roll.type === '996007') {
         ctx.log('skill', `🧮 滴—— 9 9 6 0 0 7... ${ctx.user.name} 强迫 ${ctx.target.name} 无休加班，重压即将落下！`);
-        const { actualDmg: dmg, redirected } = doDamage(Math.floor(ctx.getEffectiveStat(ctx.user, 'mag') * 1.8), '无休加班');
+        const { actualDmg: dmg, redirected, connected } = doDamage(Math.floor(ctx.getEffectiveStat(ctx.user, 'mag') * 1.8), '无休加班');
         if (redirected) {
           // 屑的转移日志已经说明完整结果。
-        } else if (dmg <= 0) {
+        } else if (!connected) {
           ctx.log('info', `🧮 无休加班的重压没有造成实际伤害，灼烧和减速没有生效！`);
         } else {
-          ctx.log('skill', `🧮 无休加班压垮 ${ctx.target.name}，实际造成 ${dmg} 点魔法伤害！`);
+          ctx.log('skill', dmg > 0
+            ? `🧮 无休加班压垮 ${ctx.target.name}，实际造成 ${dmg} 点魔法伤害！`
+            : `🧮 无休加班命中 ${ctx.target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命！`);
           ctx.flushDeferredDamageEvents?.();
           const burnApplied = isActiveCombatant(ctx.target) &&
             ctx.applyStatus(ctx.target, { identityId: 'BURN', count: 3 }) &&
@@ -264,7 +282,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
       });
       const removedStatuses = filterImportantRemovedStatuses(dispelResult.removed);
 
-      applyStatus(ctx.target, { identityId: 'ZEROED', remainingTurns: 3 });
+      ctx.applyStatus(ctx.target, { identityId: 'ZEROED', remainingTurns: 3 });
       applyStatus(ctx.user, { identityId: 'RABBIT_ZERO_HASTE', remainingTurns: 2 });
 
       ctx.log('skill', `🧮 【归零】降维打击！${ctx.target.name} 的所有正面状态被强行清空，攻击、防御、魔抗在接下来的回合内暴跌至 10%！\n✨ 同时 ${ctx.user.name} 吸收了算力，进入【归零超频】状态，接下来 2 次自身行动出手频率提升 26%！`);
@@ -374,7 +392,7 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
     alwaysCrit: true,
     afterExecute: (ctx) => {
       if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor) return;
-      const realtimeHpPct = ctx.target.currentHp / ctx.target.maxHp;
+      const realtimeHpPct = getSurtrTacticalHpPct(ctx.target);
       if (
         (hasIdentity(ctx.user, 'STYLE_ANGRY') || hasIdentity(ctx.user, 'STYLE_EMPEROR')) &&
         ctx.target.currentHp > 0 &&
@@ -434,17 +452,20 @@ export const rabbitSkills: Record<string, SkillDefinition> = {
         const damageOptions: DamageApplicationOptions = { actionName: '扩音处刑' };
         const actualDmg = ctx.applyDamage(e, dmg, 'skill', true, ctx.user, damageOptions);
         if (isDamageRedirected(damageOptions)) continue;
+        const connected = didDamageConnect(actualDmg, damageOptions);
         if (damageOptions.targetDefeatedDuringDamage || e.isDead || e.isDeadAnnounced) {
           ctx.flushDeferredDamageEvents?.();
           continue;
         }
-        if (actualDmg <= 0) {
+        if (!connected) {
           ctx.log('info', `🔊 刺耳魔音擦身而过！${e.name} 没有承受实际伤害，也没有被眩晕！`);
+        } else if (actualDmg <= 0) {
+          ctx.log('info', `🔊 刺耳魔音贯耳并成功命中 ${e.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命！`);
         } else {
           ctx.log('info', `🔊 刺耳魔音贯耳！${e.name} 实际承受 ${actualDmg} 点真实精神伤害！`);
         }
         ctx.flushDeferredDamageEvents?.();
-        if (actualDmg > 0 && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
+        if (connected && e.currentHp > 0 && !e.isDead && !e.isDeadAnnounced) {
           const bkbImmune = findDefenseStatus(e, 'BKB');
           const foolImmune = hasIdentity(e, 'STYLE_FOOL');
           const emperorImmune = hasIdentity(e, 'STYLE_EMPEROR');

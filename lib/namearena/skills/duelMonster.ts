@@ -5,7 +5,8 @@ import { consumeSpellBlock, formatSpellBlock } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
 import { applyStatus, hasIdentity } from '../statusSystem';
-import { isDamageRedirected } from '../damageRedirects';
+import { didDamageConnect, isDamageRedirected } from '../damageRedirects';
+import { getSurtrTacticalHpPct } from '../surtrMechanics';
 
 const { SKILL_TAGS } = Data;
 
@@ -54,7 +55,8 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     statusApplications: [{ identityId: 'STUN' }],
     text: '🔒 {USER} 展开封印锁链束缚 {TARGET}，造成 {VAL} 点伤害并封锁行动！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || !connected || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { atk: 0.85, mag: 0.85 });
       ctx.log('info', `🔒 【封印锁链】${ctx.target.name} 的面板被永久压制：攻击与魔力各降低 15%！`);
     },
@@ -86,11 +88,13 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🧙‍♂️ 黑暗大法师的怒火命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
+        } else if (didDamageConnect(actualDmg, damageOptions)) {
+          ctx.log('skill', `🧙‍♂️ 黑暗大法师的怒火命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`);
         } else {
           ctx.log('info', `🧙‍♂️ 黑暗大法师的怒火扫过 ${enemy.name}，但没有造成实际伤害！`);
         }
         ctx.flushDeferredDamageEvents?.();
-        if (enemy.currentHp > 0 && enemy.hpPct <= 0.18) {
+        if (enemy.currentHp > 0 && getSurtrTacticalHpPct(enemy) <= 0.18) {
           tryExecuteDefeat(ctx, enemy, '封印处决', {
             message: `☠️ 【封印处决】${enemy.name} 被黑暗大法师的禁忌力量彻底抹除！`,
             killer: ctx.user,
@@ -143,6 +147,8 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🌪️ 白龙扫射的余波命中 ${enemy.name}，实际造成 ${actualDmg} 点溅射伤害！`);
+        } else if (didDamageConnect(actualDmg, damageOptions)) {
+          ctx.log('skill', `🌪️ 白龙扫射的余波命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`);
         } else {
           ctx.log('info', `🌪️ 白龙扫射的余波擦过 ${enemy.name}，但没有造成实际伤害！`);
         }
@@ -161,7 +167,8 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     statusApplications: [{ identityId: 'STUN' }],
     text: '🐉 {USER} 发出震天龙吼，压制 {TARGET}，造成 {VAL} 点伤害并震慑目标！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || !connected || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { res: 0.9 });
       ctx.log('info', `🐉 【白龙威压】${ctx.target.name} 的面板被永久震慑：魔抗降低 10%！`);
     },
@@ -189,6 +196,8 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🐉 究极龙息命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
+        } else if (didDamageConnect(actualDmg, damageOptions)) {
+          ctx.log('skill', `🐉 究极龙息命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`);
         } else {
           ctx.log('info', `🐉 究极龙息扫过 ${enemy.name}，但没有造成实际伤害！`);
         }
@@ -236,8 +245,11 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
           continue;
         }
         total += actualDmg;
-        ctx.log(actualDmg > 0 ? 'skill' : 'info', actualDmg > 0
+        const connected = didDamageConnect(actualDmg, damageOptions);
+        ctx.log(connected ? 'skill' : 'info', actualDmg > 0
           ? `🐉 第 ${i} 颗龙首命中 ${ctx.target.name}，实际造成 ${actualDmg} 点伤害！`
+          : connected
+            ? `🐉 第 ${i} 颗龙首命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命！`
           : `🐉 第 ${i} 颗龙首被 ${ctx.target.name} 化解，没有造成实际伤害！`);
         ctx.flushDeferredDamageEvents?.();
         if (ctx.target.currentHp <= 0) {
@@ -301,7 +313,8 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     statusApplications: [{ identityId: 'STUN' }],
     text: '☀️ {USER} 释放神之威压，压制 {TARGET}，造成 {VAL} 点伤害并震慑！',
     afterExecute: (ctx, actualDmg) => {
-      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || actualDmg <= 0 || !isActiveCombatant(ctx.target)) return;
+      const connected = actualDmg > 0 || ctx.primaryHitConnectedWithoutHpDamage;
+      if (ctx.damageRedirectedByOriginiumCore || ctx.damageRedirectedByOwlEmperor || ctx.suppressOnHitStatuses || ctx.targetDefeatedDuringAction || !connected || !isActiveCombatant(ctx.target)) return;
       applyPermanentStatBuff(ctx.target, { atk: 0.82, mag: 0.82, res: 0.9 });
       ctx.log('info', `☀️ 【神威压制】${ctx.target.name} 的面板被永久削弱：攻击与魔力各降低 18%，魔抗降低 10%！`);
     },

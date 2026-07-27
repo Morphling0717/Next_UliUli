@@ -15,7 +15,7 @@ import { commitFormTransition } from './battlePresentation';
 import { hasIdentity, initializeEffectState, removeEffects, applyStatus, withPersistentStatusShapesSuspended } from './statusSystem';
 import { getEffectiveCombatStat, getPanelCombatStat } from './statusMechanics';
 import { generateUniqueRuntimeId } from './core';
-import { isDamageRedirected } from './damageRedirects';
+import { didDamageConnect, isDamageRedirected } from './damageRedirects';
 
 export interface OwlRuntime {
   fighters: Fighter[];
@@ -37,6 +37,7 @@ export interface OwlRuntime {
   dispelStatusEffects?: (target: Fighter, options: DispelOptions) => DispelResolution;
   markDefeated?: (target: Fighter, options?: import('./types').DefeatOptions) => boolean;
   flushDeferredDamageEvents?: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
+  onSummonCreated?: (summon: Fighter) => void;
 }
 
 const OWL_FORM_STATUS: Record<OwlWarForm, string> = {
@@ -136,6 +137,7 @@ export function spawnOwlSummon(runtime: OwlRuntime, owl: Fighter, spec: OwlSummo
   };
   initializeEffectState(summon);
   runtime.fighters.push(summon);
+  runtime.onSummonCreated?.(summon);
   return summon;
 }
 
@@ -254,6 +256,8 @@ export function enterOwlPrideAfterKill(runtime: OwlRuntime, killer?: Fighter): v
   if (!killer) return;
   const owl = killer.isOwl
     ? killer
+    : killer.isSurtr && killer.surtrState?.owlOwnerId && !killer.surtrState.ownershipSuspended
+      ? runtime.fighters.find((fighter) => fighter.id === killer.surtrState?.owlOwnerId && fighter.isOwl)
     : killer.isSummon && killer.summonerId
       ? runtime.fighters.find((fighter) => fighter.id === killer.summonerId && fighter.isOwl)
       : undefined;
@@ -334,12 +338,15 @@ export function releaseOwlPhaseTwoLightning(runtime: OwlRuntime, owl: Fighter): 
     };
     const actual = runtime.applyDamage?.(target, raw, 'skill', false, owl, damageOptions) ?? 0;
     const redirected = isDamageRedirected(damageOptions);
+    const connected = !redirected && didDamageConnect(actual, damageOptions);
     runtime.flushDeferredDamageEvents?.(target, 'mitigation');
     if (!redirected) {
       runtime.log(
-        actual > 0 ? 'skill' : 'info',
+        connected ? 'skill' : 'info',
         actual > 0
           ? `⚡ 雷击命中 ${target.name}，实际造成 ${actual} 点伤害。`
+          : connected
+            ? `⚡ 雷击命中 ${target.name}；但【黄昏余命】期间未再损失生命。`
           : `⚡ ${target.name} 挡下或化解了雷击，未受到生命伤害。`,
       );
     }

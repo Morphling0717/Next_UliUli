@@ -129,7 +129,9 @@ export function createSkillContext(
             : undefined;
         }
         if (damageOptions.targetDefeatedDuringDamage) options.targetDefeatedDuringDamage = true;
+        if (damageOptions.targetWithdrawnDuringDamage) options.targetWithdrawnDuringDamage = true;
         if (damageOptions.suppressOnHitStatuses) options.suppressOnHitStatuses = true;
+        if (damageOptions.hitWithoutHpDamage) options.hitWithoutHpDamage = true;
         if (damageOptions.resolution) options.resolution = damageOptions.resolution;
       }
       if (isDamageRedirected(damageOptions)) {
@@ -142,7 +144,7 @@ export function createSkillContext(
       if (damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
         return 0;
       }
-      if (actualDmg > 0 || (damageTarget.pendingDamageEvents?.length ?? 0) > pendingEventCountBefore) {
+      if (actualDmg > 0 || damageOptions.hitWithoutHpDamage || (damageTarget.pendingDamageEvents?.length ?? 0) > pendingEventCountBefore) {
         trackDeferredDamageTarget?.(damageTarget);
       }
       return actualDmg;

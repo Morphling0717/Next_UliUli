@@ -1,4 +1,5 @@
 import type {
+  DamageApplicationOptions,
   Fighter,
   SkillDefinition,
 } from '../types';
@@ -9,6 +10,7 @@ import { consumeStatusValue, findIdentity, grantBarrier, hasIdentity, hasMechani
 import { consumeDrain, getDrainPercent, getEffectiveCombatStat } from '../statusMechanics';
 import { buildFighterStatusPresentation, buildStatusPresentationMember } from '../statusPresentation';
 import { getStatusIdentityDefinition } from '../statusRegistry';
+import { didDamageConnect } from '../damageRedirects';
 
 const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
   chimera_devour: 'baby_feed',
@@ -222,14 +224,18 @@ export function handlePhysicalCounterReflect(
     return;
   }
   runtime.log('skill', `💢 ${target.name} 触发反击！【反弹伤害】开始对 ${user.name} 结算。`);
-  const reflectedDmg = runtime.applyDamage(user, actualDmg, 'reflect', false, target, { deferTransform: true });
+  const damageOptions: DamageApplicationOptions = { deferTransform: true, actionName: '反弹伤害' };
+  const reflectedDmg = runtime.applyDamage(user, actualDmg, 'reflect', false, target, damageOptions);
+  const connected = didDamageConnect(reflectedDmg, damageOptions);
   runtime.flushDeferredDamageEvents(user, 'mitigation');
   if (reflectedDmg > 0) {
     runtime.log('crit', `💢 【反击结算】${user.name} 实际承受 ${reflectedDmg} 点反弹伤害！`);
+  } else if (connected) {
+    runtime.log('crit', `💢 【反击结算】反弹成功命中 ${user.name}；但【黄昏余命】期间未再损失生命！`);
   } else {
     runtime.log('info', `💢 【反击结算】${user.name} 本人没有损失生命；拦截、分摊或无效化结果已在上方记录。`);
   }
-  if (reflectedDmg > 0 || (user.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(user);
+  if (connected || (user.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(user);
   if (user.currentHp <= 0) {
     runtime.markDefeated(user, { message: `💀 ${user.name} 被自己造成的反弹伤害反死了！`, killer: target });
   }

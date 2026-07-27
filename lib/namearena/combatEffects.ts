@@ -288,6 +288,12 @@ export const GACHA_COMBAT_EFFECT_IDS = Object.freeze(
 
 const SUMMON_SKILL_EFFECTS: Record<string, GachaCombatEffectId> = {
   surtr_laeva: 'summon_surtr_laeva',
+  surtr_flame_sword: 'summon_surtr_laeva',
+  surtr_molten_shadow: 'summon_surtr_laeva',
+  surtr_molten_shadow_split_hit: 'summon_surtr_laeva',
+  surtr_molten_shadow_single_hit: 'summon_surtr_laeva',
+  surtr_twilight: 'summon_surtr_laeva',
+  surtr_twilight_hit: 'summon_surtr_laeva',
   blue_eyes_burst_stream: 'summon_blue_eyes_burst',
   blue_eyes_sweeping_breath: 'summon_blue_eyes_sweep',
   blue_eyes_dragon_roar: 'summon_blue_eyes_roar',

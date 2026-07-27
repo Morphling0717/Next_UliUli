@@ -63,6 +63,7 @@ export interface StatusDamageEvent {
   lockblood: boolean;
   phaseTransition: boolean;
   defeated: boolean;
+  hitWithoutHpDamage: boolean;
   redirectedBy?: 'momo' | 'originium_core' | 'owl_emperor' | 'joker' | 'yuzu';
   redirectedDamage?: number;
 }
@@ -143,6 +144,7 @@ function makeStatusDamageEvent(
       options.resolution?.outcome === 'lockblood',
     phaseTransition: options.resolution?.phaseTransition === true,
     defeated: target.currentHp <= 0 || target.isDead || target.isDeadAnnounced,
+    hitWithoutHpDamage: options.hitWithoutHpDamage === true,
     redirectedBy,
     redirectedDamage,
   };
@@ -212,10 +214,12 @@ function logStatusSettlement(
     runtime.log('poison', `${icon} 【${name}】${target.name} ${phrase}，实际损失 ${event.hpDamage} 点生命！（${settlement}）`);
   } else if (event.shieldDamage > 0) {
     runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}，但 ${event.shieldDamage} 点伤害被屏障吸收，生命未减少！（${settlement}）`);
+  } else if (event.hitWithoutHpDamage) {
+    runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}并被成功命中；但【黄昏余命】期间显示生命已为 0，未再损失生命！（${settlement}）`);
   } else {
     runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}，伤害被完全化解！（${settlement}）`);
   }
-  if (event.hpDamage > 0 || event.shieldDamage > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) {
+  if (event.hpDamage > 0 || event.shieldDamage > 0 || event.hitWithoutHpDamage || (target.pendingDamageEvents?.length ?? 0) > 0) {
     runtime.flushDeferredDamageEvents(target);
   }
 }

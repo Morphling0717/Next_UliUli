@@ -16,7 +16,7 @@ import {
   type OwlRuntime,
 } from '../owlMechanics';
 import { applyStatus, hasIdentity } from '../statusSystem';
-import { getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
+import { didDamageConnect, getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
 
@@ -55,7 +55,7 @@ function applyOwlDamage(
   const actual = ctx.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, ctx.user, damageOptions);
   const redirected = isDamageRedirected(damageOptions);
   const resolved = getResolvedDamageTotal(actual, damageOptions);
-  return { actual: resolved, redirected, landed: actual > 0 && !redirected };
+  return { actual: resolved, redirected, landed: !redirected && didDamageConnect(actual, damageOptions) };
 }
 
 function settleOwlDamage(
@@ -64,7 +64,7 @@ function settleOwlDamage(
   result: { actual: number; redirected: boolean; landed: boolean },
   actionName: string,
 ): void {
-  if (result.actual > 0 || (target.pendingDamageEvents?.length ?? 0) > 0) ctx.flushDeferredDamageEvents?.();
+  if (result.actual > 0 || result.landed || (target.pendingDamageEvents?.length ?? 0) > 0) ctx.flushDeferredDamageEvents?.();
   if (!result.redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     ctx.markDefeated(target, {
       message: `💀 【${actionName}】${target.name} 被 ${ctx.user.name} 击败！`,
@@ -103,9 +103,11 @@ function executeYilingFire(ctx: SkillContext): boolean {
     const result = applyOwlDamage(ctx, target, raw, '夷陵之火');
     if (!result.redirected) {
       ctx.log(
-        result.actual > 0 ? 'skill' : 'info',
+        result.landed ? 'skill' : 'info',
         result.actual > 0
           ? `🔥 夷陵之火命中 ${target.name}，实际造成 ${result.actual} 点伤害。`
+          : result.landed
+            ? `🔥 夷陵之火命中 ${target.name}；但【黄昏余命】期间未再损失生命。`
           : `🔥 ${target.name} 挡下或化解了夷陵之火，未受到生命伤害。`,
       );
     }
@@ -254,9 +256,11 @@ function executeZhaoRampage(ctx: SkillContext): boolean {
   const result = applyOwlDamage(ctx, target, raw, '长坂冲阵');
   if (!result.redirected) {
     ctx.log(
-      result.actual > 0 ? 'skill' : 'info',
+      result.landed ? 'skill' : 'info',
       result.actual > 0
         ? `🏇 ${ctx.user.name} 的冲阵命中 ${target.name}，实际造成 ${result.actual} 点伤害！`
+        : result.landed
+          ? `🏇 ${ctx.user.name} 的冲阵命中 ${target.name}；但【黄昏余命】期间未再损失生命。`
         : `🏇 ${ctx.user.name} 的冲阵被 ${target.name} 化解，未造成生命伤害。`,
     );
   }
@@ -275,9 +279,11 @@ function executeAtomicBreath(ctx: SkillContext): boolean {
   const result = applyOwlDamage(ctx, ctx.target, raw, '原子吐息');
   if (!result.redirected) {
     ctx.log(
-      result.actual > 0 ? 'skill' : 'info',
+      result.landed ? 'skill' : 'info',
       result.actual > 0
         ? `🐲 原子龙息命中 ${ctx.target.name}，实际造成 ${result.actual} 点混合伤害！`
+        : result.landed
+          ? `🐲 原子龙息命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命。`
         : `🐲 ${ctx.target.name} 完全化解了原子龙息，未受到生命伤害。`,
     );
   }
@@ -301,9 +307,11 @@ function executeDragonShock(ctx: SkillContext): boolean {
     const result = applyOwlDamage(ctx, target, raw, '龙威震荡');
     if (!result.redirected) {
       ctx.log(
-        result.actual > 0 ? 'skill' : 'info',
+        result.landed ? 'skill' : 'info',
         result.actual > 0
           ? `🐲 龙威扫过 ${target.name}，实际造成 ${result.actual} 点伤害。`
+          : result.landed
+            ? `🐲 龙威命中 ${target.name}；但【黄昏余命】期间未再损失生命。`
           : `🐲 ${target.name} 顶住了龙威震荡，未受到生命伤害。`,
       );
     }
