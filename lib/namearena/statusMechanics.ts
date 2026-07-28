@@ -231,6 +231,7 @@ function markStatusDefeat(runtime: StatusMechanicsRuntime, target: Fighter, stat
   runtime.markDefeated(target, {
     message: `💀 ${target.name} 被【${name}】的后续伤害击倒！`,
     killer: applier,
+    causeName: name,
     awardKill: !!applier,
   });
 }

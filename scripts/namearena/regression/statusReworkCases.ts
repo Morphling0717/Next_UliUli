@@ -1671,6 +1671,28 @@ export function runStatusReworkCases(): string[] {
     );
     assert(countText(burnCard.detail, '每个大回合结束时造成强度×6') === 1, 'multi-source burn must not repeat its mechanic description per source');
 
+    const originiumTarget = prepareFighter(makeFighter('多来源矿石病目标@H'));
+    applySingleTestStatus(originiumTarget, {
+      identityId: 'ORIGINIUM_DISEASE',
+      potency: 4,
+      attribution: { effectSourceId: 'presentation-originium-a', applierId: burnSourceA.id, applierName: burnSourceA.name },
+    });
+    applySingleTestStatus(originiumTarget, {
+      identityId: 'ORIGINIUM_DISEASE',
+      potency: 25,
+      attribution: { effectSourceId: 'presentation-originium-b', applierId: burnSourceB.id, applierName: burnSourceB.name },
+    });
+    const originiumCards = buildFighterStatusPresentation(originiumTarget)
+      .filter((item) => item.name === '矿石病');
+    assert(
+      originiumCards.length === 1 &&
+      originiumCards[0].valueLabel === '29/80层' &&
+      originiumCards[0].detailModel.groupKind === 'multi_source' &&
+      originiumCards[0].detailModel.effects.length === 2,
+      'multi-source Originium disease should show one aggregate total with one contribution row per source',
+    );
+    assert(countText(originiumCards[0].detail, '80 层时死亡') === 1, 'multi-source Originium disease must not repeat its mechanic description per source');
+
     const simpleTarget = prepareFighter(makeFighter('单状态目标@G'));
     applySingleTestStatus(simpleTarget, {
       identityId: 'STUN',

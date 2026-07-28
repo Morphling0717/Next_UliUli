@@ -261,6 +261,15 @@ function aggregateStatus(statuses: StatusInstance[]): StatusInstance {
       remainingTurns: Math.max(...statuses.map((status) => status.remainingTurns ?? 0)),
     };
   }
+  if (latest.mechanicId === 'ORIGINIUM_DISEASE') {
+    return {
+      ...latest,
+      potency: Math.min(
+        definition.potencyCap ?? Number.MAX_SAFE_INTEGER,
+        statuses.reduce((sum, status) => sum + (status.potency ?? 0), 0),
+      ),
+    };
+  }
   return latest;
 }
 
@@ -541,7 +550,11 @@ export function buildBarrierPresentationItem(barrier: BarrierEntry): StatusPrese
 
 export function statusPresentationGroupKey(status: StatusInstance): string {
   if (status.groupId) return `group:${status.groupId}`;
-  if (isDualValueStatus(status) || status.mechanicId === 'POISON') return `status:${status.mechanicId}`;
+  if (
+    isDualValueStatus(status) ||
+    status.mechanicId === 'POISON' ||
+    status.mechanicId === 'ORIGINIUM_DISEASE'
+  ) return `status:${status.mechanicId}`;
   const defenseName = getDefenseStatusDisplayName(status);
   if (defenseName) return `defense:${status.attribution.effectSourceId}:${defenseName}`;
   return `status:${status.identityId}:${status.attribution.effectSourceId}`;

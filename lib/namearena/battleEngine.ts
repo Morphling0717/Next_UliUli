@@ -904,6 +904,19 @@ export class BattleEngine {
       this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:defeated`, { targetIds: [target.id] });
       return false;
     }
+    if (target.isYuzuProphet && identityId === ORIGINIUM_DISEASE_STATUS) {
+      if (statusApplication.silent !== true) {
+        this.log(
+          'info',
+          `🜲 【源石同源】${target.name} 不会感染矿石病，本次施加没有生效。`,
+          { targetIds: [target.id] },
+        );
+      }
+      this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:prophet_originium_immunity`, {
+        targetIds: [target.id],
+      });
+      return false;
+    }
     if (isHostile && target.isYuzuProphet) {
       const source = this.findYuzuProphetEffectSource(statusApplication);
       if (shouldYuzuProphetRejectSource(
@@ -1434,17 +1447,6 @@ export class BattleEngine {
       onPuruisaishiRetreat: (_puruisaishi, reason) => {
         const prophet = findActiveYuzuProphet(this.fighters, (fighter) => this.isActiveCombatant(fighter));
         return prophet ? retreatYuzuProphetEvent(this.createYuzuProphetRuntime(), prophet, reason) : false;
-      },
-      canApplyOriginiumInfection: (target, reason) => {
-        if (!target.isYuzuProphet) return true;
-        if (!shouldYuzuProphetRejectSource(
-          this.createYuzuProphetRuntime(),
-          target,
-          undefined,
-          { effectSourceId: 'puruisaishi_originium', effectSourceName: '普瑞赛斯事件' },
-        )) return true;
-        this.log('info', `🜲 【绑定来源免疫】${target.name} 拒绝了来自普瑞赛斯事件的${reason}；绑定柚子仍在场，矿石病未能施加。`);
-        return false;
       },
     };
   }
@@ -2849,7 +2851,7 @@ export class BattleEngine {
       retreatYuzuProphetEvent(
         this.createYuzuProphetRuntime(),
         target,
-        `${recordedSource?.name ?? '无归属效果'} 使预言家生命归零`,
+        `${options.causeName ?? recordedSource?.name ?? target.lastDamage?.sourceLabel ?? '未知效果'} 使预言家生命归零`,
       );
       return false;
     }
@@ -3718,6 +3720,7 @@ export class BattleEngine {
     if (after >= ORIGINIUM_MAX_STACKS && this.isActiveCombatant(target)) {
       this.markDefeated(target, {
         message: `💀 【矿石病】${target.name} 的矿石病达到 ${ORIGINIUM_MAX_STACKS} 层，身体被源石彻底吞没！`,
+        causeName: `矿石病达到 ${ORIGINIUM_MAX_STACKS} 层`,
         awardKill: false,
       });
     }

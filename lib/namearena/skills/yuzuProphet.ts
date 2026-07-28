@@ -85,6 +85,7 @@ export const yuzuProphetSkills: Record<string, SkillDefinition> = {
       if (after >= ORIGINIUM_MAX_STACKS && ctx.target.currentHp > 0) {
         ctx.markDefeated(ctx.target, {
           message: `💀 【矿石病】${ctx.target.name} 的矿石病达到 ${ORIGINIUM_MAX_STACKS} 层，身体被源石彻底吞没！`,
+          causeName: `矿石病达到 ${ORIGINIUM_MAX_STACKS} 层`,
           awardKill: false,
         });
       }

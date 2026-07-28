@@ -141,6 +141,9 @@ export const jokerHook: CharacterHook = {
           const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(effectiveRes * 0.5)), 'skill', false, fighter, damageOptions);
           runtime.flushDeferredDamageEvents(enemy, 'mitigation');
           const redirected = isDamageRedirected(damageOptions);
+          if (!redirected && actualDmg <= 0 && !runtime.isActiveCombatant(enemy)) {
+            continue;
+          }
           if (redirected) {
             const redirectedDamage = getResolvedDamageTotal(actualDmg, damageOptions);
             const redirectKind = getDamageRedirectKind(damageOptions);

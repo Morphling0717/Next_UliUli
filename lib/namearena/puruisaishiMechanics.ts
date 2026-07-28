@@ -215,6 +215,7 @@ function activePuruisaishi(runtime: Pick<PuruisaishiRuntime, 'fighters' | 'isAct
 function activeInfectionTargets(runtime: Pick<PuruisaishiRuntime, 'fighters' | 'isActiveCombatant'>): Fighter[] {
   return runtime.fighters.filter((fighter) =>
     runtime.isActiveCombatant(fighter) &&
+    !fighter.isYuzuProphet &&
     !fighter.isPuruisaishi &&
     !fighter.isOriginiumCore &&
     !fighter.isOriginiumCrystal,
@@ -285,7 +286,7 @@ export function addOriginiumInfection(
   options: { log?: boolean; deferDefeat?: boolean } = {},
 ): number {
   if (stacks <= 0 || !runtime.isActiveCombatant(target)) return 0;
-  if (target.isPuruisaishi || target.isOriginiumCore || target.isOriginiumCrystal) return 0;
+  if (target.isYuzuProphet || target.isPuruisaishi || target.isOriginiumCore || target.isOriginiumCrystal) return 0;
   if (runtime.canApplyOriginiumInfection && !runtime.canApplyOriginiumInfection(target, reason)) return 0;
 
   const before = getOriginiumInfectionStacks(target);
@@ -304,6 +305,7 @@ export function addOriginiumInfection(
   if (next >= ORIGINIUM_MAX_STACKS && !options.deferDefeat) {
     runtime.markDefeated(target, {
       message: `💀 【矿石病】${target.name} 的矿石病达到 80 层，身体被源石彻底吞没！`,
+      causeName: '矿石病达到 80 层',
       awardKill: false,
     });
   }
@@ -446,6 +448,7 @@ function processCrystalOverflowInfection(runtime: PuruisaishiRuntime): void {
   terminalTargets.forEach((target) => {
     runtime.markDefeated(target, {
       message: `💀 【矿石病】${target.name} 的矿石病达到 80 层，身体被源石彻底吞没！`,
+      causeName: '矿石病达到 80 层',
       awardKill: false,
     });
   });
@@ -562,6 +565,7 @@ function processOriginiumDot(runtime: PuruisaishiRuntime): void {
     if (stacks >= ORIGINIUM_MAX_STACKS) {
       runtime.markDefeated(target, {
         message: `💀 【矿石病】${target.name} 的矿石病达到 80 层，身体被源石彻底吞没！`,
+        causeName: '矿石病达到 80 层',
         awardKill: false,
       });
       return;
@@ -585,6 +589,7 @@ function processOriginiumDot(runtime: PuruisaishiRuntime): void {
     if (target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
       runtime.markDefeated(target, {
         message: `💀 【矿石病】${target.name} 被源石侵蚀拖垮，倒在战场上！`,
+        causeName: '矿石病侵蚀',
         awardKill: false,
       });
     }

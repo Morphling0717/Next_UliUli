@@ -194,6 +194,7 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         const damageOptions: DamageApplicationOptions = { actionName: '究极爆裂疾风弹' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
         if (isDamageRedirected(damageOptions)) continue;
+        if (actualDmg <= 0 && !isActiveCombatant(enemy)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🐉 究极龙息命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
         } else if (didDamageConnect(actualDmg, damageOptions)) {

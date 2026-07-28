@@ -264,6 +264,7 @@ export function resolveAirborneLanding(
     runtime.markDefeated(actor, {
       message: `💀 ${actor.name} 因击飞坠地的冲击倒下了！`,
       killer: applier,
+      causeName: isWarThunder ? '炮震坠落' : '击飞坠地',
       awardKill: !!applier,
     });
   }
@@ -500,6 +501,7 @@ export function processStatusTurn(
           runtime.markDefeated(actor, {
             message: `💀 ${actor.name} 因${statusCause}（${actualDmg}点）倒下了！`,
             killer: applier,
+            causeName: statusCause,
             awardKill: !!applier,
           });
           if (!runtime.isActiveCombatant(actor)) {

@@ -6,6 +6,8 @@ import {
   getPuruisaishiBarrierTotal,
   grantPuruisaishiBarrier,
   ORIGINIUM_CRYSTAL_MAX_COUNT,
+  ORIGINIUM_DISEASE_STATUS,
+  ORIGINIUM_MAX_STACKS,
   PURUISAISHI_BARRIER_IDENTITY,
   spawnPuruisaishiEvent,
   trySpawnOriginiumCrystal,
@@ -242,6 +244,42 @@ export function runYuzuProphetCases(): string[] {
     );
     assert(logs.filter((entry) => entry.text.includes('【绑定来源免疫】')).length >= 4, 'Every rejected source branch needs explicit context');
     cases.push('Source immunity rejects non-bound damage, status, dispel, and defeat while accepting bound Yuzu effects');
+  }
+
+  {
+    const { engine, logs, prophet, yuzu } = spawnProphetFixture();
+    localProject.setCurrentHp(yuzu, 0);
+    yuzu.isDead = true;
+    yuzu.isDeadAnnounced = true;
+
+    const gained = addOriginiumInfection(
+      engine.createPuruisaishiRuntime(),
+      prophet,
+      ORIGINIUM_MAX_STACKS,
+      '预言家矿石病免疫回归测试',
+    );
+    const directApplied = engine.applyStatus(prophet, {
+      identityId: ORIGINIUM_DISEASE_STATUS,
+      potency: 10,
+      attribution: { effectSourceId: 'regression_originium', effectSourceName: '回归测试源石' },
+    });
+
+    assert(gained === 0 && !directApplied, 'Prophet must reject Originium infection through both mechanic and generic status entrypoints');
+    assert(getOriginiumInfectionStacks(prophet) === 0, 'Prophet must never retain Originium infection');
+    assert(!prophet.yuzuProphetState?.retreatCompleted, 'Rejected Originium infection must not retreat the Prophet');
+    assert(logs.some((entry) => entry.text.includes('【源石同源】')), 'Generic infection rejection should explain the permanent immunity');
+
+    localProject.setCurrentHp(prophet, 0);
+    engine.markDefeated(prophet, {
+      causeName: '战场崩塌',
+      message: '💀 【测试】战场崩塌令预言家生命归零。',
+      awardKill: false,
+    });
+    const retreatLog = logs.find((entry) => entry.text.includes('【预言家共同退场启动】'))?.text ?? '';
+    assert(prophet.yuzuProphetState?.retreatCompleted, 'A legal environmental lethal effect should retreat the unbound Prophet');
+    assert(retreatLog.includes('战场崩塌'), 'Environmental retreat must retain its player-facing cause');
+    assert(!retreatLog.includes('无归属效果') && !retreatLog.includes('未知效果'), 'Environmental retreat must not lose its cause');
+    cases.push('Prophet permanently rejects Originium infection while legal environmental retreat preserves its cause');
   }
 
   {
@@ -726,6 +764,29 @@ export function runYuzuProphetCases(): string[] {
       'Retired Prophet event units must not emit deferred damage or status logs after common retreat completes',
     );
     cases.push('Puruisaishi shield depletion precedes retreat and retired event units leave no deferred logs');
+  }
+
+  {
+    const fixture = spawnProphetFixture();
+    const attacker = fixture.engine.fighters.find((fighter) =>
+      !fighter.isNpc && fighter.id !== fixture.yuzu.id,
+    )!;
+    removeBarriers(fixture.puruisaishi, { identityIds: [PURUISAISHI_BARRIER_IDENTITY] });
+    grantPuruisaishiBarrier(fixture.puruisaishi, 1, 'AOE 退场日志顺序测试');
+    attacker.atk = 1000;
+    attacker.mag = 1000;
+
+    fixture.engine.executeSkillAction('ultimate_burst_stream', attacker, fixture.puruisaishi);
+
+    const retreatEndIndex = fixture.logs.findIndex((entry) => entry.text.includes('【共同退场完成】'));
+    assert(retreatEndIndex >= 0, 'AOE shield depletion should complete the Prophet event retreat');
+    assert(
+      fixture.logs.slice(retreatEndIndex + 1).every((entry) =>
+        !entry.text.includes(`究极龙息扫过 ${fixture.puruisaishi.name}`),
+      ),
+      'The resolving AOE must not append an outcome for a Puruisaishi target that already retired',
+    );
+    cases.push('AOE resolution stops reporting a Puruisaishi target after its shield triggers immediate retreat');
   }
 
   return cases;

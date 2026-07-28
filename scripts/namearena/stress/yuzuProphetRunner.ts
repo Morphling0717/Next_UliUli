@@ -202,6 +202,28 @@ function semanticIssues(result: BattleResult, metrics: ProphetMetrics): Array<{ 
       detail: `starts=${metrics.retreatStarts}, ends=${metrics.retreatEnds}, quotes=${metrics.retreatQuotes}`,
     });
   }
+  const causeLessRetreat = result.logs.find((entry) =>
+    entry.text.includes('【预言家共同退场启动】') &&
+    (entry.text.includes('无归属效果') || entry.text.includes('未知效果')),
+  );
+  if (causeLessRetreat) {
+    issues.push({
+      kind: 'retreat-cause-missing',
+      detail: `common retreat lost its cause: ${causeLessRetreat.text}`,
+    });
+  }
+  const prophetInfection = result.logs.find((entry) =>
+    /【状态(?:施加|叠加)】柚子·预言家 的【矿石病】/.test(entry.text) ||
+    entry.text.includes('【矿石病】柚子·预言家 因') ||
+    /柚子·预言家 (?:实际损失|生命未减少|本体生命未减少).*\(\d+\/80 层\)/.test(entry.text) ||
+    /本轮感染：.*柚子·预言家 \+\d+/.test(entry.text),
+  );
+  if (prophetInfection) {
+    issues.push({
+      kind: 'prophet-originium-infection',
+      detail: `Prophet must never receive or settle Originium infection: ${prophetInfection.text}`,
+    });
+  }
   if (metrics.phaseTwos > 1) issues.push({ kind: 'duplicate-phase-two', detail: `phaseTwos=${metrics.phaseTwos}` });
   const retreatEndIndex = result.logs.findIndex((entry) => entry.text.includes('【共同退场完成】'));
   if (retreatEndIndex >= 0) {

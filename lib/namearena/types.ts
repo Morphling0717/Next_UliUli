@@ -976,6 +976,8 @@ export interface Fighter {
 export interface DefeatOptions {
   message?: string;
   killer?: Fighter;
+  /** Player-facing cause used when a defeat has no direct fighter source. */
+  causeName?: string;
   logType?: string;
   awardKill?: boolean;
   setHpZero?: boolean;
