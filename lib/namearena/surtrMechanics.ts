@@ -251,11 +251,20 @@ export function awardSurtrJointKill(
   state.actualKills += 1;
   const primary = getSurtrOwner(runtime.fighters, state.primaryOwnerId);
   const owl = getSurtrOwner(runtime.fighters, state.owlOwnerId);
-  if (primary) primary.stats.kills += 0.5;
-  if (owl) owl.stats.kills += 0.5;
+  const creditedPrimary = primary?.id !== defeated.id ? primary : undefined;
+  const creditedOwl = owl?.id !== defeated.id ? owl : undefined;
+  if (creditedPrimary) creditedPrimary.stats.kills += 0.5;
+  if (creditedOwl) creditedOwl.stats.kills += 0.5;
+  const creditParts = [
+    creditedPrimary ? `${creditedPrimary.name} +0.5` : undefined,
+    creditedOwl ? `${creditedOwl.name} +0.5` : undefined,
+  ].filter((entry): entry is string => !!entry);
+  const forfeited = [primary, owl].some((owner) => owner?.id === defeated.id)
+    ? `；${defeated.name} 是本次受害者，不获得自己的击杀分账`
+    : '';
   runtime.log(
     'buff',
-    `🔥 【共同击杀分账】${surtr.name} 的本次击杀只对应刚才的 1 次死亡结算；${primary?.name ?? '主要主人'} +0.5，${owl?.name ?? '共同主人'} +0.5（史尔特尔实际击杀 ${state.actualKills}）。`,
+    `🔥 【共同击杀分账】${surtr.name} 的本次击杀只对应刚才的 1 次死亡结算；${creditParts.join('，') || '没有合法主人获得分账'}${forfeited}（史尔特尔实际击杀 ${state.actualKills}）。`,
     {
       actorId: surtr.id,
       actorName: surtr.name,

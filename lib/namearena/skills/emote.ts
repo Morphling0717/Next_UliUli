@@ -69,6 +69,7 @@ function applyEmoteDamage(
   }
 
   ctx.log('skill', `🎬 【${actionName}】${ctx.user.name} 锁定 ${target.name}，动作开始结算！`);
+  const actorDeathCountBeforeDamage = ctx.user.emoteDeathCount ?? 0;
   const damageOptions: DamageApplicationOptions = {
     actionName,
     respectDefenses: true,
@@ -79,7 +80,12 @@ function applyEmoteDamage(
   const redirected = redirectKind !== null;
   const resolvedActual = getResolvedDamageTotal(actual, damageOptions);
   const connected = !redirected && didDamageConnect(actual, damageOptions);
-  if (!canContinueEmoteAction(ctx.user)) {
+  if (damageOptions.targetWithdrawnDuringDamage) {
+    ctx.flushDeferredDamageEvents?.();
+    return { actual: 0, connected: false, interrupted: true, redirected: false, redirectKind: null };
+  }
+  const actorDefeatedDuringTransfer = damageOptions.redirectedJokerDefeatedTargetIds?.includes(ctx.user.id) ?? false;
+  if (actorDefeatedDuringTransfer || !canContinueEmoteAction(ctx.user)) {
     return { actual: resolvedActual, connected, interrupted: true, redirected, redirectKind };
   }
 
@@ -106,6 +112,9 @@ function applyEmoteDamage(
             : `🛡️ 【${actionName}】${ctx.user.name} 的攻击被 ${target.name} 化解，没有造成生命伤害。`;
   ctx.log(resolvedActual > 0 || connected ? 'skill' : 'info', outcomeText);
   if (resolvedActual > 0 || connected) ctx.flushDeferredDamageEvents?.();
+  if ((ctx.user.emoteDeathCount ?? 0) !== actorDeathCountBeforeDamage || !canContinueEmoteAction(ctx.user)) {
+    return { actual: resolvedActual, connected, interrupted: true, redirected, redirectKind };
+  }
   if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
     ctx.markDefeated(target, {
       message: `💀 【${actionName}】${target.name} 被 ${ctx.user.name} 的适应轮盘碾碎！`,
@@ -187,9 +196,18 @@ function executeAdaptationWheel(ctx: SkillContext): boolean {
   return true;
 }
 
+function getOwnerIneligibilityLabel(target: Fighter): string | undefined {
+  if (target.isNpc) return '事件单位';
+  if (target.isSummon) return '召唤物';
+  if (target.cannotWin) return '非参赛者单位';
+  return undefined;
+}
+
 function executeMarkOwner(ctx: SkillContext): boolean {
   if (!resolveEmoteAttackGuards(ctx, ctx.target, '先认个脸熟')) return true;
 
+  const ownerIneligibilityLabel = getOwnerIneligibilityLabel(ctx.target);
+  const canBecomeOwner = ownerIneligibilityLabel === undefined;
   const adaptTotal = getEmoteAdaptTotal(ctx.user);
   const amount = ctx.getEffectiveStat(ctx.user, 'wis') + ctx.user.maxHp * 0.025 + adaptTotal * 0.05;
   const { connected, interrupted, redirected, redirectKind } = applyEmoteDamage(
@@ -202,7 +220,9 @@ function executeMarkOwner(ctx: SkillContext): boolean {
       : kind === 'originium'
         ? `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但阿喃那将冲击转入源石网络，共对源石结晶结算 ${damage} 点伤害；阿喃那本体未受伤！`
         : damage > 0
-          ? `👁️ 【先认个脸熟】${ctx.user.name} 死死盯住 ${ctx.target.name}，先把未来主人的脸记下来，实际造成 ${damage} 点伤害！`
+          ? canBecomeOwner
+            ? `👁️ 【先认个脸熟】${ctx.user.name} 死死盯住 ${ctx.target.name}，先把未来主人的脸记下来，实际造成 ${damage} 点伤害！`
+            : `👁️ 【先认个脸熟】${ctx.user.name} 死死盯住 ${ctx.target.name}，实际造成 ${damage} 点伤害；但${ownerIneligibilityLabel}不能成为认主对象！`
           : `👁️ 【先认个脸熟】${ctx.user.name} 盯向 ${ctx.target.name}，但防护把视线挡开，没有造成生命伤害！`,
     true,
   );
@@ -218,6 +238,14 @@ function executeMarkOwner(ctx: SkillContext): boolean {
             ? `被 ${ctx.target.name} 通过【镜界分摊】交给队友`
           : `被 ${ctx.target.name} 的随机恶作剧转走`;
     ctx.log('info', `👁️ 【脸熟失败】${ctx.user.name} 的视线${redirectedReason}，暂时没有记住这张脸。`);
+    return true;
+  }
+  if (connected && !canBecomeOwner) {
+    const weakened = ctx.applyStatus(ctx.target, { identityId: 'WEAK', remainingTurns: 1 });
+    ctx.log(
+      'info',
+      `👁️ 【脸熟失败】${ctx.target.name} 属于${ownerIneligibilityLabel}，不能成为 ${ctx.user.name} 的临时主人候选${weakened ? '；盯视造成的虚弱仍然生效' : '；虚弱效果也被抵抗'}。`,
+    );
     return true;
   }
   if (connected && ctx.target.currentHp > 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {

@@ -21,6 +21,12 @@ import { runStatusClockCases } from './statusClockCases';
 import { runStatusReworkCases } from './statusReworkCases';
 import { runSurtrCases } from './surtrCases';
 import { runYuzuProphetCases } from './yuzuProphetCases';
+import { runHerobrineCases } from './herobrineCases';
+import { runYuzuSurtrAuditCases } from './yuzuSurtrAuditCases';
+import {
+  YUZU_SURTR_RULE_CATALOG,
+  validateYuzuSurtrRuleCatalog,
+} from '../audit/yuzuSurtrRuleCatalog';
 
 const FAILURE_DIR = path.join(projectRoot, '.tmp', 'namearena-regression-failures');
 
@@ -55,6 +61,9 @@ type RegressionSummary = {
   architectureCaseCount: number;
   surtrCaseCount: number;
   yuzuProphetCaseCount: number;
+  yuzuSurtrAuditCaseCount: number;
+  yuzuSurtrRuleCount: number;
+  herobrineCaseCount: number;
   battleCount: number;
   failures: FailureSummary[];
 };
@@ -81,6 +90,16 @@ export function main(): void {
   const architectureCases = runArchitectureCases();
   const surtrCases = runSurtrCases();
   const yuzuProphetCases = runYuzuProphetCases();
+  const yuzuSurtrAuditCases = runYuzuSurtrAuditCases();
+  const yuzuSurtrRuleErrors = validateYuzuSurtrRuleCatalog([
+    ...yuzuProphetCases,
+    ...surtrCases,
+    ...yuzuSurtrAuditCases,
+  ]);
+  if (yuzuSurtrRuleErrors.length > 0) {
+    throw new Error(`Yuzu/Surtr rule catalog is incomplete:\n${yuzuSurtrRuleErrors.join('\n')}`);
+  }
+  const herobrineCases = runHerobrineCases();
   const specs = buildRegressionSpecs();
   const failures: Failure[] = [];
 
@@ -111,6 +130,9 @@ export function main(): void {
     architectureCaseCount: architectureCases.length,
     surtrCaseCount: surtrCases.length,
     yuzuProphetCaseCount: yuzuProphetCases.length,
+    yuzuSurtrAuditCaseCount: yuzuSurtrAuditCases.length,
+    yuzuSurtrRuleCount: YUZU_SURTR_RULE_CATALOG.length,
+    herobrineCaseCount: herobrineCases.length,
     battleCount: specs.length,
     failures: failures.map((failure) => ({
       label: failure.result.label,

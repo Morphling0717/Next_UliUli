@@ -1,5 +1,6 @@
 import type {
   BarrierEntry,
+  BattleLogMetadata,
   DamageApplicationOptions,
   DefeatOptions,
   DispelOptions,
@@ -45,7 +46,7 @@ import { WT_REPAIRING_PROFILE } from './statusMechanics';
 export interface StatusProcessingRuntime {
   fighters: Fighter[];
   turnCount: number;
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   applyDamage: (
     target: Fighter,
     amount: number,
@@ -124,12 +125,17 @@ function logNaturalStatusExpiryGroup(
   fighter: Fighter,
   expiredStatuses: readonly StatusInstance[],
 ): void {
+  const metadata: BattleLogMetadata = {
+    actorId: fighter.id,
+    actorName: fighter.name,
+    targetIds: [fighter.id],
+  };
   const slackingTheme = expiredStatuses.find((status) =>
     status.identityId === 'SYNERGY_SLACKING' &&
     (status.groupId === 'slacking_off_field' || status.attribution.effectSourceId === 'slacking_off_field'),
   );
   if (slackingTheme) {
-    log('info', `⛺ 【状态结束】${fighter.name} 的【场外OB】自然结束。`);
+    log('info', `⛺ 【状态结束】${fighter.name} 的【场外OB】自然结束。`, metadata);
     return;
   }
   const status = [...expiredStatuses].sort((a, b) => b.appliedSequence - a.appliedSequence)[0];
@@ -141,7 +147,7 @@ function logNaturalStatusExpiryGroup(
   const groupKey = statusPresentationGroupKey(status);
   const remainingGroup = fighter.statuses.filter((entry) => statusPresentationGroupKey(entry) === groupKey);
   if (remainingGroup.length === 0) {
-    log('info', `${presentation.icon} 【状态结束】${fighter.name} 的【${presentation.name}】自然结束。`);
+    log('info', `${presentation.icon} 【状态结束】${fighter.name} 的【${presentation.name}】自然结束。`, metadata);
     return;
   }
 
@@ -159,6 +165,7 @@ function logNaturalStatusExpiryGroup(
     log(
       'info',
       `${presentation.icon} 【状态变化】${fighter.name} 的【${presentation.name}】失去【${expiredComponents.join('】、【')}】效果；【${activeComponents.join('】、【')}】仍在生效。`,
+      metadata,
     );
     return;
   }
@@ -168,6 +175,7 @@ function logNaturalStatusExpiryGroup(
   log(
     'info',
     `${presentation.icon} 【状态变化】${fighter.name} 的【${presentation.name}】${sourceText}效果自然结束；仍有其他来源维持。`,
+    metadata,
   );
 }
 
@@ -243,6 +251,10 @@ export function resolveAirborneLanding(
   const connected = didDamageConnect(actualDamage, damageOptions);
   const isWarThunder = !!applier?.isWT || status.attribution.effectSourceId === 'war_thunder_airborne';
   runtime.flushDeferredDamageEvents(actor, 'mitigation');
+  if (damageOptions.targetWithdrawnDuringDamage) {
+    runtime.flushDeferredDamageEvents(actor);
+    return;
+  }
   runtime.log(
     connected ? 'poison' : 'info',
     actualDamage > 0
@@ -329,6 +341,30 @@ export function advanceLargeRoundTimedBarriers(
       clock: completedRound,
       includeStatuses: false,
     });
+    expiredBarriers.forEach((barrier) => logBarrierExpiry(log, fighter, barrier));
+  });
+}
+
+export function advanceLargeRoundTimedEffects(
+  fighters: Fighter[],
+  completedRound: number,
+  log?: StatusProcessingRuntime['log'],
+): void {
+  fighters.forEach((fighter) => {
+    if (fighter.isDead || hasIdentity(fighter, 'SYNERGY_SLACKING')) return;
+    const { expiredStatuses, expiredBarriers } = advanceEffects(fighter, {
+      tickMode: 'large_round',
+      clock: completedRound,
+    });
+    for (const statuses of groupExpiredStatuses(expiredStatuses)) {
+      const status = statuses[0];
+      if (!status || !log) continue;
+      if (status.identityId === 'HEROBRINE_WITHER') {
+        log('info', `🌤️ 【枯萎结束】${fighter.name} 的治疗与护盾获取恢复正常。`);
+      } else {
+        logNaturalStatusExpiryGroup(log, fighter, statuses);
+      }
+    }
     expiredBarriers.forEach((barrier) => logBarrierExpiry(log, fighter, barrier));
   });
 }
@@ -474,6 +510,11 @@ export function processStatusTurn(
         const actualDmg = runtime.applyDamage(actor, dmgAmt, 'status', true, applier, damageOptions);
         const connected = didDamageConnect(actualDmg, damageOptions);
         runtime.flushDeferredDamageEvents(actor, 'mitigation');
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          runtime.flushDeferredDamageEvents(actor);
+          blockedByControl = true;
+          break;
+        }
         const sourceName = settlementStatus.attribution.applierName ?? applier?.name ?? settlementStatus.attribution.effectSourceName;
         const sourceText = sourceName ? `；最新施加者 ${sourceName}` : '';
         const remainingBeforeTick = status.identityId === 'POISON'
@@ -622,6 +663,7 @@ export function handleSpinalSwordDrop(
     spinalSwordRef.current &&
     !actor.isTing &&
     !actor.isSummon &&
+    !actor.isNpc &&
     !actor.hasSpinalSword &&
     !hasIdentity(actor, 'SYNERGY_SLACKING')
   ) {

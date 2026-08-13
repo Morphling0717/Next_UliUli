@@ -18,6 +18,8 @@ import {
   isParalyzedForAttack,
 } from '../statusMechanics';
 import { findIdentity, findMechanic, hasIdentity, hasMechanic, removeEffects } from '../statusSystem';
+import { getWitnessStacks } from '../herobrineMechanics';
+import { isHerobrine } from '../npcCombat';
 
 export function missesSkill(
   user: Fighter,
@@ -29,7 +31,8 @@ export function missesSkill(
   const userAgl = Math.floor(baseUserAgl * getAccuracyAgilityMultiplier(user));
   const effectiveTargetAgl = getEffectiveCombatStat(target, 'agl');
   const targetAgl = Math.floor(effectiveTargetAgl * getEvasionMultiplier(target));
-  let hitChance = 0.95 + (userAgl - targetAgl) * 0.005 + getAccuracyPointModifier(user);
+  const truthSightBonus = isHerobrine(target) && getWitnessStacks(user) >= 3 ? 0.15 : 0;
+  let hitChance = 0.95 + (userAgl - targetAgl) * 0.005 + getAccuracyPointModifier(user) + truthSightBonus;
   const guaranteedHit =
     hasMechanic(user, 'AIM') ||
     (user.isWT && hasIdentity(target, 'WT_SCOUTED')) ||

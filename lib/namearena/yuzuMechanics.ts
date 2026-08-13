@@ -1,4 +1,4 @@
-import type { BattleLogMetadata, Fighter, StatusApplication } from './types';
+import type { BattleLogMetadata, BattleState, Fighter, StatusApplication } from './types';
 import type { ReactionActionDescriptor } from './characterHooks';
 import { isSelectableTargetFor } from './targeting';
 import {
@@ -6,6 +6,7 @@ import {
   getYuzuProphetBoundYuzu,
 } from './yuzuProphetMechanics';
 import { commitFormTransition } from './battlePresentation';
+import { canProvideHerobrineSupport, isNpcTargetable } from './npcCombat';
 
 import { consumeBarriers, getBarrierTotal, grantBarrier, removeBarriers, removeEffects, applyStatus, withPersistentStatusShapesSuspended } from './statusSystem';
 
@@ -37,6 +38,7 @@ export interface YuzuRuntime {
   fighters: Fighter[];
   turnCount: number;
   largeRound?: number;
+  battleState?: BattleState;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
@@ -138,7 +140,8 @@ export function activeYuzuFriendlyUnits(runtime: YuzuRuntime, yuzu: Fighter, inc
     !fighter.isNpc &&
     !fighter.cannotWin &&
     runtime.isActiveCombatant(fighter) &&
-    sameTeam(runtime, yuzu, fighter),
+    sameTeam(runtime, yuzu, fighter) &&
+    canProvideHerobrineSupport(runtime.battleState, yuzu, fighter),
   );
 }
 
@@ -152,8 +155,11 @@ export function activeYuzuEnemies(runtime: YuzuRuntime, yuzu: Fighter): Fighter[
 
 function isYuzuMarkEligibleTarget(target: Fighter): boolean {
   if (target.isPuruisaishi || target.isOriginiumCore) return false;
-  if (target.isNpc && !target.isOriginiumCrystal) return false;
-  if (target.cannotWin && !target.isOriginiumCrystal) return false;
+  const targetableHerobrineUnit =
+    target.npcUnitState?.eventKind === 'herobrine' &&
+    isNpcTargetable(target);
+  if (target.isNpc && !target.isOriginiumCrystal && !targetableHerobrineUnit) return false;
+  if (target.cannotWin && !target.isOriginiumCrystal && !targetableHerobrineUnit) return false;
   return true;
 }
 
@@ -184,6 +190,7 @@ export function drawYuzuWeapon(hasActiveTeammate: boolean, forcedWeapon?: YuzuWe
 export function grantYuzuShield(target: Fighter, amount: number, sourceId?: string, sourceName?: string): number {
   const gained = Math.max(0, Math.floor(amount));
   if (gained <= 0) return 0;
+  const before = yuzuBarrierTotal(target);
   const resolvedSourceName = sourceName ?? (sourceId === target.id ? target.name : undefined);
   grantBarrier(target, gained, {
     identityId: YUZU_BARRIER_IDENTITY,
@@ -201,7 +208,7 @@ export function grantYuzuShield(target: Fighter, amount: number, sourceId?: stri
       creditActorId: sourceId ?? target.id,
     },
   });
-  return gained;
+  return Math.max(0, yuzuBarrierTotal(target) - before);
 }
 
 export function setYuzuShield(target: Fighter, amount: number, sourceId?: string, sourceName?: string): void {
@@ -241,6 +248,29 @@ function yuzuBarrierTotal(target: Fighter): number {
   return getBarrierTotal(target, { identityIds: [YUZU_BARRIER_IDENTITY] });
 }
 
+function grantYuzuShieldToTargets(
+  targets: Fighter[],
+  amount: number,
+  sourceId: string,
+  sourceName: string,
+): Array<{ target: Fighter; gained: number }> {
+  return targets.map((target) => ({
+    target,
+    gained: grantYuzuShield(target, amount, sourceId, sourceName),
+  }));
+}
+
+function formatYuzuShieldGains(gains: Array<{ target: Fighter; gained: number }>): string {
+  if (gains.length === 0) return '无人获得护盾';
+  const distinctGains = new Set(gains.map(({ gained }) => gained));
+  if (distinctGains.size === 1) {
+    return `${gains.map(({ target }) => target.name).join('、')} 实际获得 ${gains[0]?.gained ?? 0} 点镜界护盾`;
+  }
+  return gains
+    .map(({ target, gained }) => `${target.name} 实际获得 ${gained} 点镜界护盾`)
+    .join('，');
+}
+
 export function consumeYuzuShield(target: Fighter, incomingAmount: number): { absorbed: number; remaining: number; broke: boolean } {
   const incoming = Math.max(0, Math.floor(incomingAmount));
   const shield = yuzuBarrierTotal(target);
@@ -272,8 +302,8 @@ export function ensureYuzuOpeningShield(runtime: YuzuRuntime, yuzu: Fighter): bo
   const targets = activeYuzuFriendlyUnits(runtime, yuzu, true);
   if (targets.length === 0) return false;
   const shield = Math.max(1, Math.floor(yuzu.maxHp * YUZU_OPENING_SHIELD_RATIO));
-      targets.forEach((target) => grantYuzuShield(target, shield, yuzu.id, yuzu.name));
-  runtime.log('buff', `🪞 【镜界开幕】${yuzu.name} 让镜世界展开，${targets.map((target) => target.name).join('、')} 获得 ${shield} 点镜界护盾。`);
+  const gains = grantYuzuShieldToTargets(targets, shield, yuzu.id, yuzu.name);
+  runtime.log('buff', `🪞 【镜界开幕】${yuzu.name} 让镜世界展开，${formatYuzuShieldGains(gains)}。`);
   return true;
 }
 
@@ -282,11 +312,11 @@ export function enterYuzuPhaseTwo(runtime: YuzuRuntime, yuzu: Fighter, reason: s
   if (!yuzu.isYuzu || (yuzu.yuzuPhase ?? 1) >= 2 || !runtime.isActiveCombatant(yuzu)) return false;
 
   let teamMode = false;
-  let shield = 0;
+  let shieldSummary = '';
   return commitFormTransition({
     fighter: yuzu,
     log: runtime.log,
-    message: () => `🪞 【一码归一码】${yuzu.name} ${reason}，进入二阶段：镜界肉体完成重构，生命恢复至 ${yuzu.currentHp}/${yuzu.maxHp}，${teamMode ? '为全体友方' : '为自己'}施加 ${shield} 点镜界护盾。`,
+    message: () => `🪞 【一码归一码】${yuzu.name} ${reason}，进入二阶段：镜界肉体完成重构，生命恢复至 ${yuzu.currentHp}/${yuzu.maxHp}，${shieldSummary}。`,
     mutate: () => {
       yuzu.yuzuPhase = 2;
       withPersistentStatusShapesSuspended(yuzu, () => rebuildYuzuPhaseTwoStats(yuzu));
@@ -294,8 +324,9 @@ export function enterYuzuPhaseTwo(runtime: YuzuRuntime, yuzu: Fighter, reason: s
       teamMode = activeYuzuTeammates(runtime, yuzu).length > 0;
       const targets = teamMode ? activeYuzuFriendlyUnits(runtime, yuzu, true) : [yuzu];
       const shieldRatio = teamMode ? YUZU_PHASE_TWO_TEAM_SHIELD_RATIO : YUZU_PHASE_TWO_SOLO_SHIELD_RATIO;
-      shield = Math.max(1, Math.floor(yuzu.maxHp * shieldRatio));
-      targets.forEach((target) => grantYuzuShield(target, shield, yuzu.id, yuzu.name));
+      const shield = Math.max(1, Math.floor(yuzu.maxHp * shieldRatio));
+      const gains = grantYuzuShieldToTargets(targets, shield, yuzu.id, yuzu.name);
+      shieldSummary = formatYuzuShieldGains(gains);
     },
   });
 }
@@ -482,12 +513,20 @@ export function applyYuzuWeaponEffects(
     applyStatus(user, { identityId: 'YUZU_TAUNT', remainingTurns: 2, attribution: { effectSourceId: user.id } });
     const shieldAmount = Math.max(1, Math.floor(actualDamage * weapon.shieldFromDamageRatio));
     const targets = activeYuzuFriendlyUnits(runtime, user, true);
-    targets.forEach((ally) => grantYuzuShield(ally, shieldAmount, user.id, user.name));
-    runtime.log('buff', `🛡️ 【盾牌】${user.name} 把 ${actualDamage} 点命中伤害折成镜界护盾，${targets.map((ally) => ally.name).join('、')} 获得 ${shieldAmount} 点护盾，并把嘲讽拉满。`);
+    const gains = grantYuzuShieldToTargets(targets, shieldAmount, user.id, user.name);
+    runtime.log(
+      'buff',
+      `🛡️ 【盾牌】${user.name} 把 ${actualDamage} 点命中伤害折成镜界护盾，${formatYuzuShieldGains(gains)}，并把嘲讽拉满。`,
+      { actorId: user.id, actorName: user.name, targetIds: targets.map((fighter) => fighter.id) },
+    );
   }
 
   if (appliedEffects.length > 0) {
-    runtime.log('debuff', `🪞 【${weapon.name}】${target.name} 被附加${appliedEffects.join('、')}。`);
+    runtime.log(
+      'debuff',
+      `🪞 【${weapon.name}】${target.name} 被附加${appliedEffects.join('、')}。`,
+      { actorId: user.id, actorName: user.name, targetIds: [target.id] },
+    );
   }
 }
 

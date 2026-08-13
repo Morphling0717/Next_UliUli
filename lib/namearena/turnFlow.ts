@@ -1,4 +1,4 @@
-import type { Fighter } from './types';
+import type { BattleState, Fighter } from './types';
 import { canActNormally, isWinningCombatant } from './combatState';
 import type { CharacterHookRuntime } from './characterHooks';
 import { shouldCharacterPreventWin } from './characterHooks';
@@ -8,9 +8,15 @@ import { getStatusIdentityDefinition, getStatusIdentityIdsByTag } from './status
 import { formatTeamDisplayLabel } from './teamPresentation';
 import { findIdentity, hasIdentity, hasMechanic, queryMechanic } from './statusSystem';
 import { getSurtrWinnerOwnerNames, isSurtrJointLegacy } from './surtrMechanics';
+import {
+  getMajorNpcForcedWinnerId,
+  getMajorNpcNoWinnerSettlementLabel,
+  hasSettlementBlockingNpc,
+} from './npcCombat';
 
 export interface TurnFlowRuntime {
   fighters: Fighter[];
+  battleState?: BattleState;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   createCharacterHookRuntime: () => CharacterHookRuntime;
@@ -76,6 +82,16 @@ export function determineActor(
 export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): boolean {
   const aliveCombatants = alive.filter((fighter) => runtime.isActiveCombatant(fighter));
   const winningCombatants = aliveCombatants.filter(isWinningCombatant);
+  const forcedWinnerId = getMajorNpcForcedWinnerId(runtime.battleState);
+  if (forcedWinnerId) {
+    const forcedWinner = runtime.fighters.find((fighter) => fighter.id === forcedWinnerId);
+    if (forcedWinner) {
+      const visibleTeam = formatTeamDisplayLabel(runtime.getTeamId(forcedWinner));
+      const winTeam = visibleTeam ? `【${visibleTeam}】` : '';
+      runtime.log('win', `🏆 最终胜者：${[winTeam, forcedWinner.name].filter(Boolean).join(' ')}！`);
+      return true;
+    }
+  }
   const activeTeams = new Set(winningCombatants.map((fighter) => runtime.getTeamId(fighter)));
   let preventEnd = false;
 
@@ -83,6 +99,7 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
   for (const fighter of runtime.fighters) {
     if (shouldCharacterPreventWin({ fighter, runtime: hookRuntime, aliveCombatants: winningCombatants, activeTeams })) preventEnd = true;
   }
+  if (hasSettlementBlockingNpc(runtime.fighters)) preventEnd = true;
 
   if (activeTeams.size <= 1 && !preventEnd) {
     const winnerNames = winningCombatants.flatMap((fighter) => {
@@ -96,7 +113,10 @@ export function checkWinCondition(runtime: TurnFlowRuntime, alive: Fighter[]): b
       ? formatTeamDisplayLabel(runtime.getTeamId(firstWinner))
       : undefined;
     const winTeam = visibleTeam ? `【${visibleTeam}】` : '';
-    const winnerLabel = [winTeam, winners || '无（同归于尽）'].filter(Boolean).join(' ');
+    const emptyWinnerLabel =
+      getMajorNpcNoWinnerSettlementLabel(runtime.battleState) ??
+      '无（同归于尽）';
+    const winnerLabel = [winTeam, winners || emptyWinnerLabel].filter(Boolean).join(' ');
     runtime.log('win', `🏆 最终胜者：${winnerLabel}！`);
     return true;
   }

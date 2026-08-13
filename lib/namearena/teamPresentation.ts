@@ -56,5 +56,6 @@ export function formatFighterTeamDisplayLabel(
   fighter: Fighter,
   fighters: readonly Fighter[],
 ): string | undefined {
+  if (fighter.npcUnitState) return undefined;
   return formatTeamDisplayLabel(getPresentationTeamId(fighter, fighters, new Set()));
 }

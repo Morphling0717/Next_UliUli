@@ -27,6 +27,10 @@
     "test:namearena:emote-interactions": "node scripts/namearena-emote-interaction-stress.js",
     "test:namearena:surtr": "node scripts/namearena-surtr-stress.js",
     "test:namearena:yuzu-prophet": "node scripts/namearena-yuzu-prophet-stress.js",
+    "test:namearena:yuzu-surtr-audit": "node scripts/namearena-yuzu-surtr-audit.js",
+    "test:namearena:yuzu-surtr-deep": "node scripts/namearena-yuzu-surtr-audit.js --profile=deep",
+    "test:namearena:yuzu-surtr-review": "node scripts/namearena-yuzu-surtr-review.js",
+    "test:namearena:herobrine": "node scripts/namearena-herobrine-stress.js",
     "test:namearena:compare": "node scripts/namearena-compare-logs.js",
     "db:backup": "node scripts/backup-db.js",
     "clean": "rimraf .next out build node_modules"

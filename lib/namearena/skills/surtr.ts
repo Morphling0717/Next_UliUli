@@ -12,6 +12,7 @@ function activeEnemies(ctx: SkillContext): Fighter[] {
     isSelectableTargetFor({
       fighters: ctx.fighters,
       turnCount: ctx.turnCount,
+      battleState: ctx.battleState,
       getTeamId: ctx.getTeamId,
       isActiveCombatant,
     }, ctx.user, fighter),
@@ -36,10 +37,38 @@ function executeDistinctImpacts(
   targets: Fighter[],
   skillId: string,
 ): void {
-  for (const target of targets) {
+  const resolvedTargetIds = new Set<string>();
+  for (const plannedTarget of targets) {
     if (!isActiveCombatant(ctx.user)) break;
-    if (!isActiveCombatant(target)) continue;
     const previousForcedTargetId = ctx.user.confusedForcedTargetId;
+    ctx.user.confusedForcedTargetId = plannedTarget.id;
+    const plannedTargetStillValid = (
+      isActiveCombatant(plannedTarget) &&
+      !resolvedTargetIds.has(plannedTarget.id) &&
+      isSelectableTargetFor({
+        fighters: ctx.fighters,
+        turnCount: ctx.turnCount,
+        battleState: ctx.battleState,
+        getTeamId: ctx.getTeamId,
+        isActiveCombatant,
+      }, ctx.user, plannedTarget)
+    );
+    ctx.user.confusedForcedTargetId = previousForcedTargetId;
+    let target = plannedTargetStillValid ? plannedTarget : undefined;
+    if (!target) {
+      const selectableTargets = activeEnemies(ctx).filter((candidate) =>
+        !resolvedTargetIds.has(candidate.id),
+      );
+      target = selectableTargets[Math.floor(Math.random() * selectableTargets.length)];
+      if (!target) continue;
+      const actionName = skillId === 'surtr_twilight_hit' ? '黄昏' : '熔核巨影';
+      ctx.log(
+        'info',
+        `🔥 【${actionName}·目标重校】战场关系发生变化，${plannedTarget.name} 已不再是合法目标，${ctx.user.name} 的后续斩击改为追击 ${target.name}。`,
+        { actorId: ctx.user.id, actorName: ctx.user.name, targetIds: [target.id] },
+      );
+    }
+    resolvedTargetIds.add(target.id);
     ctx.user.confusedForcedTargetId = target.id;
     try {
       ctx.executeSkillAction(skillId, ctx.user, target, ctx.triggerDepth + 1);

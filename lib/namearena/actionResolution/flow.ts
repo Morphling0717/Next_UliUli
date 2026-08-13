@@ -50,11 +50,14 @@ import { getStatusIdentityDefinition } from '../statusRegistry';
 import { hasIdentity, hasMechanic } from '../statusSystem';
 import { resolveDeclarativeSkillDispel } from '../skillDispel';
 import { resolveSkillPresentation } from '../battlePresentation';
+import { tryRevealHerobrineCloneBeforeTargeting } from '../herobrineMechanics';
+import { isHerobrineEventUnit } from '../npcCombat';
 
 function createTargetingRuntime(runtime: ActionResolutionRuntime) {
   return {
     fighters: runtime.fighters,
     turnCount: runtime.turnCount,
+    battleState: runtime.battleState,
     getTeamId: runtime.getTeamId,
     isActiveCombatant: runtime.isActiveCombatant,
   };
@@ -177,13 +180,13 @@ export function executeSkillAction(
   forcedTarget: Fighter | null = null,
   triggerDepth = 0,
   gachaDrawChain?: GachaDrawChainState,
-): void {
-  if ((triggerDepth > 5 && !gachaDrawChain) || !user || user.isDead || user.isDeadAnnounced || user.currentHp <= 0) return;
+): boolean {
+  if ((triggerDepth > 5 && !gachaDrawChain) || !user || user.isDead || user.isDeadAnnounced || user.currentHp <= 0) return false;
 
   const userTeamId = runtime.getTeamId(user);
   let currentTargets = getSelectableTargets(createTargetingRuntime(runtime), user);
 
-  if (handleValorantPreFire(runtime, user, userTeamId, currentTargets, triggerDepth)) return;
+  if (handleValorantPreFire(runtime, user, userTeamId, currentTargets, triggerDepth)) return false;
 
   if (user.job === 'EXPLOSIVE_ANTI_CROC' && !user.confusedForcedTargetId) {
     const crocTargets = currentTargets.filter((fighter) => fighter.isGacha);
@@ -191,8 +194,13 @@ export function executeSkillAction(
   }
 
   const targetSelection = resolveTarget(createTargetingRuntime(runtime), user, forcedTarget, currentTargets);
-  if (!targetSelection) return;
+  if (!targetSelection) return false;
   let { target, isIntercepted } = targetSelection;
+  tryRevealHerobrineCloneBeforeTargeting(
+    { battleState: runtime.battleState, log: runtime.log },
+    user,
+    target,
+  );
   const initiallyProtectedTarget = targetSelection.protectedTarget;
   let interceptionLabel = isIntercepted
     ? `【援护】${target.name} 冲了出来，替 ${initiallyProtectedTarget?.name ?? '宿主'} 挡下了 ${user.name} 的攻击`
@@ -206,6 +214,7 @@ export function executeSkillAction(
     skills: runtime.skills,
     data: runtime.data,
     fighters: runtime.fighters,
+    battleState: runtime.battleState,
     turnCount: runtime.turnCount,
     getTeamId: runtime.getTeamId,
     isActiveCombatant: runtime.isActiveCombatant,
@@ -219,7 +228,8 @@ export function executeSkillAction(
   const formatText = (text: string): string => formatSkillText(skill, text);
 
   if (skillId === 'bujin_chair' && !user.isTokusatsu) {
-    return runtime.log('info', `🪑 ${user.name} 试图模仿刺猬人召唤【武神王座】，但由于缺乏特摄之魂，椅子刚落地就散架了！`);
+    runtime.log('info', `🪑 ${user.name} 试图模仿刺猬人召唤【武神王座】，但由于缺乏特摄之魂，椅子刚落地就散架了！`);
+    return false;
   }
 
   if (skill.triggerAgain) {
@@ -240,12 +250,12 @@ export function executeSkillAction(
       chain.resolvedDraws += 1;
       executeSkillAction(runtime, skillId, user, null, triggerDepth + 1, chain);
     }
-    return;
+    return true;
   }
 
   if (skill.isSummon) {
     runtime.executeSummonSkill(skill, user, userTeamId);
-    return;
+    return true;
   }
 
   const deferredTransformTargets: Fighter[] = [];
@@ -316,10 +326,13 @@ export function executeSkillAction(
   };
 
   const isSupportAction = skill.tag === runtime.skillTags.HEAL || skill.tag === runtime.skillTags.BUFF;
+  if (!isSupportAction) {
+    runtime.noteOffensiveActionTarget(initiallyProtectedTarget ?? target);
+  }
   if (!isSupportAction && runtime.prepareYuzuProphetIncomingAction(user, target)) {
     refundInterruptedGacha('被预言家裁定取消');
     settleAction();
-    return;
+    return false;
   }
   if (!isSupportAction) {
     resolveDeclarativeSkillDispel(runtime, skill, user, target, 'before_action', 'before_action');
@@ -335,9 +348,15 @@ export function executeSkillAction(
       isActiveCombatant: runtime.isActiveCombatant,
     }, user, skill.bleedTriggerCount ?? 1);
     if (!bleed.canContinue) {
-      runtime.log('info', `🩸 ${user.name} 在出手前被流血撕裂，本次【${incomingActionName}】被迫中止！`);
+      if (bleed.interruptedByDefeat) return false;
+      const prophetAlreadyRetreated =
+        user.isYuzuProphet &&
+        user.yuzuProphetState?.retreatCompleted;
+      if (!prophetAlreadyRetreated) {
+        runtime.log('info', `🩸 ${user.name} 在出手前被流血撕裂，本次【${incomingActionName}】被迫中止！`);
+      }
       settleAction();
-      return;
+      return false;
     }
   }
 
@@ -371,24 +390,27 @@ export function executeSkillAction(
 
   if (skill.spellBlockMode !== 'perHit' && skill.spellBlockMode !== 'afterSetup' && consumePreSkillBlock()) {
     settleAction();
-    return;
+    return false;
   }
 
   if (skill.onExecute && skill.onExecute(skillCtx)) {
     flushDeferredDamageEvents();
     settleAction();
-    return;
+    return true;
   }
 
   if (skill.spellBlockMode === 'afterSetup' && consumePreSkillBlock()) {
     settleAction();
-    return;
+    return false;
   }
 
-  if (runtime.executeSupportSkill(skill, user, forcedTarget, userTeamId)) {
-    runtime.spreadDivaSupport(skill, user, userTeamId);
+  const supportResolution = runtime.executeSupportSkill(skill, user, forcedTarget, userTeamId);
+  if (supportResolution !== 'not_support') {
+    if (supportResolution === 'resolved') {
+      runtime.spreadDivaSupport(skill, user, userTeamId);
+    }
     settleAction();
-    return;
+    return supportResolution === 'resolved';
   }
 
   const owlOpeningReady = canTriggerOwlEvadeOpening(target, skill, isIntercepted);
@@ -396,43 +418,51 @@ export function executeSkillAction(
     runtime.log('info', `💨 ${user.name} 的 ${skill.name ?? '攻击'} 被 ${target.name} 闪避了！`);
     refundInterruptedGacha('被闪避');
     settleAction();
-    return;
+    return false;
   }
 
   if (handleWaitCounter(runtime, target, user, triggerDepth, incomingActionName)) {
     refundInterruptedGacha('被反击打断');
     settleAction();
-    return;
+    return false;
   }
   if (handleCounterStatus(runtime, target, user)) {
     refundInterruptedGacha('被反击打断');
     settleAction();
-    return;
+    return false;
   }
   if (!runtime.isActiveCombatant(user)) {
     refundInterruptedGacha('因反击退场而中止');
     settleAction();
-    return;
+    return false;
   }
 
   if (breakAbsoluteDefense(runtime, skillId, user, target)) {
     refundInterruptedGacha('用于击破绝对防御');
     settleAction();
-    return;
+    return true;
   }
   if (!owlOpeningReady && dodgesWithPassiveSkill(runtime, user, target, incomingActionName)) {
     refundInterruptedGacha('被特殊闪避');
     settleAction();
-    return;
+    return false;
   }
   if (!canTouchDamagePlane(runtime, user, target, skill)) {
     refundInterruptedGacha('无法触碰目标');
     settleAction();
-    return;
+    return false;
   }
 
   if (owlOpeningReady && consumeOwlEvadeOpening(target, skill, isIntercepted)) {
-    runtime.log('debuff', `🍃 【乘风失衡】${target.name} 的身位破绽被 ${user.name} 抓住，这次直接单体攻击必定命中！`);
+    runtime.log(
+      'debuff',
+      `🍃 【乘风失衡】${target.name} 的身位破绽被 ${user.name} 抓住，这次直接单体攻击必定命中！`,
+      {
+        actorId: user.id,
+        actorName: user.name,
+        targetIds: [target.id],
+      },
+    );
   }
 
   const damageResult = runtime.calculateDamage(user, target, skill, userTeamId, skillId);
@@ -536,6 +566,12 @@ export function executeSkillAction(
     damageOptions,
   );
   runtime.flushDeferredDamageEvents(target, 'mitigation');
+  const requiresExplicitHerobrineResult = isHerobrineEventUnit(target);
+  const eventDamageType = (!!ignoreDefOverride || sexyTrueDamage)
+    ? '真实'
+    : damageOptions.damageScope === 'magical'
+      ? '魔法'
+      : '物理';
   const yuzuFullyRedirected = !!damageOptions.redirectedByYuzu && actualDmg <= 0;
   const targetActualDmg = damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo ? 0 : actualDmg;
   const dealtDmg = damageOptions.redirectedOriginiumDamage ??
@@ -577,24 +613,39 @@ export function executeSkillAction(
     if (actualDmg > 0) {
       runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
     } else if (damageOptions.hitWithoutHpDamage) {
-      runtime.log('info', `📌 实际结算：攻击成功命中 ${target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命（原始预估 ${preMitigationDmg}）。`);
+      runtime.log(
+        'info',
+        requiresExplicitHerobrineResult
+          ? `📌 【异常事件伤害结算】${user.name} 的攻击命中 ${target.name}，但实际生命伤害为 0；【黄昏余命】期间未再损失生命（伤害类型：${eventDamageType}，原始预估 ${preMitigationDmg}）。`
+          : `📌 实际结算：攻击成功命中 ${target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命（原始预估 ${preMitigationDmg}）。`,
+      );
     } else {
-      runtime.log('info', `📌 实际结算：${target.name} 完全抵消了这次伤害（原始预估 ${preMitigationDmg}），没有承受实际伤害。`);
+      runtime.log(
+        'info',
+        requiresExplicitHerobrineResult
+          ? `📌 【异常事件伤害结算】${user.name} 对 ${target.name} 的${eventDamageType}伤害被完全抵消，实际伤害为 0（原始预估 ${preMitigationDmg}）。`
+          : `📌 实际结算：${target.name} 完全抵消了这次伤害（原始预估 ${preMitigationDmg}），没有承受实际伤害。`,
+      );
     }
   }
   if (
     preMitigationDmg > 0 &&
-    actualDmg !== preMitigationDmg &&
+    (actualDmg !== preMitigationDmg || requiresExplicitHerobrineResult) &&
     !usesPreResolutionDamageLog &&
     !damageOptions.redirectedByJoker &&
     !damageOptions.redirectedByOriginiumCore &&
     !damageOptions.redirectedByOwlEmperor &&
     !damageOptions.redirectedByMomo &&
     !yuzuFullyRedirected &&
-    !damageOptions.targetWithdrawnDuringDamage
+    (!damageOptions.targetWithdrawnDuringDamage || requiresExplicitHerobrineResult)
   ) {
     if (actualDmg > 0) {
-      runtime.log('info', `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`);
+      runtime.log(
+        'info',
+        requiresExplicitHerobrineResult
+          ? `📌 【异常事件伤害结算】${user.name} 对 ${target.name} 实际造成 ${actualDmg} 点${eventDamageType}伤害（原始预估 ${preMitigationDmg}）。`
+          : `📌 实际结算：${target.name} 实际承受 ${actualDmg} 点伤害（原始预估 ${preMitigationDmg}）。`,
+      );
     } else if (damageOptions.hitWithoutHpDamage) {
       runtime.log('info', `📌 实际结算：攻击成功命中 ${target.name}；但【黄昏余命】期间显示生命已为 0，未再损失生命（原始预估 ${preMitigationDmg}）。`);
     } else {
@@ -612,6 +663,14 @@ export function executeSkillAction(
       targetIds: [target.id],
     });
   }
+  if (
+    actualDmg > 0 ||
+    damageOptions.hitWithoutHpDamage ||
+    damageOptions.targetWithdrawnDuringDamage ||
+    (target.pendingDamageEvents?.length ?? 0) > 0
+  ) {
+    runtime.flushDeferredDamageEvents(target);
+  }
   if (!isSupportAction) {
     resolveDeclarativeSkillDispel(runtime, skill, user, target, 'after_damage', 'before_action');
   }
@@ -622,10 +681,15 @@ export function executeSkillAction(
   const selfStatusResolvedThroughShield = (selfStatusApplications.length > 0 || selfBarrierApplications.length > 0) && (damageOptions.resolution?.shieldDamage ?? 0) > 0;
   const targetedUtilityStatusReady = !!skill.noDamage && (targetStatusApplications.length > 0 || targetBarrierApplications.length > 0);
   const connectedWithoutHpDamage = !!damageOptions.hitWithoutHpDamage;
-  if ((actualDmg > 0 || connectedWithoutHpDamage || selfStatusResolvedThroughShield || targetedUtilityStatusReady) && !damageOptions.redirectedByJoker && !damageOptions.redirectedByOriginiumCore && !damageOptions.redirectedByOwlEmperor && !damageOptions.redirectedByMomo) {
-    if (selfStatusApplications.length > 0 || selfBarrierApplications.length > 0 || (targetedUtilityStatusReady && runtime.isActiveCombatant(target)) || ((actualDmg > 0 || connectedWithoutHpDamage) && target.currentHp > 0)) {
-      applySkillStatusEffect(runtime, skill, user, target, !damageOptions.suppressOnHitStatuses);
-    }
+  const damageRedirected = isDamageRedirected(damageOptions);
+  const selfEffectResolved = actualDmg > 0 || connectedWithoutHpDamage || selfStatusResolvedThroughShield || damageRedirected;
+  if ((selfStatusApplications.length > 0 || selfBarrierApplications.length > 0) && selfEffectResolved) {
+    applySkillStatusEffect(runtime, skill, user, target, true, 'user');
+  }
+  if (!damageRedirected && (targetedUtilityStatusReady || ((actualDmg > 0 || connectedWithoutHpDamage) && target.currentHp > 0))) {
+    applySkillStatusEffect(runtime, skill, user, target, !damageOptions.suppressOnHitStatuses, 'target');
+  }
+  if (!damageRedirected && (actualDmg > 0 || connectedWithoutHpDamage || selfStatusResolvedThroughShield || targetedUtilityStatusReady)) {
     if (!skill.noDamage && (actualDmg > 0 || connectedWithoutHpDamage) && target.currentHp > 0) {
       applyAttackerStyleEffects(runtime, user, target, !damageOptions.suppressOnHitStatuses);
     }
@@ -636,7 +700,8 @@ export function executeSkillAction(
     actualDmg <= 0 &&
     !connectedWithoutHpDamage &&
     !skill.noDamage &&
-    !damageOptions.targetDefeatedDuringDamage
+    !damageOptions.targetWithdrawnDuringDamage &&
+    (!damageOptions.targetDefeatedDuringDamage || damageRedirected)
   ) {
     const statusName = targetStatusApplications.map((application) => getStatusIdentityDefinition(application.identityId).displayName).join('、');
     const redirected = isDamageRedirected(damageOptions);
@@ -644,8 +709,6 @@ export function executeSkillAction(
       ? `📌 状态结算：攻击伤害已从 ${target.name} 身上转移，本次【${statusName}】不会跟随伤害转移，未生效。`
       : `📌 状态结算：${target.name} 没有承受生命伤害，本次【${statusName}】未生效。`);
   }
-  if (actualDmg > 0 || connectedWithoutHpDamage || (target.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(target);
-
   handleValorantWeaponDrop(runtime, target, targetActualDmg);
   handlePhysicalCounterReflect(runtime, skill, user, target, targetActualDmg);
   consumeAimAfterAttack(runtime, user, skill);
@@ -667,4 +730,5 @@ export function executeSkillAction(
     flushDeferredDamageEvents();
   }
   settleAction();
+  return true;
 }

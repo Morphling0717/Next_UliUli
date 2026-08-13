@@ -90,7 +90,7 @@ import {
 } from './damageRedirects';
 import {
   advanceGlobalTimedStatuses,
-  advanceLargeRoundTimedBarriers,
+  advanceLargeRoundTimedEffects,
   clearSpinalSword,
   handleSpinalSwordDrop,
   processStatus,
@@ -122,6 +122,7 @@ import {
   handleChimeraUltimateEvolution as handleChimeraUltimateEvolutionEffect,
   spreadDivaSupport as spreadDivaSupportEffect,
   SupportResolutionRuntime,
+  SupportSkillResolution,
 } from './supportResolution';
 import {
   buildActionResolutionRuntime,
@@ -173,18 +174,50 @@ import {
   consumePuruisaishiShield,
   grantOriginiumCrystalBreakReward,
   PURUISAISHI_BARRIER_IDENTITY,
-  notePuruisaishiRoundActor,
   noteOriginiumDamageLanded,
-  processPuruisaishiLargeRoundEnd,
-  processPuruisaishiRoundEnd,
   redirectOriginiumCoreDamage,
   spawnCrystalFromInfectedDeath,
-  trySpawnPuruisaishiEvent,
   getOriginiumInfectionStacks,
   grantPuruisaishiBarrier,
   ORIGINIUM_DISEASE_STATUS,
   ORIGINIUM_MAX_STACKS,
 } from './puruisaishiMechanics';
+import {
+  captureHerobrineRecentSkill,
+  commitPendingHerobrineFogBehind,
+  consumeHerobrineShieldBypass,
+  getHerobrineDamageMultiplier,
+  isHerobrineAttackHitKind,
+  isHerobrineCharmImmune,
+  noteHerobrineDirectHit,
+  revealHerobrineCloneOnAttack,
+  shouldHerobrineBypassShield,
+  shouldPreventHerobrineSupport,
+  type HerobrineRuntime,
+} from './herobrineMechanics';
+import {
+  executeMajorNpcTurn,
+  handleMajorNpcContestantDefeat,
+  handleMajorNpcUnitDefeat,
+  type MajorNpcEventRuntime,
+  noteMajorNpcRoundActor,
+  processMajorNpcActionEnd,
+  processMajorNpcGlobalActionEnd,
+  processMajorNpcLargeRoundEnd,
+  shouldSuppressMajorNpcRevival,
+  trySpawnMajorNpcEvent,
+} from './majorNpcEvents';
+import {
+  awardsNpcKillCredit,
+  canTargetAcrossHerobrineBoundary,
+  canResolveHerobrineDamageBoundary,
+  isHerobrine,
+  isHerobrineClone,
+  isHerobrineEventUnit,
+  isNpcAoeVulnerable,
+  isNpcTargetable,
+  getNpcCombatCapabilities,
+} from './npcCombat';
 import {
   cloneBattleState,
   consumeCompletedLargeRound,
@@ -232,7 +265,7 @@ import {
   type StatusMechanicsRuntime,
 } from './statusMechanics';
 import type { DamageSourceKind } from './types';
-import { getStatusIdentityDefinition, isDirectDamageKind } from './statusRegistry';
+import { getStatusIdentityDefinition, identityHasTag, isDirectDamageKind } from './statusRegistry';
 import { buildFighterStatusPresentation, buildStatusPresentationMember } from './statusPresentation';
 import {
   awardSurtrJointKill,
@@ -402,9 +435,12 @@ type ActiveActionContext = {
   presentation: import('./types').SkillPresentation;
   triggerDepth: number;
   forcedTargetId?: string;
+  declaredTargetIds?: string[];
+  offensiveTargetId?: string;
   primaryTargetId?: string;
   primaryPreDefenseDamage?: number;
   combatVisualClaimed?: boolean;
+  successfullyResolved?: boolean;
 };
 
 type ActionDescriptorOverride = {
@@ -436,6 +472,7 @@ export class BattleEngine {
   private deterministicRandom: boolean;
   private randomDepth = 0;
   private actionStack: ActiveActionContext[] = [];
+  private damageLogContextStack: BattleLogMetadata[] = [];
   private causalScopeStack: string[] = [];
   private deferredDamageActions = new Map<string, Array<() => void>>();
   private yuzuProphetDefenseDecisions = new Map<string, YuzuProphetDefenseDecision>();
@@ -473,11 +510,27 @@ export class BattleEngine {
 
   log(type: string, text: string, metadata: BattleLogMetadata = {}): void {
     const action = this.actionStack[this.actionStack.length - 1];
-    const isPrimaryCombatVisual = metadata.visualCue?.kind === 'combat_action';
-    let resolvedMetadata = metadata;
+    const damageContext = this.damageLogContextStack[this.damageLogContextStack.length - 1];
+    let resolvedMetadata = damageContext
+      ? { ...damageContext, ...metadata }
+      : metadata;
+    const visualSourceId = resolvedMetadata.visualCue?.kind === 'combat_action' ||
+      resolvedMetadata.visualCue?.kind === 'combat_fx' ||
+      resolvedMetadata.visualCue?.kind === 'reaction_fx'
+      ? resolvedMetadata.visualCue.sourceId
+      : undefined;
+    if (visualSourceId) {
+      const visualSource = this.fighters.find((fighter) => fighter.id === visualSourceId);
+      resolvedMetadata = {
+        ...resolvedMetadata,
+        actorId: visualSourceId,
+        ...(visualSource ? { actorName: visualSource.name } : {}),
+      };
+    }
+    const isPrimaryCombatVisual = resolvedMetadata.visualCue?.kind === 'combat_action';
     if (action && isPrimaryCombatVisual) {
       if (action.combatVisualClaimed) {
-        const withoutDuplicateCue = { ...metadata };
+        const withoutDuplicateCue = { ...resolvedMetadata };
         delete withoutDuplicateCue.visualCue;
         delete withoutDuplicateCue.visualCueId;
         resolvedMetadata = withoutDuplicateCue;
@@ -514,6 +567,7 @@ export class BattleEngine {
         actionId: action.id,
         actorId: action.actorId,
         actorName: action.actorName,
+        targetIds: action.declaredTargetIds,
         skillId: action.skillId,
         skillName: action.skillName,
         presentation: action.presentation,
@@ -522,6 +576,21 @@ export class BattleEngine {
       ...extra,
       ...(extra.visualCue ? { visualCueId: extra.visualCueId ?? `${eventId}:visual` } : {}),
     };
+    const eventActor = event.actorId
+      ? this.fighters.find((fighter) => fighter.id === event.actorId)
+      : undefined;
+    if (eventActor && !event.actorTeamId) {
+      event.actorTeamId = this.getTeamId(eventActor);
+    }
+    if (event.targetIds?.length) {
+      const targetTeamIds = { ...(event.targetTeamIds ?? {}) };
+      event.targetIds.forEach((targetId) => {
+        if (targetTeamIds[targetId]) return;
+        const target = this.fighters.find((fighter) => fighter.id === targetId);
+        if (target) targetTeamIds[targetId] = this.getTeamId(target);
+      });
+      if (Object.keys(targetTeamIds).length > 0) event.targetTeamIds = targetTeamIds;
+    }
     this.events.push(event);
     this.addEventCallback?.(event);
     return event;
@@ -550,6 +619,9 @@ export class BattleEngine {
   ): ActiveActionContext {
     const actionNumber = ++this.battleState.actionSequence;
     const skillName = override.skillName ?? (skillId ? (this.SKILLS[skillId]?.name ?? skillId) : '普通攻击');
+    const activeForcedTarget = forcedTarget && this.isActiveCombatant(forcedTarget)
+      ? forcedTarget
+      : null;
     const action: ActiveActionContext = {
       id: `action-${actionNumber}`,
       actorId: actor.id,
@@ -558,11 +630,20 @@ export class BattleEngine {
       skillName,
       presentation: override.presentation ?? resolveSkillPresentation(skillId, skillId ? this.SKILLS[skillId] : undefined, actor),
       triggerDepth,
-      forcedTargetId: forcedTarget?.id,
+      forcedTargetId: activeForcedTarget?.id,
+      declaredTargetIds: override.targetIds
+        ? [...override.targetIds]
+        : activeForcedTarget
+          ? [activeForcedTarget.id]
+          : undefined,
     };
     this.actionStack.push(action);
     this.recordEvent('action_start', 'action', `${actor.name} 开始执行【${skillName}】。`, {
-      targetIds: override.targetIds ? [...override.targetIds] : forcedTarget ? [forcedTarget.id] : undefined,
+      targetIds: override.targetIds
+        ? [...override.targetIds]
+        : activeForcedTarget
+          ? [activeForcedTarget.id]
+          : undefined,
     });
     return action;
   }
@@ -590,6 +671,14 @@ export class BattleEngine {
     }
   }
 
+  noteOffensiveActionTarget(target: Fighter): void {
+    const action = this.actionStack[this.actionStack.length - 1];
+    if (action) {
+      action.offensiveTargetId = target.id;
+      action.declaredTargetIds ??= [target.id];
+    }
+  }
+
   runCausalScope<T>(label: string, callback: () => T): T {
     if (this.actionStack.length > 0 || this.causalScopeStack.length > 0) return callback();
     const scopeNumber = ++this.battleState.actionSequence;
@@ -605,6 +694,20 @@ export class BattleEngine {
   endAction(action: ActiveActionContext): void {
     this.resolveOwlCrossingAssists(action);
     captureNewYuzuProphetSummons(this.createYuzuProphetRuntime(), '本次行动中新生成的明日方舟召唤物完成入场');
+    const actionActor = this.fighters.find((fighter) => fighter.id === action.actorId);
+    if (actionActor) {
+      captureHerobrineRecentSkill(
+        this.createHerobrineRuntime(),
+        actionActor,
+        action.skillId,
+        action.successfullyResolved === true,
+      );
+      processMajorNpcActionEnd(
+        this.createMajorNpcEventRuntime(),
+        actionActor,
+        action.offensiveTargetId ?? action.primaryTargetId,
+      );
+    }
     this.recordEvent('action_end', 'action', `${action.actorName} 的【${action.skillName}】结算结束。`);
     for (const key of this.yuzuProphetDefenseDecisions.keys()) {
       if (key.startsWith(`${action.id}:`)) this.yuzuProphetDefenseDecisions.delete(key);
@@ -635,6 +738,14 @@ export class BattleEngine {
 
     for (const owl of owls) {
       if (!this.isActiveCombatant(owl) || !this.isActiveCombatant(victim)) break;
+      if (!canTargetAcrossHerobrineBoundary(this.battleState, owl, victim)) {
+        this.log('info', `⬜ 【单人世界边界】${owl.name} 的【过江协同】无法越过隔离追击 ${victim.name}。`, {
+          actorId: owl.id,
+          actorName: owl.name,
+          targetIds: [victim.id],
+        });
+        continue;
+      }
       if (owl.id === victim.id) {
         this.log('info', `🌊 【过江协同】${action.actorName} 攻向 ${victim.name}，但 ${owl.name} 不会把协同攻击打向自己。`);
         continue;
@@ -677,9 +788,25 @@ export class BattleEngine {
         };
         const actual = this.applyDamage(target, copied, 'skill', false, owl, options);
         this.flushDeferredDamageEvents(target, 'mitigation');
+        if (options.targetWithdrawnDuringDamage) {
+          this.flushDeferredDamageEvents(target);
+          continue;
+        }
         const resolved = getResolvedDamageTotal(actual, options);
         const redirected = isDamageRedirected(options);
         const connected = !redirected && didDamageConnect(actual, options);
+        if (
+          (options.resolution?.hpDamage ?? 0) > 0 ||
+          (options.resolution?.shieldDamage ?? 0) > 0 ||
+          redirected
+        ) {
+          this.log('system', `state-sync:${target.id}`, {
+            displayInFeed: false,
+            actorId: owl.id,
+            actorName: owl.name,
+            targetIds: [target.id],
+          });
+        }
         if (!redirected) {
           this.log(connected ? 'skill' : 'info', resolved > 0
             ? `🌊 【过江协同】${target.name} 实际承受 ${resolved} 点伤害。`
@@ -709,13 +836,17 @@ export class BattleEngine {
     phase: 'mitigation' | 'aftermath' = 'aftermath',
     dedupeKey?: string,
   ): void {
+    const damageContext = this.damageLogContextStack[this.damageLogContextStack.length - 1];
+    const resolvedMetadata = damageContext
+      ? { ...damageContext, ...metadata }
+      : metadata ?? { targetIds: [target.id] };
     if (options.deferTransform) {
       target.pendingDamageEvents = target.pendingDamageEvents ?? [];
       if (dedupeKey && target.pendingDamageEvents.some((event) => event.dedupeKey === dedupeKey)) return;
-      target.pendingDamageEvents.push({ type, text, metadata, phase, dedupeKey });
+      target.pendingDamageEvents.push({ type, text, metadata: resolvedMetadata, phase, dedupeKey });
       return;
     }
-    this.log(type, text, metadata);
+    this.log(type, text, resolvedMetadata);
   }
 
   queueOrRunDamageAction(target: Fighter, options: DamageApplicationOptions, action: () => void): void {
@@ -726,6 +857,25 @@ export class BattleEngine {
     const queued = this.deferredDamageActions.get(target.id) ?? [];
     queued.push(action);
     this.deferredDamageActions.set(target.id, queued);
+  }
+
+  resolveOrDeferDirectDamageStatusAftermath(
+    target: Fighter,
+    options: DamageApplicationOptions,
+  ): void {
+    const resolve = () => resolveDirectDamageStatusAftermath(
+      this.createStatusMechanicsRuntime(),
+      target,
+      options.resolution,
+      options,
+    );
+    if (options.deferStatusAftermath || options.deferTransform) {
+      const queued = this.deferredDamageActions.get(target.id) ?? [];
+      queued.push(resolve);
+      this.deferredDamageActions.set(target.id, queued);
+      return;
+    }
+    resolve();
   }
 
   discardDeferredDamageEvents(fighter: Fighter): void {
@@ -820,6 +970,7 @@ export class BattleEngine {
       attacker,
       action.skillId,
       `${attacker.name} 的【${action.skillName}】即将命中预言家受击分支`,
+      { right: action.skillName },
     );
     const decision: YuzuProphetDefenseDecision = {
       actionId: action.id,
@@ -900,8 +1051,94 @@ export class BattleEngine {
     const presentationKeysBefore = new Set(buildFighterStatusPresentation(target).map((item) => item.key));
     const requestedDefinition = getStatusIdentityDefinition(identityId);
     const isHostile = requestedDefinition.polarity === 'negative';
+    const statusSource = statusApplication.attribution?.applierId
+      ? this.fighters.find((fighter) => fighter.id === statusApplication.attribution?.applierId)
+      : undefined;
+    const statusMetadata: BattleLogMetadata = {
+      actorId: statusSource?.id ?? statusApplication.attribution?.applierId,
+      actorName: statusSource?.name ?? statusApplication.attribution?.applierName,
+      targetIds: [target.id],
+    };
     if (target.currentHp <= 0 || target.isDead || target.isDeadAnnounced) {
       this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:defeated`, { targetIds: [target.id] });
+      return false;
+    }
+    if (
+      isHostile &&
+      statusSource &&
+      statusSource.id !== target.id &&
+      isHerobrineClone(target)
+    ) {
+      revealHerobrineCloneOnAttack(this.createHerobrineRuntime(), statusSource, target);
+    }
+    if (identityId === 'HEROBRINE_WITNESS' && target.isNpc) {
+      this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:npc_immunity`, {
+        targetIds: [target.id],
+      });
+      return false;
+    }
+    if (isHerobrineCharmImmune(target, identityId)) {
+      if (statusApplication.silent !== true) {
+        this.log(
+          'info',
+          `◻️ 【异常意志】${target.name} 不受魅惑控制，【${requestedDefinition.displayName}】没有生效。`,
+          statusMetadata,
+        );
+      }
+      this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:herobrine_immunity`, {
+        targetIds: [target.id],
+      });
+      return false;
+    }
+    if (
+      isHostile &&
+      target.isNpc &&
+      getNpcCombatCapabilities(target).actionMode === 'none' &&
+      identityHasTag(identityId, 'action_blocking') &&
+      identityId !== 'AIRBORNE' &&
+      identityId !== 'WATER_PRISON' &&
+      identityId !== 'WT_SUPPRESS'
+    ) {
+      if (statusApplication.silent !== true) {
+        this.log(
+          'info',
+          `⬜ 【NPC行动规则】${target.name} 本来就不会行动，【${requestedDefinition.displayName}】没有可阻断的行动，因此未生效。`,
+          statusMetadata,
+        );
+      }
+      this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:npc_no_action`, statusMetadata);
+      return false;
+    }
+    if (
+      isHostile &&
+      target.isNpc &&
+      statusSource &&
+      statusSource.id !== target.id &&
+      !isNpcTargetable(target)
+    ) {
+      if (statusApplication.silent !== true) {
+        this.log('info', `⬜ 【NPC目标规则】${target.name} 当前无法被选中或攻击，${statusSource.name} 的【${requestedDefinition.displayName}】没有生效。`, {
+          actorId: statusSource.id,
+          actorName: statusSource.name,
+          targetIds: [target.id],
+        });
+      }
+      this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:npc_untargetable`, {
+        actorId: statusSource.id,
+        actorName: statusSource.name,
+        targetIds: [target.id],
+      });
+      return false;
+    }
+    if (shouldPreventHerobrineSupport(this.battleState, statusSource, target)) {
+      this.log('info', `⬜ 【单人世界边界】${statusSource?.name ?? '外界效果'} 无法对被隔离的 ${target.name} 施加【${requestedDefinition.displayName}】。`, {
+        actorId: statusSource?.id,
+        actorName: statusSource?.name,
+        targetIds: [target.id],
+      });
+      this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:single_world`, {
+        targetIds: [target.id],
+      });
       return false;
     }
     if (target.isYuzuProphet && identityId === ORIGINIUM_DISEASE_STATUS) {
@@ -909,7 +1146,7 @@ export class BattleEngine {
         this.log(
           'info',
           `🜲 【源石同源】${target.name} 不会感染矿石病，本次施加没有生效。`,
-          { targetIds: [target.id] },
+          statusMetadata,
         );
       }
       this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:prophet_originium_immunity`, {
@@ -958,21 +1195,38 @@ export class BattleEngine {
       hasIdentity(target, 'SYNERGY_SLACKING')
     ) {
       if (statusApplication.logBlocked ?? true) {
-        this.log('info', `⛺ 【场外OB】${target.name} 已暂时离开战场，不会获得【${requestedDefinition.displayName}】。`);
+        this.log(
+          'info',
+          `⛺ 【场外OB】${target.name} 已暂时离开战场，不会获得【${requestedDefinition.displayName}】。`,
+          statusMetadata,
+        );
       }
       this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}:off_field`, { targetIds: [target.id] });
       return false;
     }
     if (isHostile && owlResistsHostileStatus(target)) {
-      this.log('info', `🌫️ 【败兵抗性】${target.name} 在败阵混乱中避开了【${requestedDefinition.displayName}】！`);
+      this.log(
+        'info',
+        `🌫️ 【败兵抗性】${target.name} 在败阵混乱中避开了【${requestedDefinition.displayName}】！`,
+        statusMetadata,
+      );
       this.recordEvent('status', 'status_blocked', `${target.name}:${identityId}`, { targetIds: [target.id] });
       return false;
     }
-    const applied = tryApplyHostileStatusAction(
+    const statusResolution = tryApplyHostileStatusAction(
       this.createActionResolutionRuntime(),
       target,
       statusApplication,
     );
+    const applied = statusResolution.applied;
+    const durationAdjustment = statusResolution.result?.durationAdjustment;
+    if (durationAdjustment) {
+      this.log(
+        'debuff',
+        `👁️ 【白色眼睛】${target.name} 的【${requestedDefinition.displayName}】持续时间由 ${durationAdjustment.requestedTurns} 缩短为 ${durationAdjustment.appliedTurns} 回合。`,
+        statusMetadata,
+      );
+    }
     if (applied) {
       const expectedSourceId = statusApplication.attribution?.effectSourceId ?? identityId;
       const status = findIdentity(target, identityId, {
@@ -992,6 +1246,7 @@ export class BattleEngine {
         this.log(
           presentation.polarity === 'negative' ? 'debuff' : presentation.polarity === 'positive' ? 'buff' : 'info',
           `${presentation.icon} 【状态${stacked ? '叠加' : '施加'}】${target.name} 的【${presentation.name}】${valueText}生效${sourceText}。`,
+          statusMetadata,
         );
       }
     }
@@ -1018,13 +1273,49 @@ export class BattleEngine {
       }
       const defense = this.resolveYuzuProphetDefenseDecision(target, source);
       if (defense?.outcome === 'dodged') {
-        this.log('info', `💨 【拼点裁定】${target.name} 闪避了本技能分支，驱散没有发生。`);
+        this.log(
+          'info',
+          `💨 【拼点裁定】${target.name} 闪避了本技能分支，驱散没有发生。`,
+          { actorId: source?.id, actorName: source?.name, targetIds: [target.id] },
+        );
         return { removed: [], blocked: [], removedBarriers: [], blockedBarriers: [] };
       }
     }
-    const result = dispelStatusEffects(target, options);
+    const resolvedOptions = {
+      ...options,
+      excludeIdentityIds: [
+        ...new Set([
+          ...(options.excludeIdentityIds ?? []),
+          'HEROBRINE_ISOLATED',
+          'HEROBRINE_DONT_LOOK_BACK',
+          ...(!target.isMorphling ? ['HEROBRINE_WITNESS'] : []),
+        ]),
+      ],
+    };
+    const result = dispelStatusEffects(target, resolvedOptions);
+    if (
+      target.isMorphling &&
+      options.strength === 'absolute' &&
+      hasIdentity(target, 'HEROBRINE_WITNESS')
+    ) {
+      const witnessRemoved = removeEffects(target, {
+        identityIds: ['HEROBRINE_WITNESS'],
+        reason: 'absolute_dispel',
+      });
+      result.removed.push(...witnessRemoved);
+      const removedIds = new Set(witnessRemoved.map((status) => status.instanceId));
+      result.blocked = result.blocked.filter((status) => !removedIds.has(status.instanceId));
+    }
     const barrierResult = dispelBarrierEffects(target, options);
-    const emitLog = options.emitLog ?? ((type: string, text: string) => this.log(type, text));
+    const dispelMetadata: BattleLogMetadata = {
+      actorId: target.id,
+      actorName: target.name,
+      targetIds: [target.id],
+    };
+    const emitLog = (type: string, text: string) => {
+      if (options.emitLog) options.emitLog(type, text, dispelMetadata);
+      else this.log(type, text, dispelMetadata);
+    };
     const removedAirborne = result.removed.filter((status) => status.mechanicId === 'AIRBORNE');
     const strengthName = options.strength === 'absolute' ? '绝对驱散' : options.strength === 'strong' ? '强驱散' : '驱散';
     const removedNames = [
@@ -1034,15 +1325,27 @@ export class BattleEngine {
     if (removedNames.length > 0) {
       emitLog('info', `✨ 【${strengthName}】${target.name} 移除了【${[...new Set(removedNames)].join('】、【')}】。`);
     }
+    if (result.removed.some((status) => status.identityId === 'HEROBRINE_WITNESS')) {
+      emitLog(
+        target.isMorphling ? 'buff' : 'info',
+        target.isMorphling
+          ? `🌊 【规格外绝对驱散】${target.name} 顺手抹去了自身全部目击；普通规则无法做到这一点。`
+          : `◻️ 【目击清除】${target.name} 身上的白色眼睛印记被绝对驱散清除。`,
+      );
+    }
     if (result.blocked.length > 0) {
       const blockedNames = [...new Set(result.blocked.map((status) => buildStatusPresentationMember(status).name))];
       emitLog('info', `🔒 【驱散受阻】${target.name} 的【${blockedNames.join('】、【')}】不受本次${strengthName}影响。`);
     }
     if (removedAirborne.length > 0 && (options.strength === 'strong' || options.strength === 'absolute')) {
       emitLog('info', `🚀 【提前落地】${target.name} 的击飞被${strengthName}提前解除，立即结算落地伤害！`);
-      const landingRuntime = this.createStatusProcessingRuntime();
-      landingRuntime.log = emitLog;
-      resolveAirborneLanding(landingRuntime, target, removedAirborne[0]);
+      const resolveLanding = () => {
+        const landingRuntime = this.createStatusProcessingRuntime();
+        landingRuntime.log = emitLog;
+        resolveAirborneLanding(landingRuntime, target, removedAirborne[0]);
+      };
+      if (options.deferPostDispelEffect) options.deferPostDispelEffect(resolveLanding);
+      else resolveLanding();
     }
 
     if (result.removed.length > 0 || barrierResult.removed.length > 0) {
@@ -1068,7 +1371,7 @@ export class BattleEngine {
   createStatusMechanicsRuntime(): StatusMechanicsRuntime {
     return {
       fighters: this.fighters,
-      log: (type, text) => this.log(type, text),
+      log: (type, text, metadata) => this.log(type, text, metadata),
       applyDamage: (target, amount, source, isTrueDamage, attacker, options) =>
         this.applyDamage(target, amount, source, isTrueDamage, attacker, options),
       markDefeated: (target, options) => this.markDefeated(target, options),
@@ -1080,6 +1383,7 @@ export class BattleEngine {
   createOwlRuntime(): OwlRuntime {
     return {
       fighters: this.fighters,
+      battleState: this.battleState,
       jobs: this.JOBS,
       turnCount: this.turnCount,
       getTeamId: (fighter) => this.getTeamId(fighter),
@@ -1101,6 +1405,7 @@ export class BattleEngine {
   createMomoRuntime(logOverride?: (type: string, text: string, metadata?: BattleLogMetadata) => void): MomoRuntime {
     return {
       fighters: this.fighters,
+      battleState: this.battleState,
       jobs: this.JOBS,
       turnCount: this.turnCount,
       getTeamId: (fighter) => this.getTeamId(fighter),
@@ -1112,7 +1417,7 @@ export class BattleEngine {
       applyStatus: (target, application) => this.applyStatus(target, application),
       dispelStatusEffects: (target, options) => this.dispelStatusEffects(target, options),
       markDefeated: (target, options) => this.markDefeated(target, options),
-      flushDeferredDamageEvents: (fighter) => this.flushDeferredDamageEvents(fighter),
+      flushDeferredDamageEvents: (fighter, phase) => this.flushDeferredDamageEvents(fighter, phase),
     };
   }
 
@@ -1209,7 +1514,24 @@ export class BattleEngine {
           };
           const actualDmg = this.applyDamage(enemy, phoenixDmg, 'skill', true, target, damageOptions);
           this.flushDeferredDamageEvents(enemy, 'mitigation');
-          const connected = !isDamageRedirected(damageOptions) && didDamageConnect(actualDmg, damageOptions);
+          if (damageOptions.targetWithdrawnDuringDamage) {
+            this.flushDeferredDamageEvents(enemy);
+            continue;
+          }
+          const redirected = isDamageRedirected(damageOptions);
+          if (
+            (damageOptions.resolution?.hpDamage ?? 0) > 0 ||
+            (damageOptions.resolution?.shieldDamage ?? 0) > 0 ||
+            redirected
+          ) {
+            this.log('system', `state-sync:${enemy.id}`, {
+              displayInFeed: false,
+              actorId: target.id,
+              actorName: target.name,
+              targetIds: [enemy.id],
+            });
+          }
+          const connected = !redirected && didDamageConnect(actualDmg, damageOptions);
           if (actualDmg > 0) {
             this.log('crit', `🔥 【神不死鸟】太阳火焰反扑 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`, {
               actorId: target.id,
@@ -1222,7 +1544,7 @@ export class BattleEngine {
               actorName: target.name,
               targetIds: [enemy.id],
             });
-          } else if (!isDamageRedirected(damageOptions) && this.isActiveCombatant(target)) {
+          } else if (!redirected && this.isActiveCombatant(target)) {
             this.log('info', `🔥 【神不死鸟】火焰扫过 ${enemy.name}，但没有造成实际伤害！`, {
               actorId: target.id,
               actorName: target.name,
@@ -1296,7 +1618,8 @@ export class BattleEngine {
     this.dispelStatusEffects(target, {
       strength: 'strong',
       direction: 'negative',
-      emitLog: (type, text) => this.queueOrLogDamageEvent(target, options, type, text),
+      emitLog: (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata),
+      deferPostDispelEffect: (effect) => this.queueOrRunDamageAction(target, options, effect),
     });
     applyStatus(target, { identityId: 'TOKUSATSU_DEFIANCE', remainingTurns: 1 });
     applyStatus(target, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'tokusatsu_defiance' } });
@@ -1326,7 +1649,8 @@ export class BattleEngine {
     this.dispelStatusEffects(target, {
       strength: 'strong',
       direction: 'negative',
-      emitLog: (type, text) => this.queueOrLogDamageEvent(target, options, type, text),
+      emitLog: (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata),
+      deferPostDispelEffect: (effect) => this.queueOrRunDamageAction(target, options, effect),
     });
     target.apm = Math.max(8, target.apm ?? 0);
     target.gamerInputBuffer = Math.max(1, target.gamerInputBuffer ?? 0);
@@ -1349,6 +1673,7 @@ export class BattleEngine {
     options: DamageApplicationOptions,
   ): number {
     if (amount < target.currentHp || target.isDead || target.isDeadAnnounced) return amount;
+    if (shouldSuppressMajorNpcRevival(this.battleState, target)) return amount;
 
     const activeSave = [...ACTIVE_DEATH_SAVE_STATUS_TYPES]
       .map((identityId) => findIdentity(target, identityId))
@@ -1429,6 +1754,7 @@ export class BattleEngine {
     return {
       fighters: this.fighters,
       core: this.Core,
+      battleState: this.battleState,
       turnCount: this.turnCount,
       largeRound: this.battleState.largeRound.number,
       completedLargeRound: this.battleState.completedLargeRound,
@@ -1448,6 +1774,52 @@ export class BattleEngine {
         const prophet = findActiveYuzuProphet(this.fighters, (fighter) => this.isActiveCombatant(fighter));
         return prophet ? retreatYuzuProphetEvent(this.createYuzuProphetRuntime(), prophet, reason) : false;
       },
+    };
+  }
+
+  createHerobrineRuntime(): HerobrineRuntime {
+    return {
+      fighters: this.fighters,
+      battleState: this.battleState,
+      core: this.Core,
+      skills: this.SKILLS,
+      skillTags: this.SKILL_TAGS,
+      turnCount: this.turnCount,
+      largeRound: this.battleState.largeRound.number,
+      activeActionDepth: this.actionStack.length,
+      completedLargeRound: this.battleState.completedLargeRound,
+      log: (type, text, metadata) => this.log(type, text, metadata),
+      isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
+      getTeamId: (fighter) => this.getTeamId(fighter),
+      syncHpPct: (fighter) => this.syncHpPct(fighter),
+      applyDamage: (target, amount, source, isTrueDamage, attacker, options) =>
+        this.applyDamage(target, amount, source, isTrueDamage, attacker, options),
+      applyStatus: (target, application) => this.applyStatus(target, application),
+      dispelStatusEffects: (target, options) => this.dispelStatusEffects(target, options),
+      markDefeated: (target, options) => this.markDefeated(target, options),
+      flushDeferredDamageEvents: (fighter, phase) => this.flushDeferredDamageEvents(fighter, phase),
+      getSelectableTargets: (fighter) => this.getSelectableTargets(fighter),
+      resolveTarget: (user, forcedTarget, currentTargets) =>
+        resolveTarget(this.createTargetingRuntime(), user, forcedTarget, currentTargets),
+      handleWaitCounter: (target, user, triggerDepth, actionName) =>
+        handleWaitCounterAction(this.createActionResolutionRuntime(), target, user, triggerDepth, actionName),
+      handleCounterStatus: (target, user) =>
+        handleCounterStatusAction(this.createActionResolutionRuntime(), target, user),
+      dodgesWithPassiveSkill: (user, target, actionName) =>
+        dodgesWithPassiveSkillAction(this.createActionResolutionRuntime(), user, target, actionName),
+      runAction: (actor, descriptor, callback) => this.runReactionAction(actor, {
+        skillId: descriptor.skillId,
+        skillName: descriptor.skillName,
+        presentation: descriptor.presentation ?? 'skill',
+        targets: descriptor.targets,
+      }, callback),
+    };
+  }
+
+  createMajorNpcEventRuntime(): MajorNpcEventRuntime {
+    return {
+      herobrine: this.createHerobrineRuntime(),
+      puruisaishi: this.createPuruisaishiRuntime(),
     };
   }
 
@@ -1561,6 +1933,24 @@ export class BattleEngine {
       phaseLockTriggered: options.phaseLockTriggered,
       lockbloodLabel: options.lockbloodLabel,
     };
+    const redirectedDamage = Math.max(
+      options.redirectedJokerDamage ?? 0,
+      options.redirectedOriginiumDamage ?? 0,
+      options.redirectedOwlEmperorDamage ?? 0,
+      options.redirectedMomoDamage ?? 0,
+      options.redirectedYuzuDamage ?? 0,
+    );
+    if (
+      options.herobrineShieldBypassApplied &&
+      (
+        resolution.hpDamage > 0 ||
+        redirectedDamage > 0 ||
+        options.hitWithoutHpDamage === true ||
+        options.phaseLockTriggered === true
+      )
+    ) {
+      consumeHerobrineShieldBypass(this.battleState, target);
+    }
     options.resolution = resolution;
     recordDamageSettlement(target, attacker, resolution, options.creditAttacker ?? true);
     const event = this.recordEvent('damage', 'damage', `${attacker?.name ?? '环境'} -> ${target.name}`, {
@@ -1584,6 +1974,61 @@ export class BattleEngine {
     attacker?: Fighter,
     options: DamageApplicationOptions = {},
   ): number {
+    this.damageLogContextStack.push({
+      actorId: attacker?.id,
+      actorName: attacker?.name,
+      targetIds: [target.id],
+    });
+    try {
+      return this.applyDamageInternal(target, amount, source, isTrueDamage, attacker, options);
+    } finally {
+      this.damageLogContextStack.pop();
+    }
+  }
+
+  private noteHerobrineDamageConnection(
+    target: Fighter,
+    attacker: Fighter | undefined,
+    actualDamage: number,
+    options: DamageApplicationOptions,
+  ): void {
+    noteHerobrineDirectHit(
+      this.createHerobrineRuntime(),
+      attacker,
+      target,
+      actualDamage,
+      options.sourceKind,
+      options.deferTransform === true,
+    );
+    const event = this.battleState.majorNpcEvent;
+    if (
+      !options.deferTransform ||
+      event?.kind !== 'herobrine' ||
+      !event.fogBehindPending ||
+      !isHerobrine(target)
+    ) return;
+    this.queueOrLogDamageEvent(
+      target,
+      options,
+      'system',
+      `state-sync:${target.id}:fog-behind-pending`,
+      { displayInFeed: false, targetIds: [target.id] },
+      'aftermath',
+      'herobrine-fog-behind-pending',
+    );
+    this.queueOrRunDamageAction(target, options, () => {
+      commitPendingHerobrineFogBehind(this.createHerobrineRuntime(), target);
+    });
+  }
+
+  private applyDamageInternal(
+    target: Fighter,
+    amount: number,
+    source: string,
+    isTrueDamage: boolean,
+    attacker: Fighter | undefined,
+    options: DamageApplicationOptions,
+  ): number {
     amount = Math.max(0, Math.floor(amount));
     if (amount <= 0 || target.isDead || target.currentHp <= 0) return 0;
     if (hasStatus(target, 'SYNERGY_SLACKING')) return 0;
@@ -1594,6 +2039,62 @@ export class BattleEngine {
     options.originalTargetId = options.originalTargetId ?? target.id;
 
     if (
+      target.isNpc &&
+      attacker?.id !== target.id &&
+      !options.bypassNpcTargetingRules &&
+      (
+        options.isAreaDamage
+          ? !isNpcAoeVulnerable(target)
+          : (
+              (isDirectDamageKind(options.sourceKind) || options.sourceKind === 'counter') &&
+              !isNpcTargetable(target)
+            )
+      )
+    ) {
+      const reason = options.isAreaDamage && !isNpcAoeVulnerable(target)
+        ? '不受范围攻击影响'
+        : '当前无法被选中或攻击';
+      this.log('info', `⬜ 【NPC目标规则】${target.name} ${reason}，本次伤害没有进入结算。`, {
+        actorId: attacker?.id,
+        actorName: attacker?.name,
+        targetIds: [target.id],
+      });
+      this.settleDamageRecord(target, attacker, source, amount, 0, 0, 0, options, 'prevented');
+      return 0;
+    }
+
+    const boundaryOriginalTarget = options.originalTargetId
+      ? this.fighters.find((fighter) => fighter.id === options.originalTargetId)
+      : undefined;
+    if (
+      !canResolveHerobrineDamageBoundary(
+        this.battleState,
+        attacker,
+        target,
+        options.sourceKind,
+        boundaryOriginalTarget,
+      )
+    ) {
+      this.log('info', `⬜ 【单人世界边界】${attacker?.name ?? '外界效果'} 无法越过隔离影响 ${target.name}，本次伤害无效。`, {
+        actorId: attacker?.id,
+        actorName: attacker?.name,
+        targetIds: [target.id],
+      });
+      this.settleDamageRecord(target, attacker, source, amount, 0, 0, 0, options, 'prevented');
+      return 0;
+    }
+    if (
+      isDirectDamageKind(options.sourceKind) &&
+      shouldHerobrineBypassShield(this.battleState, attacker, target)
+    ) {
+      options.herobrineShieldBypassApplied = true;
+      options.bypassShields = true;
+    }
+    if (attacker && isHerobrineClone(target) && isHerobrineAttackHitKind(options.sourceKind)) {
+      revealHerobrineCloneOnAttack(this.createHerobrineRuntime(), attacker, target);
+    }
+
+    if (
       target.isYuzuProphet &&
       attacker?.id !== target.id &&
       shouldYuzuProphetRejectSource(this.createYuzuProphetRuntime(), target, attacker)
@@ -1602,7 +2103,7 @@ export class BattleEngine {
       const sourceName = attacker?.name ?? (source === 'status' ? '无归属持续状态' : '环境效果');
       this.log(
         'info',
-        `🜲 【绑定来源免疫】${target.name} 拒绝了 ${sourceName} 的${options.actionName ? `【${options.actionName}】` : getDamageSourceLabel(source)}；最终来源不属于仍在场的绑定柚子，${amount} 点伤害无效。`,
+        `🜲 【绑定来源免疫】${target.name} 拒绝了 ${sourceName} 的${options.actionName ? `【${options.actionName}】` : getDamageSourceLabel(source)}；最终来源不属于仍在场的绑定柚子，整段伤害无效。`,
         { actorId: attacker?.id, actorName: attacker?.name, targetIds: [target.id] },
       );
       this.settleDamageRecord(target, attacker, source, amount, 0, 0, 0, options, 'prevented');
@@ -1688,6 +2189,23 @@ export class BattleEngine {
         );
       }
     }
+    if (attacker && isDirectDamageKind(options.sourceKind)) {
+      const herobrineMultiplier = getHerobrineDamageMultiplier(attacker, target);
+      if (herobrineMultiplier !== 1) {
+        const beforeWitnessModifier = amount;
+        amount = Math.max(1, Math.floor(amount * herobrineMultiplier));
+        this.queueOrLogDamageEvent(
+          target,
+          options,
+          isHerobrine(attacker) ? 'debuff' : 'buff',
+          isHerobrine(attacker)
+            ? `👁️ 【有人在看着你】${target.name} 的目击使 ${attacker.name} 的直接伤害由 ${beforeWitnessModifier} 提高至 ${amount}。`
+            : `👁️ 【看破真相】${attacker.name} 的目击使其对 ${target.name} 的事件特攻伤害由 ${beforeWitnessModifier} 提高至 ${amount}。`,
+          undefined,
+          'mitigation',
+        );
+      }
+    }
     const charmStatus = attacker
       ? findIdentity(attacker, 'CHARMED', { applierIds: [target.id] })
       : undefined;
@@ -1724,11 +2242,12 @@ export class BattleEngine {
 
     if (target.isOwl && !options.bypassOwlEmperorRedirect) {
       const emperor = findOwlEmperor(this.createOwlRuntime(), target);
-      if (emperor) {
+      if (emperor && !shouldPreventHerobrineSupport(this.battleState, emperor, target)) {
         const emperorOptions: DamageApplicationOptions = {
           deferTransform: options.deferTransform,
           actionName: options.actionName,
           respectDefenses: options.respectDefenses,
+          bypassSpellBlock: options.bypassSpellBlock,
           creditAttacker: options.creditAttacker,
           rootEventId: options.rootEventId,
           originalTargetId: options.originalTargetId,
@@ -1751,7 +2270,15 @@ export class BattleEngine {
         );
         options.redirectedByOwlEmperor = true;
         options.redirectedOwlEmperorDamage = redirectedDamage;
-        this.log('info', `🐲 【帝王之征】${target.name} 将 ${amount} 点来袭伤害全部转给 ${emperor.name}，龙实际承受 ${redirectedDamage} 点！`);
+        this.log(
+          'info',
+          `🐲 【帝王之征】${target.name} 将 ${amount} 点来袭伤害全部转给 ${emperor.name}，龙实际承受 ${redirectedDamage} 点！`,
+          {
+            actorId: attacker?.id,
+            actorName: attacker?.name,
+            targetIds: [emperor.id],
+          },
+        );
         if (redirectedDamage > 0 || (emperor.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(emperor);
         if (emperor.currentHp <= 0 && !emperor.isDead && !emperor.isDeadAnnounced) {
           this.markDefeated(emperor, {
@@ -1794,42 +2321,112 @@ export class BattleEngine {
         amount = Math.max(1, Math.floor(amount * YUZU_UNMARKED_INCOMING_DAMAGE_MULTIPLIER));
         const reducedDamage = beforeUniqueTarget - amount;
         if (reducedDamage > 0) {
-          this.log('info', `🪞 【唯一目标】${target.name} 只承认 ${marked.name} 的苦痛，来自 ${attacker.name} 的伤害被镜界偏折 ${reducedDamage} 点，剩余 ${amount} 点继续结算。`);
+          this.log(
+            'info',
+            `🪞 【唯一目标】${target.name} 只承认 ${marked.name} 的苦痛，来自 ${attacker.name} 的伤害被镜界偏折 ${reducedDamage} 点，剩余 ${amount} 点继续结算。`,
+            {
+              actorId: attacker.id,
+              actorName: attacker.name,
+              targetIds: [target.id],
+            },
+          );
         }
       }
     }
 
     if (options.respectDefenses) {
       if (target.owlSummonState?.kind === 'zhao_adou' && source !== 'status') {
-        this.log('info', `🏇 【七进七出】${target.name} 以 100% 闪避穿过攻击，没有受到伤害！`);
+        this.log(
+          'info',
+          `🏇 【七进七出】${target.name} 以 100% 闪避穿过攻击，没有受到伤害！`,
+          {
+            actorId: attacker?.id,
+            actorName: attacker?.name,
+            targetIds: [target.id],
+          },
+        );
         this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'invulnerable');
         return 0;
       }
       const invul = findDefenseStatus(target, 'INVUL');
       if (invul) {
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
-        this.log('info', formatInvul(invul, target.name, incomingSource));
+        this.log(
+          'info',
+          formatInvul(invul, target.name, incomingSource),
+          {
+            actorId: attacker?.id,
+            actorName: attacker?.name,
+            targetIds: [target.id],
+          },
+        );
         this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'invulnerable');
         return 0;
       }
 
       const spellBlock = findIdentity(target, 'SPELL_BLOCK');
-      if (spellBlock && (source === 'skill' || source === 'transfer')) {
+      if (
+        spellBlock &&
+        options.bypassSpellBlock &&
+        (source === 'skill' || source === 'transfer')
+      ) {
+        const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
+        this.log(
+          'debuff',
+          `👁️ 【最终追猎】${incomingSource}穿过了 ${target.name} 的【${buildStatusPresentationMember(spellBlock).name}】；抵挡未被消耗，其他防御仍正常结算。`,
+          {
+            actorId: attacker?.id,
+            actorName: attacker?.name,
+            targetIds: [target.id],
+          },
+        );
+      } else if (spellBlock && (source === 'skill' || source === 'transfer')) {
         consumeSpellBlock(target);
-        const healing = resolveHealing(target, Math.floor(target.maxHp * 0.15), {}, (type, text) => this.log(type, text));
+        const healing = resolveHealing(
+          target,
+          Math.floor(target.maxHp * 0.15),
+          {},
+          (type, text) => this.log(type, text, {
+            actorId: target.id,
+            actorName: target.name,
+            targetIds: [target.id],
+          }),
+        );
         const healText = healing.actual > 0
           ? `，并恢复了 ${healing.actual} 点生命`
           : healing.outcome === 'blocked'
             ? '，但附带治疗被完全阻止'
             : '，但生命已满，治疗溢出';
         const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
-        this.log('info', formatSpellBlock(spellBlock, target.name, incomingSource, healText));
+        this.log(
+          'info',
+          formatSpellBlock(spellBlock, target.name, incomingSource, healText),
+          {
+            actorId: attacker?.id,
+            actorName: attacker?.name,
+            targetIds: [target.id],
+          },
+        );
         this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, 0, 0, options, 'spell_blocked');
         return 0;
       }
     }
 
-    if (target.jobData?.name === '欧皇' && !isTrueDamage) amount = Math.floor(amount * 0.63);
+    if (target.jobData?.name === '欧皇' && !isTrueDamage) {
+      const beforeLuckEmperorReduction = amount;
+      amount = Math.max(1, Math.floor(amount * 0.63));
+      const reduced = beforeLuckEmperorReduction - amount;
+      if (reduced > 0) {
+        this.queueOrLogDamageEvent(
+          target,
+          options,
+          'buff',
+          `🍀 【欧皇命格】${target.name} 将本次非真实伤害由 ${beforeLuckEmperorReduction} 削减至 ${amount}。`,
+          undefined,
+          'mitigation',
+        );
+      }
+    }
     if (
       target.isWT &&
       target.transformed &&
@@ -1837,11 +2434,35 @@ export class BattleEngine {
       source !== 'status'
     ) {
       const eraMultiplier = source === 'reflect' || source === 'counter' ? 0.75 : (isTrueDamage ? 0.88 : 0.79);
+      const beforeEraReduction = amount;
       amount = Math.max(1, Math.floor(amount * eraMultiplier));
+      const reduced = beforeEraReduction - amount;
+      if (reduced > 0) {
+        this.queueOrLogDamageEvent(
+          target,
+          options,
+          'buff',
+          `🛡️ 【时代装甲】${target.name} 的战场适应将本次伤害由 ${beforeEraReduction} 削减至 ${amount}。`,
+          undefined,
+          'mitigation',
+        );
+      }
     }
 
     if (target.job === 'EXPLOSIVE_ANTI_CROC' && attacker && attacker.id !== target.id && source !== 'status') {
+      const beforeAntiCrocReduction = amount;
       amount = Math.max(1, Math.floor(amount * 0.72));
+      const reduced = beforeAntiCrocReduction - amount;
+      if (reduced > 0) {
+        this.queueOrLogDamageEvent(
+          target,
+          options,
+          'buff',
+          `💥 【爆破反鳄】${target.name} 的针对性防护将本次伤害由 ${beforeAntiCrocReduction} 削减至 ${amount}。`,
+          undefined,
+          'mitigation',
+        );
+      }
     }
 
     if (
@@ -1950,6 +2571,13 @@ export class BattleEngine {
     // the amount it absorbed.
     this.flushDeferredDamageEvents(target, 'mitigation');
 
+    if (options.herobrineShieldBypassApplied && getBarrierTotal(target) > 0) {
+      this.log('debuff', `⬜ 【孤立目击】${target.name} 的第五层目击被锁定；${attacker?.name ?? '异常攻击'} 本次直接攻击越过了其全部普通护盾。`, {
+        actorId: attacker?.id,
+        actorName: attacker?.name,
+        targetIds: [target.id],
+      });
+    }
     const barrierResult = options.bypassShields
       ? { absorbed: 0, remaining: amount, broken: [], touched: [], absorptions: [] }
       : consumeBarriers(target, amount, { excludeIdentityIds: [PURUISAISHI_BARRIER_IDENTITY] });
@@ -1972,7 +2600,15 @@ export class BattleEngine {
       shieldDamage += shieldResult.absorbed;
       const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
       const barrierNames = [...new Set(barrierResult.touched.map((barrier) => barrier.displayName))];
-      this.log('info', `🔵 【${barrierNames.join('、') || '屏障'}】${target.name} 的屏障挡下 ${incomingSource} 的 ${shieldResult.absorbed} 点伤害，屏障剩余 ${getBarrierTotal(target)}。`);
+      this.log(
+        'info',
+        `🔵 【${barrierNames.join('、') || '屏障'}】${target.name} 的屏障挡下 ${incomingSource} 的 ${shieldResult.absorbed} 点伤害，屏障剩余 ${getBarrierTotal(target)}。`,
+        {
+          actorId: attacker?.id,
+          actorName: attacker?.name,
+          targetIds: [target.id],
+        },
+      );
       amount = shieldResult.remaining;
       if (
         shieldResult.broke &&
@@ -1980,22 +2616,29 @@ export class BattleEngine {
         (target.yuzuPhase ?? 1) === 2 &&
         !hasAnyYuzuTeammate(this.createCharacterHookRuntime(), target)
       ) {
+        const yuzuTransitionLog = options.deferTransform
+          ? (type: string, text: string, metadata?: BattleLogMetadata) =>
+              this.queueOrLogDamageEvent(target, options, type, text, metadata)
+          : (type: string, text: string, metadata?: BattleLogMetadata) =>
+              this.log(type, text, metadata);
         enterYuzuPhaseThree({
           fighters: this.fighters,
           turnCount: this.turnCount,
           getTeamId: (fighter) => this.getTeamId(fighter),
           isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
-          log: (type, text, metadata) => this.log(type, text, metadata),
+          log: yuzuTransitionLog,
           syncHpPct: (fighter) => this.syncHpPct(fighter),
           runReactionAction: (actor, descriptor, callback) => this.runReactionAction(actor, descriptor, callback),
         }, target, '个人战护盾被击碎，溢出伤害被镜界无效化');
         this.syncHpPct(target);
         this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'shielded');
+        this.noteHerobrineDamageConnection(target, attacker, shieldDamage, options);
         return 0;
       }
       if (amount <= 0) {
         this.syncHpPct(target);
         this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'shielded');
+        this.noteHerobrineDamageConnection(target, attacker, shieldDamage, options);
         return 0;
       }
     }
@@ -2009,11 +2652,20 @@ export class BattleEngine {
       source !== 'momo_share' &&
       source !== 'yuzu_share'
     ) {
-      const captains = activeMomoShareCaptains(this.createMomoRuntime(), target);
+      const captains = activeMomoShareCaptains(this.createMomoRuntime(), target)
+        .filter((captain) => !shouldPreventHerobrineSupport(this.battleState, captain, target));
       const shares = splitDamageAcrossTargets(amount, captains.length);
       if (captains.length > 0 && shares.length > 0) {
         const sharingCaptains = captains.filter((_, index) => (shares[index] ?? 0) > 0);
-        this.log('info', `💗 【|OMO】${target.name} 将 ${amount} 点有效伤害均摊给 ${sharingCaptains.map((captain) => captain.name).join('、')}，自己不承受本次伤害。`);
+        this.log(
+          'info',
+          `💗 【|OMO】${target.name} 将 ${amount} 点有效伤害均摊给 ${sharingCaptains.map((captain) => captain.name).join('、')}，自己不承受本次伤害。`,
+          {
+            actorId: target.id,
+            actorName: target.name,
+            targetIds: sharingCaptains.map((captain) => captain.id),
+          },
+        );
         let actualShared = 0;
         const sharedTargetIds: string[] = [];
         const defeatedTargetIds: string[] = [];
@@ -2042,7 +2694,15 @@ export class BattleEngine {
           const settlement = shareOptions.resolution;
           const shieldText = settlement?.shieldDamage ? `，护盾吸收 ${settlement.shieldDamage} 点` : '';
           const hpText = settlement?.hpDamage ? `，生命实际损失 ${settlement.hpDamage} 点` : '，生命没有损失';
-          this.log('info', `📌 【|OMO结算】${captain.name} 分得 ${share} 点伤害${shieldText}${hpText}。`);
+          this.log(
+            'info',
+            `📌 【|OMO结算】${captain.name} 分得 ${share} 点伤害${shieldText}${hpText}。`,
+            {
+              actorId: target.id,
+              actorName: target.name,
+              targetIds: [captain.id],
+            },
+          );
           if (actual > 0 || (captain.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(captain);
           if (captain.currentHp <= 0 && !captain.isDead && !captain.isDeadAnnounced) {
             const defeated = this.markDefeated(captain, {
@@ -2065,7 +2725,11 @@ export class BattleEngine {
     }
 
     if (target.isYuzu && source !== 'status' && source !== 'yuzu_share' && source !== 'momo_share') {
-      const allies = pickRandomFighters(activeYuzuTeammates(this.createCharacterHookRuntime(), target), 3);
+      const allies = pickRandomFighters(
+        activeYuzuTeammates(this.createCharacterHookRuntime(), target)
+          .filter((ally) => !shouldPreventHerobrineSupport(this.battleState, ally, target)),
+        3,
+      );
       const shareTotal = Math.floor(amount * YUZU_TEAM_SHARE_RATIO);
       const shares = splitDamageAcrossTargets(shareTotal, allies.length);
       const actualSharedTotal = shares.reduce((sum, share) => sum + share, 0);
@@ -2075,7 +2739,15 @@ export class BattleEngine {
         const sharedTargetIds: string[] = [];
         const defeatedTargetIds: string[] = [];
         amount = Math.max(0, amount - actualSharedTotal);
-        this.log('info', `🪞 【镜界分摊】${target.name} 把 ${actualSharedTotal} 点伤害随机均摊给 ${sharingAllies.map((ally) => ally.name).join('、')}，自己承受 ${amount} 点。`);
+        this.log(
+          'info',
+          `🪞 【镜界分摊】${target.name} 把 ${actualSharedTotal} 点伤害随机均摊给 ${sharingAllies.map((ally) => ally.name).join('、')}，自己承受 ${amount} 点。`,
+          {
+            actorId: target.id,
+            actorName: target.name,
+            targetIds: sharingAllies.map((ally) => ally.id),
+          },
+        );
         allies.forEach((ally, index) => {
           const share = shares[index] ?? 0;
           if (share <= 0) return;
@@ -2101,7 +2773,15 @@ export class BattleEngine {
             const shieldText = settlement.shieldDamage > 0 ? `，护盾吸收 ${settlement.shieldDamage} 点` : '';
             const hpText = settlement.hpDamage > 0 ? `，生命实际损失 ${settlement.hpDamage} 点` : '，生命没有损失';
             const overkillText = settlement.overkillDamage > 0 ? `，${settlement.overkillDamage} 点为溢出伤害` : '';
-            this.log('info', `📌 【镜界分摊结算】${ally.name} 分得 ${share} 点伤害${shieldText}${hpText}${overkillText}。`);
+            this.log(
+              'info',
+              `📌 【镜界分摊结算】${ally.name} 分得 ${share} 点伤害${shieldText}${hpText}${overkillText}。`,
+              {
+                actorId: target.id,
+                actorName: target.name,
+                targetIds: [ally.id],
+              },
+            );
           }
           if (shared > 0 || (ally.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(ally);
           if (ally.currentHp <= 0 && !ally.isDead && !ally.isDeadAnnounced) {
@@ -2145,10 +2825,28 @@ export class BattleEngine {
       metadata,
       'mitigation',
     );
+    puruisaishiDamageRuntime.deferDamageAftermath = (fighter, action) => {
+      this.queueOrRunDamageAction(fighter, options, action);
+    };
     let withdrewWithYuzuProphet = false;
     const onPuruisaishiRetreat = puruisaishiDamageRuntime.onPuruisaishiRetreat;
     if (onPuruisaishiRetreat) {
       puruisaishiDamageRuntime.onPuruisaishiRetreat = (puruisaishi, reason) => {
+        const activeProphet = findActiveYuzuProphet(
+          this.fighters,
+          (fighter) => this.isActiveCombatant(fighter),
+        );
+        if (options.deferTransform && activeProphet) {
+          withdrewWithYuzuProphet = true;
+          this.queueOrRunDamageAction(target, options, () => {
+            retreatYuzuProphetEvent(
+              this.createYuzuProphetRuntime(),
+              activeProphet,
+              reason,
+            );
+          });
+          return true;
+        }
         this.flushDeferredDamageEvents(target, 'mitigation');
         const handled = onPuruisaishiRetreat(puruisaishi, reason);
         if (handled) withdrewWithYuzuProphet = true;
@@ -2220,7 +2918,16 @@ export class BattleEngine {
         if (enemies.length > 0) {
           const victim = enemies[Math.floor(Math.random() * enemies.length)];
           const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
-          this.log('crit', `🎭 【随机恶作剧】${target.name} 遭到${incomingSource}时施展魔术完美闪避！并将伤害转移给了倒霉的 ${victim.name}！`);
+          const redirectMetadata = {
+            actorId: target.id,
+            actorName: target.name,
+            targetIds: [victim.id],
+          };
+          this.log(
+            'crit',
+            `🎭 【随机恶作剧】${target.name} 遭到${incomingSource}时施展魔术完美闪避！并将伤害转移给了倒霉的 ${victim.name}！`,
+            redirectMetadata,
+          );
           const transferOptions: DamageApplicationOptions = {
             deferTransform: true,
             actionName: options.actionName,
@@ -2237,45 +2944,65 @@ export class BattleEngine {
           const transferredDmg = this.applyDamage(victim, originalAmount, 'transfer', isTrueDamage, attacker, transferOptions);
           const resolvedTransfer = getResolvedDamageTotal(transferredDmg, transferOptions);
           options.redirectedJokerDamage = resolvedTransfer;
+          options.redirectedByJoker = true;
           this.flushDeferredDamageEvents(victim, 'mitigation');
-          if (transferOptions.redirectedByMomo) {
+          const transferTargetWithdrew = transferOptions.targetWithdrawnDuringDamage === true;
+          if (transferTargetWithdrew) {
+            this.flushDeferredDamageEvents(victim);
+          } else if (transferOptions.redirectedByMomo) {
             this.log('info', resolvedTransfer > 0
               ? `🎭 转移伤害落在 ${victim.name} 后触发【|OMO】，舰长合计承受 ${resolvedTransfer} 点伤害，${victim.name} 本体未受伤！`
-              : `🎭 转移伤害落在 ${victim.name} 后触发【|OMO】，但舰长均未损失生命！`);
+              : `🎭 转移伤害落在 ${victim.name} 后触发【|OMO】，但舰长均未损失生命！`, redirectMetadata);
           } else if (transferOptions.redirectedByOriginiumCore) {
             this.log('info', resolvedTransfer > 0
               ? `🎭 转移伤害落在 ${victim.name} 后被导入源石网络，源石结晶合计实际损失 ${resolvedTransfer} 点生命，${victim.name} 本体未受伤！`
-              : `🎭 转移伤害落在 ${victim.name} 后被导入源石网络，但源石结晶均未损失生命！`);
+              : `🎭 转移伤害落在 ${victim.name} 后被导入源石网络，但源石结晶均未损失生命！`, redirectMetadata);
           } else if (transferOptions.redirectedByOwlEmperor) {
             this.log('info', resolvedTransfer > 0
               ? `🎭 转移伤害落在 ${victim.name} 后被【帝王之征】接管，龙实际承受 ${resolvedTransfer} 点伤害，${victim.name} 本体未受伤！`
-              : `🎭 转移伤害落在 ${victim.name} 后被【帝王之征】接管，但龙未损失生命！`);
+              : `🎭 转移伤害落在 ${victim.name} 后被【帝王之征】接管，但龙未损失生命！`, redirectMetadata);
           } else if (transferOptions.redirectedByYuzu) {
             this.log('info', resolvedTransfer > 0
               ? `🎭 转移伤害落在 ${victim.name} 后触发【镜界分摊】，队友合计实际损失 ${resolvedTransfer} 点生命，${victim.name} 本体未受伤！`
-              : `🎭 转移伤害落在 ${victim.name} 后触发【镜界分摊】，但队友均未损失生命！`);
+              : `🎭 转移伤害落在 ${victim.name} 后触发【镜界分摊】，但队友均未损失生命！`, redirectMetadata);
           } else if (transferredDmg > 0) {
-            this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，实际承受 ${transferredDmg} 点伤害！`);
+            this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，实际承受 ${transferredDmg} 点伤害！`, redirectMetadata);
           } else if (didDamageConnect(transferredDmg, transferOptions)) {
-            this.log('info', `🎭 转移伤害成功命中 ${victim.name}；但【黄昏余命】期间未再损失生命！`);
+            this.log('info', `🎭 转移伤害成功命中 ${victim.name}；但【黄昏余命】期间未再损失生命！`, redirectMetadata);
           } else {
-            this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，但没有造成实际伤害！`);
+            this.log('info', `🎭 转移伤害落在 ${victim.name} 身上，但没有造成实际伤害！`, redirectMetadata);
           }
-          if (resolvedTransfer > 0 || didDamageConnect(transferredDmg, transferOptions) || (victim.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(victim);
-          if (victim.currentHp <= 0 && !victim.isDead && !victim.isDeadAnnounced) {
+          if (!transferTargetWithdrew && (resolvedTransfer > 0 || didDamageConnect(transferredDmg, transferOptions) || (victim.pendingDamageEvents?.length ?? 0) > 0)) {
+            this.flushDeferredDamageEvents(victim);
+          }
+          this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'redirected');
+          const redirectedDefeatedTargetIds = new Set([
+            ...(transferOptions.redirectedMomoDefeatedTargetIds ?? []),
+            ...(transferOptions.redirectedYuzuDefeatedTargetIds ?? []),
+          ]);
+          if (!transferTargetWithdrew && victim.currentHp <= 0 && !victim.isDead && !victim.isDeadAnnounced) {
             const transferKiller = attacker && attacker.id !== victim.id ? attacker : target;
-            this.markDefeated(victim, {
+            const defeated = this.markDefeated(victim, {
               message: `💀 【伤害转移】${victim.name} 被 ${target.name} 的随机恶作剧转移来的 ${transferredDmg} 点伤害坑倒了！`,
               killer: transferKiller,
             });
+            if (defeated) redirectedDefeatedTargetIds.add(victim.id);
+          }
+          if (redirectedDefeatedTargetIds.size > 0) {
+            options.targetDefeatedDuringDamage = true;
+            options.redirectedJokerDefeatedTargetIds = [...redirectedDefeatedTargetIds];
           }
         } else {
           options.redirectedJokerDamage = 0;
           const incomingSource = formatIncomingDamageSource(source, attacker, options.actionName);
-          this.log('info', `🎭 【随机恶作剧】${target.name} 遭到${incomingSource}时施展魔术，${originalAmount} 点伤害凭空消失！`);
+          this.log(
+            'info',
+            `🎭 【随机恶作剧】${target.name} 遭到${incomingSource}时施展魔术，${originalAmount} 点伤害凭空消失！`,
+            { actorId: target.id, actorName: target.name, targetIds: [target.id] },
+          );
+          options.redirectedByJoker = true;
+          this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'redirected');
         }
-        options.redirectedByJoker = true;
-        this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'redirected');
       }
     }
 
@@ -2296,6 +3023,7 @@ export class BattleEngine {
       return 0;
     }
 
+    const terminalMajorNpcDefeat = shouldSuppressMajorNpcRevival(this.battleState, target);
     let pendingOwlSummonDeathSave: 'specter' | 'spalter' | null = null;
     let triggerCricketExplosion = false;
     const owlSummonState = target.owlSummonState;
@@ -2318,7 +3046,7 @@ export class BattleEngine {
           'buff',
           `🦗 【自刎锁血】${target.name} 被压到 10% 生命线，强行留住最后一口气准备自爆！`,
           undefined,
-          'mitigation',
+          'aftermath',
         );
       }
     }
@@ -2340,7 +3068,7 @@ export class BattleEngine {
           'buff',
           `🦈 【濒死锁血】${target.name} 强行保留最后 1 点生命！`,
           undefined,
-          'mitigation',
+          'aftermath',
         );
       }
     }
@@ -2368,12 +3096,7 @@ export class BattleEngine {
       this.settleDamageRecord(target, attacker, source, attemptedDamage, 0, shieldDamage, 0, options, 'prevented');
       target.isHit = true;
       this.syncHpPct(target);
-      resolveDirectDamageStatusAftermath(
-        this.createStatusMechanicsRuntime(),
-        target,
-        options.resolution,
-        options,
-      );
+      this.resolveOrDeferDirectDamageStatusAftermath(target, options);
       return 0;
     }
 
@@ -2393,6 +3116,7 @@ export class BattleEngine {
       overkillDamage,
       options,
     );
+    this.noteHerobrineDamageConnection(target, attacker, hpDamage, options);
     if (pendingOwlSummonDeathSave) markOwlSummonDeathSave(target, this.turnCount);
     if (triggerCricketExplosion) {
       this.queueOrRunDamageAction(target, options, () => this.triggerOwlCricketChain(target));
@@ -2427,9 +3151,10 @@ export class BattleEngine {
     }
     applyGachaSummonLifesteal({
       fighters: this.fighters,
+      getTeamId: (fighter) => this.getTeamId(fighter),
       isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
       log: (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata),
-    }, attacker, Math.min(hpBeforeDamage, amount));
+    }, attacker, target, Math.min(hpBeforeDamage, amount), options);
     const momoRewards = applyMomoCaptainDamageRewards(
       this.createMomoRuntime((type, text) => this.queueOrLogDamageEvent(target, options, type, text)),
       attacker,
@@ -2443,11 +3168,11 @@ export class BattleEngine {
       if (reward.momoHealed > 0) parts.push(`${reward.momo.name} 获得舰长回馈 ${reward.momoHealed} 点`);
       this.queueOrLogDamageEvent(target, options, 'heal', `🎉 【舰长联动】${parts.join('，')}。`);
     });
-    if (target.currentHp <= 0 && this.triggerRaPhoenix(target, options)) {
+    if (!terminalMajorNpcDefeat && target.currentHp <= 0 && this.triggerRaPhoenix(target, options)) {
       if (target.isDead || target.isDeadAnnounced) options.targetDefeatedDuringDamage = true;
       return amount;
     }
-    if (target.currentHp <= 0 && triggerGachaDeathSave(
+    if (!terminalMajorNpcDefeat && target.currentHp <= 0 && triggerGachaDeathSave(
       target,
       (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata),
       (fighter) => this.syncHpPct(fighter),
@@ -2455,20 +3180,21 @@ export class BattleEngine {
         this.dispelStatusEffects(fighter, {
           strength: 'strong',
           direction: 'negative',
-          emitLog: (type, text) => this.queueOrLogDamageEvent(target, options, type, text),
+          emitLog: (type, text, metadata) => this.queueOrLogDamageEvent(target, options, type, text, metadata),
+          deferPostDispelEffect: (effect) => this.queueOrRunDamageAction(fighter, options, effect),
         });
       },
     )) {
       options.suppressOnHitStatuses = true;
       return amount;
     }
-    if (target.currentHp <= 0 && this.triggerGamerContinue(target, options)) {
+    if (!terminalMajorNpcDefeat && target.currentHp <= 0 && this.triggerGamerContinue(target, options)) {
       return amount;
     }
-    if (target.currentHp <= 0 && this.triggerTokusatsuDefiance(target, options)) {
+    if (!terminalMajorNpcDefeat && target.currentHp <= 0 && this.triggerTokusatsuDefiance(target, options)) {
       return amount;
     }
-    if (target.currentHp <= 0 && target.isSurtr) {
+    if (!terminalMajorNpcDefeat && target.currentHp <= 0 && target.isSurtr) {
       enterSurtrAfterglow({
         turnCount: this.turnCount,
         syncHpPct: (fighter) => this.syncHpPct(fighter),
@@ -2513,7 +3239,11 @@ export class BattleEngine {
         };
         const earCost = this.applyDamage(owl, 10, 'owl_cost', true, owl, earOptions);
         applyStatus(owl, { identityId: 'OWL_EAR_GUARD', remainingTurns: 1, attribution: { effectSourceId: owl.id } });
-        this.log('buff', `👂 【扎龙自己的耳朵！】${target.name} 被主动攻击，${owl.name} 损失 ${earCost} 点生命并获得 1 回合减伤。`);
+        this.log(
+          'buff',
+          `👂 【扎龙自己的耳朵！】${target.name} 被主动攻击，${owl.name} 损失 ${earCost} 点生命并获得 1 回合减伤。`,
+          { actorId: target.id, actorName: target.name, targetIds: [owl.id] },
+        );
         if (owl.currentHp <= 0 && !owl.isDead && !owl.isDeadAnnounced) {
           this.markDefeated(owl, {
             message: `💀 【扎龙自己的耳朵！】${owl.name} 因反复扎耳耗尽生命！`,
@@ -2531,12 +3261,7 @@ export class BattleEngine {
       options.resolution.phaseTransition = fighterPhaseIdentity(target) !== phaseIdentityBeforeDamage;
       options.resolution.defeated = target.currentHp <= 0 || target.isDead || target.isDeadAnnounced;
     }
-    resolveDirectDamageStatusAftermath(
-      this.createStatusMechanicsRuntime(),
-      target,
-      options.resolution,
-      options,
-    );
+    this.resolveOrDeferDirectDamageStatusAftermath(target, options);
     return amount;
   }
 
@@ -2573,9 +3298,14 @@ export class BattleEngine {
       if (!state || state.suicideTriggered || cricket.isDead || cricket.isDeadAnnounced) return;
       state.suicideTriggered = true;
       const title = chain ? '有情有义' : '自刎归天';
+      const explosionMetadata: BattleLogMetadata = {
+        actorId: cricket.id,
+        actorName: cricket.name,
+        targetIds: [target.id],
+      };
       this.log('skill', chain
         ? `🦗 【有情有义】${cricket.name} 目睹同伴自爆，追随同伴化身奥特炸弹冲向 ${target.name}！`
-        : `🦗 【自刎归天】“战至最后一刻，自刎归天！”${cricket.name} 化身奥特炸弹冲向最后攻击者 ${target.name}！`);
+        : `🦗 【自刎归天】“战至最后一刻，自刎归天！”${cricket.name} 化身奥特炸弹冲向最后攻击者 ${target.name}！`, explosionMetadata);
       if (this.isActiveCombatant(target)) {
         const raw = Math.max(120, Math.floor(getEffectiveCombatStat(cricket, 'atk', 'custom') * 1.9 + cricket.maxHp * 0.32));
         const damageOptions: DamageApplicationOptions = {
@@ -2584,25 +3314,33 @@ export class BattleEngine {
           suppressOwlCooperation: true,
         };
         const actual = this.applyDamage(target, raw, 'owl_explosion', false, cricket, damageOptions);
-        const resolved = getResolvedDamageTotal(actual, damageOptions);
-        const redirected = isDamageRedirected(damageOptions);
-        const connected = !redirected && didDamageConnect(actual, damageOptions);
-        if (!redirected) {
-          this.log(connected ? 'skill' : 'info', resolved > 0
-            ? `💥 【${title}】爆炸在 ${target.name} 身上结算，实际造成 ${resolved} 点伤害！`
-            : connected
-              ? `💥 【${title}】爆炸命中 ${target.name}；但【黄昏余命】期间未再损失生命！`
-            : `💥 【${title}】爆炸被 ${target.name} 的防护完全化解，未造成生命伤害！`);
-        }
-        if (resolved > 0 || connected || (target.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(target);
-        if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
-          this.markDefeated(target, {
-            message: `💀 【${title}】${target.name} 被 ${cricket.name} 的奥特炸弹炸倒！`,
-            killer: cricket,
-          });
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          this.flushDeferredDamageEvents(target);
+        } else {
+          const resolved = getResolvedDamageTotal(actual, damageOptions);
+          const redirected = isDamageRedirected(damageOptions);
+          const connected = !redirected && didDamageConnect(actual, damageOptions);
+          if (!redirected) {
+            this.log(connected ? 'skill' : 'info', resolved > 0
+              ? `💥 【${title}】爆炸在 ${target.name} 身上结算，实际造成 ${resolved} 点伤害！`
+              : connected
+                ? `💥 【${title}】爆炸命中 ${target.name}；但【黄昏余命】期间未再损失生命！`
+              : `💥 【${title}】爆炸被 ${target.name} 的防护完全化解，未造成生命伤害！`, explosionMetadata);
+          }
+          if (resolved > 0 || connected || (target.pendingDamageEvents?.length ?? 0) > 0) this.flushDeferredDamageEvents(target);
+          if (!redirected && target.currentHp <= 0 && !target.isDead && !target.isDeadAnnounced) {
+            this.markDefeated(target, {
+              message: `💀 【${title}】${target.name} 被 ${cricket.name} 的奥特炸弹炸倒！`,
+              killer: cricket,
+            });
+          }
         }
       } else {
-        this.log('info', `💥 【${title}】${target.name} 已经倒下，${cricket.name} 仍在原处完成自爆。`);
+        this.log(
+          'info',
+          `💥 【${title}】${target.name} 已经倒下，${cricket.name} 仍在原处完成自爆。`,
+          explosionMetadata,
+        );
       }
       this.markDefeated(cricket, {
         message: `💀 【${title}】${cricket.name} 完成自爆，真实死亡！`,
@@ -2830,6 +3568,18 @@ export class BattleEngine {
 
   markDefeated(target: Fighter, options: DefeatOptions = {}): boolean {
     if (target.isDead || target.isDeadAnnounced) return false;
+    if (this.actionStack.length === 0 && this.causalScopeStack.length === 0) {
+      return this.runCausalScope(
+        `turn-${this.turnCount}-${target.id}-defeat`,
+        () => this.markDefeated(target, options),
+      );
+    }
+    const majorNpcDefeat = handleMajorNpcUnitDefeat(
+      this.createMajorNpcEventRuntime(),
+      target,
+      options,
+    );
+    if (majorNpcDefeat !== undefined) return majorNpcDefeat;
     if (target.isYuzuProphet && !options.bypassYuzuProphetRetreat) {
       const recordedSource = options.killer ?? (
         target.lastDamage?.attackerId
@@ -2855,7 +3605,8 @@ export class BattleEngine {
       );
       return false;
     }
-    if (target.isSurtr && !options.bypassSurtrAfterglow) {
+    const terminalMajorNpcDefeat = shouldSuppressMajorNpcRevival(this.battleState, target);
+    if (!terminalMajorNpcDefeat && target.isSurtr && !options.bypassSurtrAfterglow) {
       if (!isSurtrAfterglowActive(target)) target.currentHp = 0;
       const entered = enterSurtrAfterglow({
         turnCount: this.turnCount,
@@ -2867,28 +3618,34 @@ export class BattleEngine {
       }
       return false;
     }
-    if (!options.bypassDeathSaves && triggerGachaDeathSave(
+    if (!terminalMajorNpcDefeat && !options.bypassDeathSaves && triggerGachaDeathSave(
       target,
       (type, text, metadata) => this.log(type, text, metadata),
       (fighter) => this.syncHpPct(fighter),
       (fighter) => { this.dispelStatusEffects(fighter, { strength: 'strong', direction: 'negative' }); },
     )) return false;
-    if (!options.bypassDeathSaves && this.triggerGamerContinue(target, {})) return false;
+    if (!terminalMajorNpcDefeat && !options.bypassDeathSaves && this.triggerGamerContinue(target, {})) return false;
 
     if (target.isSurtr && options.bypassSurtrAfterglow && target.surtrState) {
       target.surtrState.afterglowActive = false;
     }
     if (options.setHpZero ?? true) setCurrentHp(target, 0);
-    if (options.message) this.log(options.logType ?? 'death', options.message);
+    if (options.message) {
+      this.log(options.logType ?? 'death', options.message, {
+        actorId: options.killer?.id,
+        actorName: options.killer?.name,
+        targetIds: [target.id],
+      });
+    }
     target.isDeadAnnounced = true;
     this.recordEvent('defeat', 'defeat', `${target.name} 被判定击败。`, {
       actorId: options.killer?.id,
       actorName: options.killer?.name,
       targetIds: [target.id],
     });
-    this.runDefeatHooksOnce(target);
+    this.runDefeatHooksOnce(target, this.activeSpinalSwordRef, terminalMajorNpcDefeat);
 
-    const shouldAwardKill = options.awardKill ?? !target.isNpc;
+    const shouldAwardKill = options.awardKill ?? (!target.isNpc || awardsNpcKillCredit(target));
     if (shouldAwardKill && options.killer && options.killer.id !== target.id) {
       const splitSurtrKill = awardSurtrJointKill({
         fighters: this.fighters,
@@ -2902,17 +3659,21 @@ export class BattleEngine {
       if (isCompetitiveTarget(target)) this.grantValorantKillRewards(options.killer);
     }
     grantOriginiumCrystalBreakReward(this.createPuruisaishiRuntime(), target, options.killer);
-    runCharacterDefeatSettledHooks({
-      fighter: target,
-      runtime: this.createCharacterHookRuntime(),
-      killer: options.killer,
-    });
-    if (!options.bypassDeathSaves) this.tryMorphlingSonRescue(target);
-
-    if (!options.bypassDeathSaves) this.tryValorantRunItBackRevive(target);
+    if (!terminalMajorNpcDefeat) {
+      runCharacterDefeatSettledHooks({
+        fighter: target,
+        runtime: this.createCharacterHookRuntime(),
+        killer: options.killer,
+      });
+      if (!options.bypassDeathSaves) this.tryMorphlingSonRescue(target);
+      if (!options.bypassDeathSaves) this.tryValorantRunItBackRevive(target);
+    }
 
     if (target.isDeadAnnounced && target.currentHp <= 0) {
       settleYuzuProphetControlledSummonDeath(this.createYuzuProphetRuntime(), target);
+    }
+    if (target.isDeadAnnounced && target.currentHp <= 0) {
+      handleMajorNpcContestantDefeat(this.createMajorNpcEventRuntime(), target);
     }
     this.syncSurtrAffiliations();
     return true;
@@ -2948,10 +3709,15 @@ export class BattleEngine {
     const current = grantWarThunderSpawnPoints(killer, 1);
     killer.wtKillStreak = (killer.wtKillStreak ?? 0) + 1;
     applyStatus(killer, { identityId: 'AIM', charges: 1 });
+    const killMetadata: BattleLogMetadata = {
+      actorId: killer.id,
+      actorName: killer.name,
+      targetIds: [target.id],
+    };
     if (current > before) {
-      this.log('buff', `🪖 【战雷击杀收益】${killer.name} 击毁 ${target.name}，出生点 +${current - before}，火控进入短暂锁定！（当前 SP ${current}/${WT_SPAWN_POINT_MAX}）`);
+      this.log('buff', `🪖 【战雷击杀收益】${killer.name} 击毁 ${target.name}，出生点 +${current - before}，火控进入短暂锁定！（当前 SP ${current}/${WT_SPAWN_POINT_MAX}）`, killMetadata);
     } else {
-      this.log('buff', `🪖 【战雷击杀收益】${killer.name} 击毁 ${target.name}，出生点已满，火控进入短暂锁定！（当前 SP ${current}/${WT_SPAWN_POINT_MAX}）`);
+      this.log('buff', `🪖 【战雷击杀收益】${killer.name} 击毁 ${target.name}，出生点已满，火控进入短暂锁定！（当前 SP ${current}/${WT_SPAWN_POINT_MAX}）`, killMetadata);
     }
   }
 
@@ -3010,47 +3776,60 @@ export class BattleEngine {
       return false;
     }
 
-    const changed = commitFormTransition({
-      fighter,
-      kind: 'form_shift',
-      cause: 'revival',
-      log: (type, text, metadata) => this.log(type, text, metadata),
-      message: `👶 ${fighter.name} 刚被判定退场，就被水人救起并转职为【${MORPHLING_SON.name}】！`,
-      mutate: () => {
-        fighter.isDead = false;
-        fighter.defeatHooksResolved = false;
-        fighter.resurrected = true;
-        fighter.isSon = true;
-        fighter.teamId = waterAnchor.teamId ?? 'WATER_TEAM';
-        fighter.job = 'MORPHLING_SON';
-        fighter.jobData = cloneJobDefinition(MORPHLING_SON);
-        fighter.maxHp = Math.floor(fighter.maxHp * 6);
-        fighter.currentHp = fighter.maxHp;
-        fighter.atk *= 6;
-        fighter.mag *= 6;
-        fighter.wis = Math.floor(fighter.wis * 4.0);
-        fighter.spd = 100;
-        this.syncHpPct(fighter);
-        fighter.isDeadAnnounced = false;
-      },
+    let changed = false;
+    this.runReactionAction(waterAnchor, {
+      skillId: 'morphling_son_rescue',
+      skillName: '水人救子',
+      presentation: 'skill',
+      targets: [fighter],
+    }, () => {
+      changed = commitFormTransition({
+        fighter,
+        kind: 'form_shift',
+        cause: 'revival',
+        log: (type, text, metadata) => this.log(type, text, metadata),
+        message: `👶 ${fighter.name} 刚被判定退场，就被水人救起并转职为【${MORPHLING_SON.name}】！`,
+        mutate: () => {
+          fighter.isDead = false;
+          fighter.defeatHooksResolved = false;
+          fighter.resurrected = true;
+          fighter.isSon = true;
+          fighter.teamId = waterAnchor.teamId ?? 'WATER_TEAM';
+          fighter.job = 'MORPHLING_SON';
+          fighter.jobData = cloneJobDefinition(MORPHLING_SON);
+          fighter.maxHp = Math.floor(fighter.maxHp * 6);
+          fighter.currentHp = fighter.maxHp;
+          fighter.atk *= 6;
+          fighter.mag *= 6;
+          fighter.wis = Math.floor(fighter.wis * 4.0);
+          fighter.spd = 100;
+          this.syncHpPct(fighter);
+          fighter.isDeadAnnounced = false;
+        },
+      });
+      if (!changed) return;
+      this.dispelStatusEffects(fighter, {
+        strength: 'absolute',
+        direction: 'all',
+        includeNeutral: true,
+        includeIndependent: true,
+      });
     });
-    if (!changed) return false;
-    this.dispelStatusEffects(fighter, {
-      strength: 'absolute',
-      direction: 'all',
-      includeNeutral: true,
-      includeIndependent: true,
-    });
-    return true;
+    return changed;
   }
 
-  runDefeatHooksOnce(fighter: Fighter, spinalSwordRef = this.activeSpinalSwordRef): void {
+  runDefeatHooksOnce(
+    fighter: Fighter,
+    spinalSwordRef = this.activeSpinalSwordRef,
+    terminalDefeat = false,
+  ): void {
     if (!spinalSwordRef || fighter.defeatHooksResolved) return;
     fighter.defeatHooksResolved = true;
     runCharacterDefeatHooks({
       fighter,
       runtime: this.createCharacterHookRuntime(),
       spinalSwordRef,
+      terminalDefeat,
     });
   }
 
@@ -3061,8 +3840,14 @@ export class BattleEngine {
     killer?: Fighter,
   ): void {
     if (f.isDead || (f.currentHp > 0 && !f.isDeadAnnounced)) return;
+    const terminalMajorNpcDefeat = shouldSuppressMajorNpcRevival(this.battleState, f);
 
-    if (this.tryValorantRunItBackRevive(f)) return;
+    if (isHerobrineEventUnit(f)) {
+      this.markDefeated(f, { message: deathMessage, killer });
+      return;
+    }
+
+    if (!terminalMajorNpcDefeat && this.tryValorantRunItBackRevive(f)) return;
 
     const defeated = this.markDefeated(f, { message: deathMessage ?? formatFallbackDeathMessage(f), killer });
     // markDefeated may synchronously revive or redeploy the fighter. Do not
@@ -3071,9 +3856,9 @@ export class BattleEngine {
     if (!defeated && f.currentHp > 0 && !f.isDeadAnnounced) return;
     if (!defeated && f.currentHp <= 0) setCurrentHp(f, 0);
     f.isDead = true;
-    this.runDefeatHooksOnce(f, spinalSwordRef);
+    this.runDefeatHooksOnce(f, spinalSwordRef, terminalMajorNpcDefeat);
 
-    this.tryMorphlingSonRescue(f);
+    if (!terminalMajorNpcDefeat) this.tryMorphlingSonRescue(f);
     if (f.isDead) {
       spawnCrystalFromInfectedDeath(this.createPuruisaishiRuntime(), f);
       resetStatusResourcesOnDeath(f);
@@ -3131,15 +3916,29 @@ export class BattleEngine {
 
   finishStep(spinalSwordRef: SpinalSwordRef): void {
     let settledStatusLargeRound: number | undefined;
+    let settledHerobrineLargeRound: number | undefined;
     const settleCompletedStatusRound = () => {
       const completed = this.battleState.completedLargeRound;
-      if (completed === undefined || completed === settledStatusLargeRound) return;
-      settledStatusLargeRound = completed;
-      this.runCausalScope(`large-round-${completed}-status`, () => {
-        settleBurnAtLargeRound(this.createStatusMechanicsRuntime(), completed);
-        advanceLargeRoundTimedBarriers(this.fighters, completed, (type, text) => this.log(type, text));
-        this.handleDeathsAndRevives(spinalSwordRef);
-      });
+      if (completed === undefined) return;
+      if (completed !== settledStatusLargeRound) {
+        settledStatusLargeRound = completed;
+        this.runCausalScope(`large-round-${completed}-status`, () => {
+          settleBurnAtLargeRound(this.createStatusMechanicsRuntime(), completed);
+          advanceLargeRoundTimedEffects(this.fighters, completed, (type, text) => this.log(type, text));
+          this.handleDeathsAndRevives(spinalSwordRef);
+        });
+      }
+      if (completed !== settledHerobrineLargeRound) {
+        settledHerobrineLargeRound = completed;
+        this.runCausalScope(`large-round-${completed}-herobrine`, () => {
+          processMajorNpcLargeRoundEnd(
+            this.createMajorNpcEventRuntime(),
+            completed,
+            'before_global_effects',
+          );
+          this.handleDeathsAndRevives(spinalSwordRef);
+        });
+      }
     };
     this.handleDeathsAndRevives(spinalSwordRef);
     this.resolveGachaInstantActions(spinalSwordRef);
@@ -3152,20 +3951,26 @@ export class BattleEngine {
       this.advanceGlobalTimedStatuses();
       runCharacterGlobalTickHooks({ runtime: this.createCharacterHookRuntime() });
       runCharacterReentryHooks({ runtime: this.createCharacterHookRuntime() });
-    });
-    const completedBeforePuruisaishi = syncLargeRoundState(this.battleState, this.fighters);
-    if (completedBeforePuruisaishi !== undefined) {
-      this.recordEvent('round', 'round_complete', `第 ${completedBeforePuruisaishi} 个大回合因参与者退场而结束。`);
-    }
-    settleCompletedStatusRound();
-    this.runCausalScope(`turn-${this.turnCount}-puruisaishi`, () => {
-      processPuruisaishiRoundEnd(this.createPuruisaishiRuntime());
+      processMajorNpcGlobalActionEnd(this.createMajorNpcEventRuntime(), 'before_round_sync');
       this.handleDeathsAndRevives(spinalSwordRef);
     });
-    const completedAfterPuruisaishi = syncLargeRoundState(this.battleState, this.fighters);
-    if (completedAfterPuruisaishi !== undefined) {
-      this.recordEvent('round', 'round_complete', `第 ${completedAfterPuruisaishi} 个大回合因参与者退场而结束。`);
-      processPuruisaishiLargeRoundEnd(this.createPuruisaishiRuntime());
+    const completedBeforeMajorNpcEvent = syncLargeRoundState(this.battleState, this.fighters);
+    if (completedBeforeMajorNpcEvent !== undefined) {
+      this.recordEvent('round', 'round_complete', `第 ${completedBeforeMajorNpcEvent} 个大回合因参与者退场而结束。`);
+    }
+    settleCompletedStatusRound();
+    this.runCausalScope(`turn-${this.turnCount}-major-npc-event`, () => {
+      processMajorNpcGlobalActionEnd(this.createMajorNpcEventRuntime(), 'after_round_sync');
+      this.handleDeathsAndRevives(spinalSwordRef);
+    });
+    const completedAfterMajorNpcEvent = syncLargeRoundState(this.battleState, this.fighters);
+    if (completedAfterMajorNpcEvent !== undefined) {
+      this.recordEvent('round', 'round_complete', `第 ${completedAfterMajorNpcEvent} 个大回合因参与者退场而结束。`);
+      processMajorNpcLargeRoundEnd(
+        this.createMajorNpcEventRuntime(),
+        completedAfterMajorNpcEvent,
+        'after_event_effects',
+      );
     }
     settleCompletedStatusRound();
     consumeCompletedLargeRound(this.battleState, this.fighters);
@@ -3523,6 +4328,7 @@ export class BattleEngine {
       skills: this.SKILLS,
       data: this.Data,
       fighters: this.fighters,
+      battleState: this.battleState,
       turnCount: this.turnCount,
       getTeamId: (fighter) => this.getTeamId(fighter),
       isActiveCombatant: (fighter) => this.isActiveCombatant(fighter),
@@ -3565,7 +4371,12 @@ export class BattleEngine {
     handleChimeraUltimateEvolutionEffect(this.createSupportResolutionRuntime(), target);
   }
 
-  executeSupportSkill(skill: SkillDefinition, user: Fighter, forcedTarget: Fighter | null, userTeamId: string): boolean {
+  executeSupportSkill(
+    skill: SkillDefinition,
+    user: Fighter,
+    forcedTarget: Fighter | null,
+    userTeamId: string,
+  ): SupportSkillResolution {
     return executeSupportSkillEffect(this.createSupportResolutionRuntime(), skill, user, forcedTarget, userTeamId);
   }
 
@@ -3671,20 +4482,36 @@ export class BattleEngine {
     return shuffled;
   }
 
-  private successfulDamageTargetSince(eventIndex: number, attacker: Fighter): Fighter | undefined {
-    const connectedTargets = this.events.slice(eventIndex).flatMap((event) => {
+  private successfulDamageSettlementsSince(
+    eventIndex: number,
+    attacker: Fighter,
+  ): Array<{ target: Fighter; damage: DamageResolutionRecord }> {
+    const connectedByTarget = new Map<string, { target: Fighter; damage: DamageResolutionRecord }>();
+    this.events.slice(eventIndex).forEach((event) => {
       const damage = event.damage;
-      if (event.kind !== 'damage' || !damage || damage.attackerId !== attacker.id) return [];
+      if (event.kind !== 'damage' || !damage || damage.attackerId !== attacker.id) return;
+      const originKind = damage.originSourceKind ?? damage.sourceKind;
+      if (
+        !isDirectDamageKind(originKind) &&
+        originKind !== 'counter' &&
+        originKind !== 'reflect'
+      ) return;
+      if (damage.targetId === attacker.id) return;
       const target = this.fighters.find((fighter) => fighter.id === damage.targetId);
-      if (!target) return [];
+      if (!target) return;
       const connected =
         damage.hpDamage > 0 ||
         damage.shieldDamage > 0 ||
         damage.outcome === 'lockblood' ||
         (damage.outcome === 'prevented' && isSurtrAfterglowActive(target));
-      return connected ? [target] : [];
+      if (connected) connectedByTarget.set(target.id, { target, damage });
     });
-    return connectedTargets[connectedTargets.length - 1];
+    return [...connectedByTarget.values()];
+  }
+
+  private successfulDamageTargetSince(eventIndex: number, attacker: Fighter): Fighter | undefined {
+    const settlements = this.successfulDamageSettlementsSince(eventIndex, attacker);
+    return settlements[settlements.length - 1]?.target;
   }
 
   private applyYuzuProphetHitStatuses(
@@ -3797,24 +4624,30 @@ export class BattleEngine {
     this.withYuzuProphetClashBypass(() =>
       this.executeSkillAction(hitSkillId, prophet, target, triggerDepth),
     );
-    const actualTarget = this.successfulDamageTargetSince(eventIndex, prophet);
-    if (actualTarget) {
-      if (this.isActiveCombatant(actualTarget)) {
-        this.applyYuzuProphetHitStatuses(
-          prophet,
-          actualTarget,
-          infection,
-          sinkingPotency,
-          sinkingCount,
-          sourceName,
-        );
-      } else {
-        this.log(
-          'info',
-          `🜲 【${sourceName}结算】本次受击分支成功命中并击败 ${actualTarget.name}；负面状态只施加给命中后仍存活的单位，因此不再向已离场目标施加矿石病或沉沦。`,
-          { actorId: prophet.id, actorName: prophet.name, targetIds: [actualTarget.id] },
-        );
-      }
+    const settlements = this.successfulDamageSettlementsSince(eventIndex, prophet);
+    const actualTarget = settlements[settlements.length - 1]?.target;
+    if (!this.isActiveCombatant(prophet) || prophet.yuzuProphetState?.retreatCompleted) {
+      return actualTarget;
+    }
+    if (settlements.length > 0) {
+      settlements.forEach(({ target: settledTarget, damage }) => {
+        if (damage.defeated) {
+          this.log(
+            'info',
+            `🜲 【${sourceName}结算】本次受击分支成功命中并击败 ${settledTarget.name}；负面状态不会跨越死亡或立即返场施加给新的生命。`,
+            { actorId: prophet.id, actorName: prophet.name, targetIds: [settledTarget.id] },
+          );
+        } else if (this.isActiveCombatant(settledTarget)) {
+          this.applyYuzuProphetHitStatuses(
+            prophet,
+            settledTarget,
+            infection,
+            sinkingPotency,
+            sinkingCount,
+            sourceName,
+          );
+        }
+      });
     } else {
       this.log(
         'info',
@@ -4042,62 +4875,18 @@ export class BattleEngine {
 
   private executeYuzuProphetControlledRelease(
     summon: Fighter,
-    commandSource?: Fighter,
-  ): Fighter | undefined {
-    if (!this.isActiveCombatant(summon) || !isYuzuProphetControlledSummon(summon)) return undefined;
-    const prophet = this.fighters.find((fighter) =>
-      fighter.id === summon.yuzuProphetControlState?.prophetId && fighter.isYuzuProphet,
-    );
-    const bound = prophet ? getYuzuProphetBoundYuzu(this.fighters, prophet) : undefined;
+  ): Array<{ target: Fighter; damage: DamageResolutionRecord }> {
+    if (!this.isActiveCombatant(summon) || !isYuzuProphetControlledSummon(summon)) return [];
     const summonSkillId = this.selectSkill(summon);
-    const targetSelection = resolveTarget(
-      this.createTargetingRuntime(),
-      summon,
-      null,
-      this.getSelectableTargets(summon),
-    );
-    if (!targetSelection) {
+    if (this.getSelectableTargets(summon).length === 0) {
       this.log('info', `🜲 【接管指令落空】${summon.name} 找不到合法目标，本次技能释放没有发生。`);
-      return undefined;
+      return [];
     }
-    const clashesWithBound = !!bound && (
-      targetSelection.target.id === bound.id ||
-      targetSelection.protectedTarget?.id === bound.id
-    );
-    if (!clashesWithBound || !bound || !this.isActiveCombatant(bound)) {
-      const eventIndex = this.events.length;
-      this.executeClashWinnerSkill(summon, summonSkillId, targetSelection.target, 1);
-      this.handleDeathsAndRevives(this.activeSpinalSwordRef ?? { current: false });
-      this.settleYuzuProphetLifecycle();
-      return this.successfulDamageTargetSince(eventIndex, summon);
-    }
-
-    const yuzuSkillId = this.selectSkill(bound);
-    let successfulTarget: Fighter | undefined;
-    this.runReactionAction(summon, {
-      skillId: 'yuzu_prophet_controlled_clash',
-      skillName: commandSource ? `${commandSource.name}的接管指令` : '接管召唤物拼点',
-      presentation: 'skill',
-      targets: [bound],
-    }, () => {
-      const clash = resolveYuzuProphetClash(
-        this.createYuzuProphetRuntime(),
-        summon,
-        summonSkillId,
-        bound,
-        yuzuSkillId,
-        `${summon.name} 准备攻击绑定柚子 ${bound.name}`,
-      );
-      const eventIndex = this.events.length;
-      const opponent = clash.winner.id === summon.id ? bound : summon;
-      this.executeClashWinnerSkill(clash.winner, clash.winnerSkillId, opponent, 1);
-      if (clash.winner.id === summon.id) {
-        successfulTarget = this.successfulDamageTargetSince(eventIndex, summon);
-      }
-    });
+    const eventIndex = this.events.length;
+    this.executeSkillAction(summonSkillId, summon, null, 1);
     this.handleDeathsAndRevives(this.activeSpinalSwordRef ?? { current: false });
     this.settleYuzuProphetLifecycle();
-    return successfulTarget;
+    return this.successfulDamageSettlementsSince(eventIndex, summon);
   }
 
   private prophetCommandAssignments(
@@ -4148,7 +4937,7 @@ export class BattleEngine {
     }, () => {
       this.log(
         'skill',
-        `🜲 【${this.SKILLS[skillId]?.name ?? skillId}】${prophet.name} 下达 ${assignments.length} 次释放指令：${assignments.map((fighter) => fighter.name).join(' → ')}。每次释放单独与绑定柚子拼点。`,
+        `🜲 【${this.SKILLS[skillId]?.name ?? skillId}】${prophet.name} 下达 ${assignments.length} 次释放指令：${assignments.map((fighter) => fighter.name).join(' → ')}。每次均由召唤物按自身规则选技并寻找目标。`,
         { actorId: prophet.id, actorName: prophet.name, targetIds: assignments.map((fighter) => fighter.id) },
       );
       for (const summon of assignments) {
@@ -4162,28 +4951,63 @@ export class BattleEngine {
           if (skillId === YUZU_PROPHET_SKILLS.phaseOneBreak) break;
           continue;
         }
-        const actualTarget = this.executeYuzuProphetControlledRelease(summon, prophet);
-        if (!actualTarget || !this.isActiveCombatant(actualTarget)) continue;
+        const settlements = this.executeYuzuProphetControlledRelease(summon);
+        if (
+          prophet.yuzuProphetState?.phase !== 1 ||
+          prophet.yuzuProphetState.retreatCompleted ||
+          !this.isActiveCombatant(prophet)
+        ) {
+          break;
+        }
+        if (settlements.length === 0) continue;
         successfulCount += 1;
-        lastSuccessfulTarget = actualTarget;
-        this.applyStatus(actualTarget, {
-          identityId: 'TREMOR',
-          potency: tremorPotency,
-          count: 1,
-          effectName: this.SKILLS[skillId]?.name,
-          attribution: {
-            effectSourceId: skillId,
-            effectSourceName: this.SKILLS[skillId]?.name,
-            applierId: prophet.id,
-            applierName: prophet.name,
-            creditActorId: prophet.id,
-          },
+        settlements.forEach(({ target: actualTarget, damage }) => {
+          if (damage.defeated) {
+            this.log(
+              'info',
+              `🟨 【接管指令命中】${summon.name} 的技能成功命中并击败 ${actualTarget.name}；震颤不会跨越死亡或立即返场施加。`,
+              { actorId: summon.id, actorName: summon.name, targetIds: [actualTarget.id] },
+            );
+            return;
+          }
+          if (!this.isActiveCombatant(actualTarget)) {
+            return;
+          }
+          const applied = this.applyStatus(actualTarget, {
+            identityId: 'TREMOR',
+            potency: tremorPotency,
+            count: 1,
+            effectName: this.SKILLS[skillId]?.name,
+            attribution: {
+              effectSourceId: skillId,
+              effectSourceName: this.SKILLS[skillId]?.name,
+              applierId: prophet.id,
+              applierName: prophet.name,
+              creditActorId: prophet.id,
+            },
+          });
+          if (applied) {
+            lastSuccessfulTarget = actualTarget;
+            this.log(
+              'debuff',
+              `🟨 【接管指令命中】${summon.name} 的技能成功命中 ${actualTarget.name}，施加震颤（${tremorPotency}×1）。`,
+              { actorId: summon.id, actorName: summon.name, targetIds: [actualTarget.id] },
+            );
+          } else {
+            this.log(
+              'info',
+              `🟨 【接管指令命中】${summon.name} 的技能成功命中 ${actualTarget.name}，但震颤被抵抗，未能施加。`,
+              { actorId: summon.id, actorName: summon.name, targetIds: [actualTarget.id] },
+            );
+          }
         });
-        this.log(
-          'debuff',
-          `🟨 【接管指令命中】${summon.name} 赢得拼点并成功命中 ${actualTarget.name}，施加震颤（${tremorPotency}×1）。`,
-          { actorId: summon.id, actorName: summon.name, targetIds: [actualTarget.id] },
-        );
+      }
+      if (
+        prophet.yuzuProphetState?.phase !== 1 ||
+        prophet.yuzuProphetState.retreatCompleted ||
+        !this.isActiveCombatant(prophet)
+      ) {
+        return;
       }
       if (
         skillId === YUZU_PROPHET_SKILLS.phaseOneBreak &&
@@ -4197,8 +5021,18 @@ export class BattleEngine {
           { actorId: prophet.id, actorName: prophet.name, targetIds: [lastSuccessfulTarget.id] },
         );
         burstTremor(lastSuccessfulTarget, 1, (type, text) => this.log(type, text));
+      } else if (skillId === YUZU_PROPHET_SKILLS.phaseOneBreak && successfulCount > 0) {
+        this.log(
+          'info',
+          '🟨 【我将击碎·未爆发】三次指令至少形成一次成功命中，但结算后没有仍在场且带有震颤的目标，本次不触发震颤爆发。',
+          { actorId: prophet.id, actorName: prophet.name, targetIds: [prophet.id] },
+        );
       } else if (skillId === YUZU_PROPHET_SKILLS.phaseOneBreak) {
-        this.log('info', '🟨 【我将击碎·未爆发】三次指令没有形成成功命中，本次不触发震颤爆发。');
+        this.log(
+          'info',
+          '🟨 【我将击碎·未爆发】三次指令没有形成成功命中，本次不触发震颤爆发。',
+          { actorId: prophet.id, actorName: prophet.name, targetIds: [prophet.id] },
+        );
       }
     });
     return true;
@@ -4218,11 +5052,18 @@ export class BattleEngine {
       : this.executeYuzuProphetPhaseOneTurn(prophet);
   }
 
-  executeSkillAction(skId: string | null, usr: Fighter, forcedTarget: Fighter | null = null, triggerDepth = 0): void {
-    this.runWithBattleRandom(() => {
+  executeSkillAction(skId: string | null, usr: Fighter, forcedTarget: Fighter | null = null, triggerDepth = 0): boolean {
+    return this.runWithBattleRandom(() => {
       const action = this.beginAction(skId, usr, forcedTarget, triggerDepth);
       try {
-        executeSkillActionFlow(this.createActionResolutionRuntime(), skId, usr, forcedTarget, triggerDepth);
+        action.successfullyResolved = executeSkillActionFlow(
+          this.createActionResolutionRuntime(),
+          skId,
+          usr,
+          forcedTarget,
+          triggerDepth,
+        );
+        return action.successfullyResolved;
       } finally {
         this.endAction(action);
       }
@@ -4237,7 +5078,9 @@ export class BattleEngine {
         this.finalizeFighterDeath(f, spinalSwordRef);
       }
 
-      runCharacterReviveHooks({ fighter: f, runtime, spinalSwordRef });
+      if (!shouldSuppressMajorNpcRevival(this.battleState, f)) {
+        runCharacterReviveHooks({ fighter: f, runtime, spinalSwordRef });
+      }
       if (wasOutOfBattle && this.isActiveCombatant(f)) resetStatusResourcesOnRevive(f);
       this.syncHpPct(f);
       this.syncSpinalSwordState(f);
@@ -4275,7 +5118,7 @@ export class BattleEngine {
     if (this.turnCount === 901) {
       this.log('info', '⏳ 战斗拖入深度疲劳阶段！久战者的防线开始崩坏，伤害提升速度加快。');
     }
-    trySpawnPuruisaishiEvent(this.createPuruisaishiRuntime());
+    trySpawnMajorNpcEvent(this.createMajorNpcEventRuntime());
 
     const priorityActorIds = getLargeRoundPriorityActorIds(this.battleState, this.fighters);
     const actor = this.determineActor(alive, priorityActorIds);
@@ -4289,7 +5132,7 @@ export class BattleEngine {
         actorName: actor.name,
       });
     }
-    notePuruisaishiRoundActor(this.createPuruisaishiRuntime(), actor);
+    noteMajorNpcRoundActor(this.createMajorNpcEventRuntime(), actor);
     this.handleSpinalSwordDrop(actor, spinalSwordRef);
 
     const statusTurn = this.runCausalScope(`turn-${this.turnCount}-${actor.id}-status-start`, () =>
@@ -4387,14 +5230,34 @@ export class BattleEngine {
       }
       const confusedTarget = confusionTargets[Math.floor(Math.random() * confusionTargets.length)];
       actor.confusedForcedTargetId = confusedTarget.id;
-      this.log('info', `🌀 【混乱】${actor.name} 认错了目标，只能用普通攻击打向 ${confusedTarget.name}！`);
+      this.log(
+        'info',
+        `🌀 【混乱】${actor.name} 认错了目标，只能用普通攻击打向 ${confusedTarget.name}！`,
+        {
+          actorId: actor.id,
+          actorName: actor.name,
+          targetIds: [confusedTarget.id],
+        },
+      );
       try {
-        this.executeSkillAction(null, actor, confusedTarget);
+        const majorNpcAction = executeMajorNpcTurn(
+          this.createMajorNpcEventRuntime(),
+          actor,
+          confusedTarget,
+        );
+        if (majorNpcAction === undefined) {
+          this.executeSkillAction(null, actor, confusedTarget);
+        } else {
+          completedAction = majorNpcAction;
+        }
       } finally {
         delete actor.confusedForcedTargetId;
       }
     } else {
-      if (actor.isYuzuProphet) {
+      const majorNpcAction = executeMajorNpcTurn(this.createMajorNpcEventRuntime(), actor);
+      if (majorNpcAction !== undefined) {
+        completedAction = majorNpcAction;
+      } else if (actor.isYuzuProphet) {
         completedAction = this.executeYuzuProphetTurn(actor);
       } else if (isYuzuProphetControlledSummon(actor)) {
         this.executeYuzuProphetControlledRelease(actor);

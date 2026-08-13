@@ -4,6 +4,7 @@ import type {
   BattleCombatEffectId,
   BattleEngineData,
   BattleLogMetadata,
+  BattleState,
   DamageApplicationOptions,
   Fighter,
   GachaEntry,
@@ -11,9 +12,10 @@ import type {
 } from './types';
 
 import { isSelectableTargetFor } from './targeting';
-import { applyStatus, hasIdentity, removeBarriers, removeEffects } from './statusSystem';
+import { canProvideHerobrineSupport, isNpcTargetable } from './npcCombat';
+import { applyStatus, hasIdentity } from './statusSystem';
 import { hasStatusApplication } from './skillEffects';
-import { getEffectiveCombatStat } from './statusMechanics';
+import { clearReviveEffects, getEffectiveCombatStat } from './statusMechanics';
 import { didDamageConnect, isDamageRedirected } from './damageRedirects';
 import {
   findSurtrTributeGroups,
@@ -41,6 +43,7 @@ type LogFn = (type: string, text: string, metadata?: BattleLogMetadata) => void;
 
 type LuckDrawRuntime = {
   fighters?: Fighter[];
+  battleState?: BattleState;
   data: BattleEngineData;
   turnCount?: number;
   getTeamId?: (fighter: Fighter) => string;
@@ -50,6 +53,7 @@ type LuckDrawRuntime = {
 
 type SummonLifestealRuntime = {
   fighters: Fighter[];
+  getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: LogFn;
 };
@@ -148,6 +152,7 @@ function activeEnemies(runtime: LuckDrawRuntime, user: Fighter): Fighter[] {
     return runtime.fighters.filter((fighter) => isSelectableTargetFor({
       fighters: runtime.fighters!,
       turnCount: runtime.turnCount!,
+      battleState: runtime.battleState,
       getTeamId: runtime.getTeamId!,
       isActiveCombatant: runtime.isActiveCombatant!,
     }, user, fighter));
@@ -155,7 +160,7 @@ function activeEnemies(runtime: LuckDrawRuntime, user: Fighter): Fighter[] {
   const userTeamId = runtime.getTeamId?.(user) ?? user.teamId ?? user.id;
   return activeFighters(runtime).filter((fighter) =>
     fighter.id !== user.id &&
-    !(fighter.isPuruisaishi && (fighter.puruisaishiPhase ?? 1) <= 1) &&
+    isNpcTargetable(fighter) &&
     (runtime.getTeamId?.(fighter) ?? fighter.teamId ?? fighter.id) !== userTeamId,
   );
 }
@@ -164,6 +169,7 @@ function activeFriendlySummons(runtime: LuckDrawRuntime, user: Fighter): Fighter
   const userTeamId = runtime.getTeamId?.(user) ?? user.teamId ?? user.id;
   return activeFighters(runtime).filter((fighter) =>
     fighter.isSummon &&
+    canProvideHerobrineSupport(runtime.battleState, user, fighter) &&
     (
       isSurtrOwnedBy(fighter, user) ||
       (
@@ -360,7 +366,9 @@ export function activateGachaSummonLifesteal(
 export function applyGachaSummonLifesteal(
   runtime: SummonLifestealRuntime,
   attacker: Fighter | undefined,
+  target: Fighter,
   healBase: number,
+  options: DamageApplicationOptions,
 ): void {
   if (!attacker?.isSummon || !attacker.summonerId || healBase <= 0) return;
 
@@ -372,8 +380,26 @@ export function applyGachaSummonLifesteal(
   );
   if (!summoner) return;
 
+  const damageKind = options.originSourceKind ?? options.sourceKind;
+  const isOffensiveDamage = damageKind === undefined ||
+    damageKind === 'standard' ||
+    damageKind === 'custom' ||
+    damageKind === 'manual' ||
+    damageKind === 'counter' ||
+    damageKind === 'reflect';
+  if (
+    options.creditAttacker === false ||
+    !isOffensiveDamage ||
+    target.id === attacker.id ||
+    runtime.getTeamId(target) === runtime.getTeamId(summoner)
+  ) return;
+
   const healPct = summoner.gachaSummonLifestealPct ?? GACHA_SUMMON_LIFESTEAL_PCT;
-  const healed = healFighter(summoner, Math.floor(healBase * healPct), runtime.log);
+  const healed = healFighter(summoner, Math.floor(healBase * healPct), runtime.log, {
+    kind: 'summon',
+    sourceId: GACHA_SUMMON_LIFESTEAL_STATUS,
+    healer: attacker,
+  });
   if (healed > 0) {
     runtime.log(
       'heal',
@@ -412,6 +438,7 @@ function activeContextEnemies(ctx: SkillContext): Fighter[] {
     isSelectableTargetFor({
       fighters: ctx.fighters,
       turnCount: ctx.turnCount,
+      battleState: ctx.battleState,
       getTeamId: ctx.getTeamId,
       isActiveCombatant,
     }, ctx.user, fighter),
@@ -422,6 +449,7 @@ function activeContextFriendlySummons(ctx: SkillContext): Fighter[] {
   const myTeamId = ctx.getTeamId(ctx.user);
   return ctx.fighters.filter((fighter) =>
     fighter.isSummon &&
+    canProvideHerobrineSupport(ctx.battleState, ctx.user, fighter) &&
     !fighter.isDead &&
     !fighter.isDeadAnnounced &&
     fighter.currentHp > 0 &&
@@ -494,6 +522,17 @@ function damageFromSummon(
     }
     const damageOptions: DamageApplicationOptions = { actionName, sourceKind: 'custom' };
     actualDmg = ctx.applyDamage(target, amount, 'skill', trueDamage, summon, damageOptions);
+    if (damageOptions.targetWithdrawnDuringDamage) {
+      actualDmg = 0;
+      ctx.flushDeferredDamageEvents?.();
+      return;
+    }
+    ctx.log('system', `state-sync:${target.id}`, {
+      displayInFeed: false,
+      actorId: summon.id,
+      actorName: summon.name,
+      targetIds: [target.id],
+    });
     redirected = isDamageRedirected(damageOptions);
     if (!redirected && !options.deferOutcome) finalizeSummonDamage(ctx, summon, target, actionName);
     options.afterDamage?.(
@@ -521,6 +560,7 @@ function commandSummon(ctx: SkillContext, summon: Fighter, label: string): void 
     isSelectableTargetFor({
       fighters: ctx.fighters,
       turnCount: ctx.turnCount,
+      battleState: ctx.battleState,
       getTeamId: ctx.getTeamId,
       isActiveCombatant,
     }, summon, fighter),
@@ -711,6 +751,10 @@ export const GACHA_ALL_OUT_ATTACK_CARD: GachaEntry = {
         ) * 1.05));
         const damageOptions: DamageApplicationOptions = { actionName: '全军进击', sourceKind: 'custom' };
         const actualDmg = ctx.applyDamage(target, dmg, 'skill', false, summon, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          ctx.flushDeferredDamageEvents?.();
+          return;
+        }
         if (isDamageRedirected(damageOptions)) {
           ctx.log('info', `⚔️ ${summon.name} 的进击被 ${target.name} 的防护机制转移，原目标没有受伤；转移伤害已单独结算！`, {
             actorId: summon.id,
@@ -828,8 +872,7 @@ export const GACHA_MONSTER_REBORN_CARD: GachaEntry = {
       'gacha_monster_reborn',
       { targets: [target], label: target.name },
     );
-    removeEffects(target, { reason: 'revive' });
-    removeBarriers(target);
+    clearReviveEffects(target);
     target.hpPct = target.currentHp / target.maxHp;
     ctx.log('heal', `⚗️ 【死者苏生完成】${target.name} 已恢复到 ${target.currentHp} 点生命！`, { targetIds: [target.id] });
     return true;
@@ -890,6 +933,14 @@ export const GACHA_BLACK_LOTUS_CARD: GachaEntry = {
   requiresAnyFriendlySummon: true,
   onExecute: (ctx) => {
     const summons = activeContextFriendlySummons(ctx);
+    if (summons.length === 0) {
+      ctx.log(
+        'info',
+        `🌸 【黑莲花】${ctx.user.name} 展开充能法阵，但当前没有能够响应的己方召唤物，卡片效果未能生效。`,
+        { actorId: ctx.user.id, actorName: ctx.user.name, targetIds: [ctx.user.id] },
+      );
+      return true;
+    }
     for (const summon of summons) {
       summon.atk = Math.floor(summon.atk * 1.18);
       summon.mag = Math.floor(summon.mag * 1.18);

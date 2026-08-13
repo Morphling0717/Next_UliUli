@@ -40,7 +40,11 @@ export type CombatImpactTheme =
   | 'tokusatsu_alchemy'
   | 'tokusatsu_throne'
   | 'tokusatsu_monster'
-  | 'tokusatsu_rainbow';
+  | 'tokusatsu_rainbow'
+  | 'herobrine_eye'
+  | 'herobrine_fog'
+  | 'herobrine_glitch'
+  | 'herobrine_blocks';
 
 export type TingCombatEffectCue = {
   theme: 'ting';
@@ -119,6 +123,33 @@ export type GachaCombatEffectCue = {
   stageImpact: boolean;
 };
 
+export type HerobrineCombatMotion =
+  | 'empty_gaze'
+  | 'hidden_strike'
+  | 'stripped_leaves'
+  | 'world_seed_error'
+  | 'single_world'
+  | 'clone_attack';
+
+export type HerobrineCombatEffectId = Extract<BattleCombatEffectId,
+  | 'herobrine_empty_gaze'
+  | 'herobrine_hidden_strike'
+  | 'herobrine_stripped_leaves'
+  | 'herobrine_world_seed_error'
+  | 'herobrine_single_world'
+  | 'herobrine_clone_attack'
+>;
+
+export type HerobrineCombatEffectCue = {
+  theme: 'herobrine';
+  motion: HerobrineCombatMotion;
+  actorMotion: CombatActorMotion;
+  targetMode: 'actor' | 'targets';
+  presentation: SkillPresentation;
+  impact: CombatImpactTheme;
+  stageImpact: boolean;
+};
+
 export type TokusatsuCombatMotion =
   | 'fan_strike'
   | 'fan_rider_kick'
@@ -175,7 +206,11 @@ export type TokusatsuCombatEffectCue = {
   stageImpact: boolean;
 };
 
-export type CombatEffectCue = TingCombatEffectCue | GachaCombatEffectCue | TokusatsuCombatEffectCue;
+export type CombatEffectCue =
+  | TingCombatEffectCue
+  | GachaCombatEffectCue
+  | TokusatsuCombatEffectCue
+  | HerobrineCombatEffectCue;
 
 type CombatEffectEvent = Pick<
   BattleEvent,
@@ -218,7 +253,10 @@ const TING_EFFECTS: Record<
   ting_wail: { motion: 'wail', actorMotion: 'stationary', targetMode: 'targets', impact: 'ting_curse' },
 };
 
-type GachaCombatEffectId = Exclude<BattleCombatEffectId, TokusatsuCombatEffectId | TingCombatEffectId>;
+type GachaCombatEffectId = Exclude<
+  BattleCombatEffectId,
+  TokusatsuCombatEffectId | TingCombatEffectId | HerobrineCombatEffectId
+>;
 
 const GACHA_EFFECTS: Record<
   GachaCombatEffectId,
@@ -375,6 +413,60 @@ const TOKUSATSU_EFFECTS: Record<
   toku_rainbow_fever: { motion: 'rainbow_fever', actorMotion: 'aerial_kick', targetMode: 'targets', impact: 'tokusatsu_rainbow' },
 };
 
+const HEROBRINE_EFFECTS: Record<
+  HerobrineCombatEffectId,
+  Omit<HerobrineCombatEffectCue, 'theme' | 'presentation' | 'stageImpact'>
+> = {
+  herobrine_empty_gaze: {
+    motion: 'empty_gaze',
+    actorMotion: 'stationary',
+    targetMode: 'targets',
+    impact: 'herobrine_eye',
+  },
+  herobrine_hidden_strike: {
+    motion: 'hidden_strike',
+    actorMotion: 'stationary',
+    targetMode: 'targets',
+    impact: 'herobrine_fog',
+  },
+  herobrine_stripped_leaves: {
+    motion: 'stripped_leaves',
+    actorMotion: 'stationary',
+    targetMode: 'targets',
+    impact: 'herobrine_fog',
+  },
+  herobrine_world_seed_error: {
+    motion: 'world_seed_error',
+    actorMotion: 'stationary',
+    targetMode: 'targets',
+    impact: 'herobrine_glitch',
+  },
+  herobrine_single_world: {
+    motion: 'single_world',
+    actorMotion: 'stationary',
+    targetMode: 'targets',
+    impact: 'herobrine_blocks',
+  },
+  herobrine_clone_attack: {
+    motion: 'clone_attack',
+    actorMotion: 'melee_lunge',
+    targetMode: 'targets',
+    impact: 'herobrine_eye',
+  },
+};
+
+function makeHerobrineCue(
+  event: CombatEffectEvent,
+  effectId: HerobrineCombatEffectId,
+): HerobrineCombatEffectCue {
+  return {
+    theme: 'herobrine',
+    presentation: event.presentation ?? (event.skillId === null ? 'basic' : 'skill'),
+    stageImpact: true,
+    ...HEROBRINE_EFFECTS[effectId],
+  };
+}
+
 export const TOKUSATSU_COMBAT_EFFECT_IDS = Object.freeze(
   Object.keys(TOKUSATSU_EFFECTS) as TokusatsuCombatEffectId[],
 );
@@ -434,6 +526,7 @@ export function resolveCombatEffect(
     const effectId = explicitEffectId;
     if (effectId in TING_EFFECTS) return makeCue(event, TING_EFFECTS[effectId as TingCombatEffectId]);
     if (effectId in TOKUSATSU_EFFECTS) return makeTokusatsuCue(event, effectId as TokusatsuCombatEffectId);
+    if (effectId in HEROBRINE_EFFECTS) return makeHerobrineCue(event, effectId as HerobrineCombatEffectId);
     return makeGachaCue(event, effectId as GachaCombatEffectId);
   }
 

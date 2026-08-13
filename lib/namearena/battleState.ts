@@ -32,8 +32,29 @@ export function createBattleState(seed = Date.now(), turnCount = 0): BattleState
 }
 
 export function cloneBattleState(state: BattleState): BattleState {
+  const majorNpcEvent = state.majorNpcEvent?.kind === 'herobrine'
+    ? {
+        ...state.majorNpcEvent,
+        traceIds: [...state.majorNpcEvent.traceIds],
+        cloneIds: [...state.majorNpcEvent.cloneIds],
+        attackedThisLargeRoundIds: [...state.majorNpcEvent.attackedThisLargeRoundIds],
+        firstShieldBypassConsumedIds: [...state.majorNpcEvent.firstShieldBypassConsumedIds],
+        recentSkills: Object.fromEntries(
+          Object.entries(state.majorNpcEvent.recentSkills).map(([fighterId, snapshot]) => [
+            fighterId,
+            { ...snapshot },
+          ]),
+        ),
+        singleWorld: state.majorNpcEvent.singleWorld
+          ? { ...state.majorNpcEvent.singleWorld }
+          : undefined,
+      }
+    : state.majorNpcEvent
+      ? { ...state.majorNpcEvent }
+      : undefined;
   return {
     ...state,
+    majorNpcEvent,
     largeRound: {
       ...state.largeRound,
       participantIds: [...state.largeRound.participantIds],

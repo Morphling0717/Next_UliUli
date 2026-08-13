@@ -17,12 +17,14 @@ import {
 } from '../owlMechanics';
 import { applyStatus, hasIdentity } from '../statusSystem';
 import { didDamageConnect, getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
+import { canTargetAcrossHerobrineBoundary, isNpcTargetable } from '../npcCombat';
 
 const { SKILL_TAGS } = Data;
 
 function asOwlRuntime(ctx: SkillContext): OwlRuntime {
   return {
     fighters: ctx.fighters,
+    battleState: ctx.battleState,
     jobs: namerenaJobs,
     turnCount: ctx.turnCount,
     getTeamId: ctx.getTeamId,
@@ -45,23 +47,29 @@ function applyOwlDamage(
   amount: number,
   actionName: string,
   options: Partial<DamageApplicationOptions> = {},
-): { actual: number; redirected: boolean; landed: boolean } {
-  if (!isActiveCombatant(ctx.user) || !isActiveCombatant(target)) return { actual: 0, redirected: false, landed: false };
+): { actual: number; redirected: boolean; landed: boolean; withdrawn: boolean } {
+  if (!isActiveCombatant(ctx.user) || !isActiveCombatant(target)) {
+    return { actual: 0, redirected: false, landed: false, withdrawn: false };
+  }
   const damageOptions: DamageApplicationOptions = {
     actionName,
     respectDefenses: true,
     ...options,
   };
   const actual = ctx.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, ctx.user, damageOptions);
+  if (damageOptions.targetWithdrawnDuringDamage) {
+    ctx.flushDeferredDamageEvents?.();
+    return { actual: 0, redirected: false, landed: false, withdrawn: true };
+  }
   const redirected = isDamageRedirected(damageOptions);
   const resolved = getResolvedDamageTotal(actual, damageOptions);
-  return { actual: resolved, redirected, landed: !redirected && didDamageConnect(actual, damageOptions) };
+  return { actual: resolved, redirected, landed: !redirected && didDamageConnect(actual, damageOptions), withdrawn: false };
 }
 
 function settleOwlDamage(
   ctx: SkillContext,
   target: Fighter,
-  result: { actual: number; redirected: boolean; landed: boolean },
+  result: { actual: number; redirected: boolean; landed: boolean; withdrawn: boolean },
   actionName: string,
 ): void {
   if (result.actual > 0 || result.landed || (target.pendingDamageEvents?.length ?? 0) > 0) ctx.flushDeferredDamageEvents?.();
@@ -77,6 +85,7 @@ function selectableEnemies(ctx: SkillContext): Fighter[] {
   const runtime = {
     fighters: ctx.fighters,
     turnCount: ctx.turnCount,
+    battleState: ctx.battleState,
     getTeamId: ctx.getTeamId,
     isActiveCombatant,
   };
@@ -101,6 +110,7 @@ function executeYilingFire(ctx: SkillContext): boolean {
   targets.forEach((target) => {
     if (!isActiveCombatant(target)) return;
     const result = applyOwlDamage(ctx, target, raw, '夷陵之火');
+    if (result.withdrawn) return;
     if (!result.redirected) {
       ctx.log(
         result.landed ? 'skill' : 'info',
@@ -160,9 +170,17 @@ function executeBumperHarvest(ctx: SkillContext): boolean {
     fighter.id !== ctx.user.id && !fighter.isNpc && isActiveCombatant(fighter),
   );
   const speaker = speakers[Math.floor(Math.random() * speakers.length)];
-  const selfHealing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * 0.2), {}, ctx.log);
+  const selfHealing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * 0.2), {
+    kind: 'direct',
+    sourceId: '五谷丰登',
+    healer: ctx.user,
+  }, ctx.log);
   const dragonHealing = emperor
-    ? resolveHealing(emperor, Math.floor(emperor.maxHp * 0.2), {}, ctx.log)
+    ? resolveHealing(emperor, Math.floor(emperor.maxHp * 0.2), {
+        kind: 'direct',
+        sourceId: '五谷丰登',
+        healer: ctx.user,
+      }, ctx.log)
     : undefined;
   const selfText = selfHealing.actual > 0
     ? `${ctx.user.name} 恢复 ${selfHealing.actual} 点生命`
@@ -187,13 +205,21 @@ function executeDesk(ctx: SkillContext): boolean {
     ctx.log('info', `📜 【伏案】${ctx.user.name} 想让龙撒野，但帝王之征已经不在场。`);
     return true;
   }
+  if (!ctx.canProvideSupport(emperor)) {
+    ctx.log('info', `⬜ 【单人世界边界】${ctx.user.name} 的【伏案】无法越过隔离强化 ${emperor.name}。`);
+    return true;
+  }
   const stacks = addOwlWildStack(runtime, ctx.user);
   ctx.log('buff', `📜 【伏案】${ctx.user.name}：“你捡它作甚！你今天捡起来，他明天还要来撒野的！”${emperor.name} 获得【撒野】${stacks}/5 层，攻击与速度提高。`);
   return true;
 }
 
 function executeEnjoy(ctx: SkillContext): boolean {
-  const healing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * 0.28), {}, ctx.log);
+  const healing = resolveHealing(ctx.user, Math.floor(ctx.user.maxHp * 0.28), {
+    kind: 'direct',
+    sourceId: '乐不思蜀',
+    healer: ctx.user,
+  }, ctx.log);
   applyStatus(ctx.user, { identityId: 'OWL_ENJOYING', remainingTurns: 3, attribution: { effectSourceId: ctx.user.id } });
   const recoveryText = healing.actual > 0
     ? `恢复 ${healing.actual} 点生命`
@@ -222,7 +248,11 @@ function executeBoneScrape(ctx: SkillContext): boolean {
   const actualCost = ctx.applyDamage(ctx.user, rawCost, 'owl_cost', true, ctx.user, options);
   if (actualCost > 0 || (ctx.user.pendingDamageEvents?.length ?? 0) > 0) ctx.flushDeferredDamageEvents?.();
   const healing = emperor
-    ? resolveHealing(emperor, Math.floor(actualCost * 1.6), {}, ctx.log)
+    ? resolveHealing(emperor, Math.floor(actualCost * 1.6), {
+        kind: 'direct',
+        sourceId: '刮骨',
+        healer: ctx.user,
+      }, ctx.log)
     : undefined;
   const emperorText = emperor
     ? healing && healing.actual > 0
@@ -242,6 +272,8 @@ function executeZhaoRampage(ctx: SkillContext): boolean {
   const targets = ctx.fighters.filter((fighter) =>
     fighter.id !== ctx.user.id &&
     isActiveCombatant(fighter) &&
+    (!fighter.isNpc || isNpcTargetable(fighter)) &&
+    canTargetAcrossHerobrineBoundary(ctx.battleState, ctx.user, fighter) &&
     !(fighter.isPuruisaishi && (fighter.puruisaishiPhase ?? 1) <= 1) &&
     (fighter.untargetableUntilTurn ?? -1) < ctx.turnCount &&
     !hasIdentity(fighter, 'SYNERGY_SLACKING'),
@@ -249,11 +281,12 @@ function executeZhaoRampage(ctx: SkillContext): boolean {
   const target = targets[Math.floor(Math.random() * targets.length)];
   if (!target) return true;
   ctx.setVisualTargets([target]);
-  ctx.log('skill', `🏇 【无差别冲阵】${ctx.user.name} 不分敌我，径直冲向 ${target.name}！`);
+  ctx.log('skill', `🏇 【长坂冲阵】${ctx.user.name} 不分敌我，径直冲向 ${target.name}！`);
   if (ctx.handleWaitCounter?.(target, ctx.user, '长坂冲阵')) return true;
   if (ctx.handleCounterStatus?.(target, ctx.user) || !isActiveCombatant(ctx.user)) return true;
   const raw = ctx.getEffectiveStat(ctx.user, 'atk') * 1.45 + ctx.getEffectiveStat(ctx.user, 'spd') * 0.45;
   const result = applyOwlDamage(ctx, target, raw, '长坂冲阵');
+  if (result.withdrawn) return true;
   if (!result.redirected) {
     ctx.log(
       result.landed ? 'skill' : 'info',
@@ -277,6 +310,7 @@ function executeAtomicBreath(ctx: SkillContext): boolean {
     ctx.getEffectiveStat(ctx.user, 'atk') * 0.75 +
     ctx.getEffectiveStat(ctx.user, 'wis') * 0.3;
   const result = applyOwlDamage(ctx, ctx.target, raw, '原子吐息');
+  if (result.withdrawn) return true;
   if (!result.redirected) {
     ctx.log(
       result.landed ? 'skill' : 'info',
@@ -305,6 +339,7 @@ function executeDragonShock(ctx: SkillContext): boolean {
     if (!isActiveCombatant(target)) return;
     const raw = ctx.getEffectiveStat(ctx.user, 'mag') * 0.9 + ctx.getEffectiveStat(ctx.user, 'atk') * 0.45;
     const result = applyOwlDamage(ctx, target, raw, '龙威震荡');
+    if (result.withdrawn) return;
     if (!result.redirected) {
       ctx.log(
         result.landed ? 'skill' : 'info',

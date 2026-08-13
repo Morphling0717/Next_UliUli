@@ -5,6 +5,7 @@ import {
 } from './combatState';
 import { commitFormTransition } from './battlePresentation';
 import { generateUniqueRuntimeId } from './core';
+import { configureNpcUnit, setNpcCombatCapabilities } from './npcCombat';
 import {
   clearOriginiumInfection,
   getActiveOriginiumCrystals,
@@ -178,6 +179,13 @@ export function getActiveYuzuProphetControlledSummons(
   );
 }
 
+function getUnsettledYuzuProphetControlledSummons(
+  fighters: readonly Fighter[],
+  prophet: Fighter,
+): Fighter[] {
+  return fighters.filter((fighter) => isYuzuProphetControlledSummon(fighter, prophet.id));
+}
+
 function sourceOwnerChainIncludes(
   fighters: readonly Fighter[],
   source: Fighter,
@@ -242,10 +250,7 @@ export function getYuzuProphetPriorityTarget(
   const bound = getYuzuProphetBoundYuzu(runtime.fighters, prophet);
   if (!bound) return undefined;
 
-  if (
-    (user.id === prophet.id || isYuzuProphetControlledSummon(user, prophet.id)) &&
-    runtime.isActiveCombatant(bound)
-  ) {
+  if (user.id === prophet.id && runtime.isActiveCombatant(bound)) {
     return availableTargets.find((target) => target.id === bound.id);
   }
   if (user.id === bound.id && runtime.isActiveCombatant(prophet)) {
@@ -322,6 +327,11 @@ function createYuzuProphet(
       clashCount: 0,
     },
   };
+  configureNpcUnit(prophet, 'yuzu_prophet', 'yuzu_prophet', {
+    actionMode: 'normal',
+    targetable: true,
+    aoeVulnerable: true,
+  });
   initializeEffectState(prophet);
   return prophet;
 }
@@ -574,6 +584,7 @@ function restoreControlledSummon(
 ): void {
   const control = summon.yuzuProphetControlState;
   if (!control || control.disposition !== 'controlled') return;
+  const prophet = runtime.fighters.find((fighter) => fighter.id === control.prophetId);
   if (control.synthetic) {
     if (summon.surtrState) {
       summon.surtrState.afterglowActive = false;
@@ -585,7 +596,11 @@ function restoreControlledSummon(
     summon.isDead = true;
     summon.isDeadAnnounced = true;
     control.disposition = 'withdrawn';
-    runtime.log('system', `🔥 【保底召唤退场】${summon.name} 没有原主人，随预言家事件一同退场；不视为死亡。`);
+    runtime.log(
+      'system',
+      `🔥 【保底召唤退场】${summon.name} 没有原主人，随预言家事件一同退场；不视为死亡。`,
+      { actorId: prophet?.id, actorName: prophet?.name, targetIds: [summon.id] },
+    );
     return;
   }
 
@@ -605,6 +620,8 @@ function restoreControlledSummon(
     'system',
     `↩️ 【控制权返还】${summon.name} ${returnDescription}；接管期间的生命、状态和资源消耗全部保留。`,
     {
+      actorId: prophet?.id,
+      actorName: prophet?.name,
       targetIds: [
         summon.id,
         ...new Set([
@@ -754,7 +771,11 @@ function clearProphetMark(runtime: YuzuProphetRuntime, prophet: Fighter): void {
     bound.yuzuMarkedHitCount = 0;
     delete bound.yuzuFuriosoCountedTurn;
   }
-  runtime.log('system', `🎯 【预言家标记解除】${prophet.name} 已退场，${bound.name} 的预言家专属唯一目标被清除。`);
+  runtime.log(
+    'system',
+    `🎯 【预言家标记解除】${prophet.name} 已退场，${bound.name} 的预言家专属唯一目标被清除。`,
+    { actorId: prophet.id, actorName: prophet.name, targetIds: [bound.id] },
+  );
   if (runtime.isActiveCombatant(bound)) runtime.ensureYuzuMarkedTarget?.(bound);
 }
 
@@ -776,7 +797,10 @@ export function retreatYuzuProphetEvent(
   );
 
   if (state.phase === 1) {
-    getActiveYuzuProphetControlledSummons(runtime, prophet)
+    // A deferred multi-target hit can reduce a controlled summon to 0 HP before
+    // its formal defeat is announced. It still needs its ownership settled at
+    // the event boundary; any pending lethal damage then resolves normally.
+    getUnsettledYuzuProphetControlledSummons(runtime.fighters, prophet)
       .forEach((summon) => {
         restoreControlledSummon(runtime, summon);
         if (summon.yuzuProphetControlState?.disposition === 'returned') returnedSummonCount += 1;
@@ -791,6 +815,7 @@ export function retreatYuzuProphetEvent(
     infected.length > 0
       ? `🦠 【矿石病清除】共同退场清除了 ${infected.map((fighter) => fighter.name).join('、')} 身上的全部矿石病。`
       : '🦠 【矿石病清除】共同退场完成检查，场上没有残留矿石病。',
+    { actorId: prophet.id, actorName: prophet.name, targetIds: infected.map((fighter) => fighter.id) },
   );
 
   const eventUnits = runtime.fighters.filter((fighter) =>
@@ -807,20 +832,38 @@ export function retreatYuzuProphetEvent(
     fighter.isDead = true;
     fighter.isDeadAnnounced = true;
     fighter.defeatHooksResolved = true;
+    if (fighter.isNpc) {
+      setNpcCombatCapabilities(fighter, {
+        actionMode: 'none',
+        visible: false,
+        targetable: false,
+        aoeVulnerable: false,
+        blocksSettlement: false,
+      });
+    }
   });
   clearProphetMark(runtime, prophet);
 
   if (!state.retreatQuotePlayed) {
     state.retreatQuotePlayed = true;
-    runtime.log('crit', `🜲 【文明尽头的约定】${PROPHET_LONG_RETREAT_QUOTE}`);
+    runtime.log(
+      'crit',
+      `🜲 【文明尽头的约定】${PROPHET_LONG_RETREAT_QUOTE}`,
+      { actorId: prophet.id, actorName: prophet.name, targetIds: eventUnits.map((fighter) => fighter.id) },
+    );
   }
   state.retreatCompleted = true;
   state.retreating = false;
+  const puruisaishiRuntime = runtime.createPuruisaishiRuntime();
+  if (puruisaishiRuntime.battleState?.majorNpcEvent?.kind === 'puruisaishi') {
+    puruisaishiRuntime.battleState.majorNpcEvent.completed = true;
+  }
   runtime.log(
     'system',
     retreatPhase === 1
       ? `🜲 【共同退场完成】${prophet.name}、普瑞赛斯、阿喃那与全部源石结晶已经离场；一阶段仍在场召唤物已结算：${returnedSummonCount} 名返还原主人，${withdrawnSummonCount} 名无原主保底召唤物随事件退场；胜负将按结算后的阵营重新计算。`
       : `🜲 【共同退场完成】${prophet.name}、普瑞赛斯、阿喃那与全部源石结晶已经离场；二阶段开始时被接管的召唤物均已抹杀，不存在待返还的控制权，胜负将按当前阵营重新计算。`,
+    { actorId: prophet.id, actorName: prophet.name, targetIds: eventUnits.map((fighter) => fighter.id) },
   );
   return true;
 }
@@ -927,11 +970,12 @@ export function resolveYuzuProphetClash(
   right: Fighter,
   rightSkillId: string | null,
   reason: string,
+  displayNames: { left?: string; right?: string } = {},
 ): YuzuProphetClashResult {
   const leftProfile = getYuzuProphetClashProfile(left, leftSkillId, runtime.skills);
   const rightProfile = getYuzuProphetClashProfile(right, rightSkillId, runtime.skills);
-  const leftName = clashSkillName(left, leftSkillId, runtime.skills);
-  const rightName = clashSkillName(right, rightSkillId, runtime.skills);
+  const leftName = displayNames.left ?? clashSkillName(left, leftSkillId, runtime.skills);
+  const rightName = displayNames.right ?? clashSkillName(right, rightSkillId, runtime.skills);
   const leftLevel = skillOffenseLevel(left, leftSkillId, runtime.skills);
   const rightLevel = skillOffenseLevel(right, rightSkillId, runtime.skills);
   const levelGap = leftLevel - rightLevel;
@@ -994,8 +1038,8 @@ export function resolveYuzuProphetClash(
   const loser = leftWon ? right : left;
   const winnerSkillId = leftWon ? leftSkillId : rightSkillId;
   const loserSkillId = leftWon ? rightSkillId : leftSkillId;
-  const winnerSkillName = clashSkillName(winner, winnerSkillId, runtime.skills);
-  const loserSkillName = clashSkillName(loser, loserSkillId, runtime.skills);
+  const winnerSkillName = leftWon ? leftName : rightName;
+  const loserSkillName = leftWon ? rightName : leftName;
   runtime.log(
     'crit',
     `⚖️ 【拼点结束】${winner.name} 赢得整次拼点并完整释放【${winnerSkillName}】；${loser.name} 的【${loserSkillName}】被取消，未消耗仅在成功释放时才会消耗的一次性资源。`,

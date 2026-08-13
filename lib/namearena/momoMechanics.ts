@@ -1,5 +1,6 @@
 import { cloneJobDefinition, healFighter } from './combatState';
 import { commitFormTransition } from './battlePresentation';
+import { canProvideHerobrineSupport } from './npcCombat';
 
 import { rememberYuzuTeammates } from './yuzuMechanics';
 import type {
@@ -12,9 +13,11 @@ import type {
   DispelOptions,
   DispelResolution,
   BattleLogMetadata,
+  BattleState,
 } from './types';
 import { applyStatus, consumeStatusValue, hasIdentity, queryMechanic, removeEffects } from './statusSystem';
 import { getEffectiveCombatStat } from './statusMechanics';
+import { statusPresentationGroupKey } from './statusPresentation';
 
 export const MOMO_JOY_MAX = 138;
 export const MOMO_RIDER_KICKS_TO_PHASE_THREE = 7;
@@ -29,6 +32,7 @@ export const MOMO_OWL_FOOD_CHANCE = 0.0314;
 
 export interface MomoRuntime {
   fighters: Fighter[];
+  battleState?: BattleState;
   jobs: Partial<Record<string, JobDefinition>>;
   turnCount: number;
   getTeamId: (fighter: Fighter) => string;
@@ -46,7 +50,7 @@ export interface MomoRuntime {
   applyStatus: (target: Fighter, application: StatusApplication) => boolean;
   dispelStatusEffects: (target: Fighter, options: DispelOptions) => DispelResolution;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
-  flushDeferredDamageEvents: (fighter: Fighter) => void;
+  flushDeferredDamageEvents: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
 }
 
 export type MomoDamageReward = {
@@ -170,6 +174,14 @@ interface MomoCaptainGrantResult {
 }
 
 function grantMomoCaptainTo(runtime: MomoRuntime, momo: Fighter, fighter: Fighter): MomoCaptainGrantResult {
+  if (!canProvideHerobrineSupport(runtime.battleState, momo, fighter)) {
+    return {
+      fighter,
+      newRelationship: false,
+      statusRestored: false,
+      hpBonusActivated: false,
+    };
+  }
   const wasNewMember = !fighter.momoCaptainBonuses?.[momo.id];
   const statusRestored = !hasStatusFrom(fighter, 'MOMO_CAPTAIN', momo.id);
   if (statusRestored) {
@@ -185,6 +197,7 @@ export function activeMomoCaptains(runtime: MomoRuntime, momo: Fighter, includeS
     (includeSelf || fighter.id !== momo.id) &&
     runtime.isActiveCombatant(fighter) &&
     !hasIdentity(fighter, 'SYNERGY_SLACKING') &&
+    canProvideHerobrineSupport(runtime.battleState, momo, fighter) &&
     hasStatusFrom(fighter, 'MOMO_CAPTAIN', momo.id),
   );
 }
@@ -233,7 +246,8 @@ function activePartnerCandidates(runtime: MomoRuntime, momo: Fighter): Fighter[]
     !fighter.cannotWin &&
     !fighter.cannotAct &&
     !isFoodUnit(fighter) &&
-    runtime.isActiveCombatant(fighter),
+    runtime.isActiveCombatant(fighter) &&
+    canProvideHerobrineSupport(runtime.battleState, momo, fighter),
   );
 }
 
@@ -282,7 +296,15 @@ export function chooseMomoPartner(runtime: MomoRuntime, momo: Fighter, reason: s
     momo.teamId = `MOMO_SOLO:${momo.id}`;
     state.dynamicTeamId = momo.teamId;
     syncMomoCaptains(runtime, momo, true);
-    runtime.log('info', `🫧 【随机组队】${momo.name} 的认主次数已用尽（${selectionsUsed}/${MOMO_DYNAMIC_TEAM_LIMIT}），解除旧队伍并独自继续战斗。`);
+    runtime.log(
+      'info',
+      `🫧 【随机组队】${momo.name} 的认主次数已用尽（${selectionsUsed}/${MOMO_DYNAMIC_TEAM_LIMIT}），解除旧队伍并独自继续战斗。`,
+      {
+        actorId: momo.id,
+        actorName: momo.name,
+        targetIds: [momo.id],
+      },
+    );
     return undefined;
   }
 
@@ -346,9 +368,17 @@ export function handleMomoPartnerDefeat(runtime: MomoRuntime, fallen: Fighter): 
     if (state.teamMode !== 'dynamic' || state.partnerTargetId !== fallen.id) return;
     state.partnerReselectPending = true;
     const selectionsUsed = state.partnerSelectionCount ?? 0;
-    runtime.log('info', selectionsUsed >= MOMO_DYNAMIC_TEAM_LIMIT
-      ? `🫧 【队友退场】${fallen.name} 已离开战场，${momo.name} 的认主次数已经用尽，会在当前结算完成后解除队伍并独自战斗。`
-      : `🫧 【队友退场】${fallen.name} 已离开战场，${momo.name} 会在当前结算完成后重新抽选队友。`);
+    runtime.log(
+      'info',
+      selectionsUsed >= MOMO_DYNAMIC_TEAM_LIMIT
+        ? `🫧 【队友退场】${fallen.name} 已离开战场，${momo.name} 的认主次数已经用尽，会在当前结算完成后解除队伍并独自战斗。`
+        : `🫧 【队友退场】${fallen.name} 已离开战场，${momo.name} 会在当前结算完成后重新抽选队友。`,
+      {
+        actorId: momo.id,
+        actorName: momo.name,
+        targetIds: [fallen.id],
+      },
+    );
   });
 }
 
@@ -405,7 +435,17 @@ export function applyMomoCaptainDamageRewards(
     const joyHealed = joyStacks > 0
       ? healFighter(attacker, Math.floor(actualDamage * joyStacks / 100), runtime.log)
       : 0;
-    const momoHealed = healFighter(momo, Math.floor(actualDamage * MOMO_CAPTAIN_HEAL_RATIO), runtime.log);
+    const canReturnHealing = canProvideHerobrineSupport(runtime.battleState, attacker, momo);
+    const momoHealed = canReturnHealing
+      ? healFighter(momo, Math.floor(actualDamage * MOMO_CAPTAIN_HEAL_RATIO), runtime.log, {
+          kind: 'direct',
+          sourceId: '舰长联动',
+          healer: attacker,
+        })
+      : 0;
+    if (!canReturnHealing) {
+      runtime.log('info', `⬜ 【单人世界边界】${attacker.name} 的舰长回馈无法越过隔离治疗 ${momo.name}。`);
+    }
     rewards.push({ momo, joyHealed, momoHealed, joyStacks });
   });
   return rewards;
@@ -449,7 +489,15 @@ export function ensureMomoAwakenedSword(runtime: MomoRuntime, momo: Fighter, ann
   });
   applyStatus(momo, { identityId: 'MOMO_AWAKENED_SWORD', attribution: { effectSourceId: momo.id } });
   if (announceWay) {
-    runtime.log('buff', `⚔️ 【way？！】${momo.name} 手中没有醒剑，三阶段权能直接生成【醒剑】，攻击大幅提高！`);
+    runtime.log(
+      'buff',
+      `⚔️ 【way？！】${momo.name} 手中没有醒剑，三阶段权能直接生成【醒剑】，攻击大幅提高！`,
+      {
+        actorId: momo.id,
+        actorName: momo.name,
+        targetIds: [momo.id],
+      },
+    );
   }
   return true;
 }
@@ -463,7 +511,15 @@ export function grantMomoSword(runtime: MomoRuntime, momo: Fighter): 'village' |
     return 'awakened';
   }
   applyStatus(momo, { identityId: 'MOMO_VILLAGE_SWORD', attribution: { effectSourceId: momo.id } });
-  runtime.log('buff', `🗡️ 【SWORD VENT】无双龙为 ${momo.name} 降下【村好剑】，攻击小幅提高。`);
+  runtime.log(
+    'buff',
+    `🗡️ 【SWORD VENT】无双龙为 ${momo.name} 降下【村好剑】，攻击小幅提高。`,
+    {
+      actorId: momo.id,
+      actorName: momo.name,
+      targetIds: [momo.id],
+    },
+  );
   return 'village';
 }
 
@@ -506,7 +562,15 @@ export function registerMomoRiderKick(runtime: MomoRuntime, momo: Fighter, skill
   const state = ensureMomoState(momo);
   if (state.phase >= 3) return state.riderKickCount;
   state.riderKickCount = Math.min(MOMO_RIDER_KICKS_TO_PHASE_THREE, state.riderKickCount + 1);
-  runtime.log('buff', `🦇 【骑士踢计数】${momo.name} 使用【${skillName}】，进度 ${state.riderKickCount}/${MOMO_RIDER_KICKS_TO_PHASE_THREE}（无论命中与否均计数）。`);
+  runtime.log(
+    'buff',
+    `🦇 【骑士踢计数】${momo.name} 使用【${skillName}】，进度 ${state.riderKickCount}/${MOMO_RIDER_KICKS_TO_PHASE_THREE}（无论命中与否均计数）。`,
+    {
+      actorId: momo.id,
+      actorName: momo.name,
+      targetIds: [momo.id],
+    },
+  );
   if (state.riderKickCount >= MOMO_RIDER_KICKS_TO_PHASE_THREE) {
     enterMomoPhaseThree(runtime, momo, '累计使用 7 次骑士踢');
   }
@@ -547,11 +611,21 @@ function consumeToxicMeal(runtime: MomoRuntime, momo: Fighter, food: Fighter | u
     bypassOwlIncomingModifier: true,
     bypassShields: true,
     suppressOwlCooperation: true,
+    deferTransform: true,
   };
   const actual = runtime.applyDamage(momo, cost, 'momo_cost', true, momo, options);
+  runtime.flushDeferredDamageEvents(momo, 'mitigation');
+  runtime.log(
+    'poison',
+    `🍚 【这饭……有毒……】${momo.name} ${reason}，损失 ${actual} 点生命并获得 3 层中毒！`,
+    {
+      actorId: momo.id,
+      actorName: momo.name,
+      targetIds: [momo.id],
+    },
+  );
   if (actual > 0 || (momo.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(momo);
   addThreePoisonStacks(momo);
-  runtime.log('poison', `🍚 【这饭……有毒……】${momo.name} ${reason}，损失 ${actual} 点生命并获得 3 层中毒！`);
   if (momo.currentHp <= 0 && !momo.isDead && !momo.isDeadAnnounced) {
     runtime.markDefeated(momo, { message: `💀 【这饭……有毒……】${momo.name} 吃完后中毒倒下！`, awardKill: false });
   }
@@ -570,10 +644,26 @@ export function tryMomoStealYuzuMeal(runtime: MomoRuntime, yuzu: Fighter): Fight
   const yuzuPower = Math.max(1, getEffectiveCombatStat(yuzu, 'wis') + getEffectiveCombatStat(yuzu, 'spd'));
   const winChance = Math.max(0.3, Math.min(0.7, momoPower / (momoPower + yuzuPower)));
   if (Math.random() >= winChance) {
-    runtime.log('info', `🥄 【拼好饭争夺】${momo.name} 冲来和 ${yuzu.name} 拼点失败，拼好饭仍归柚子。`);
+    runtime.log(
+      'info',
+      `🥄 【拼好饭争夺】${momo.name} 冲来和 ${yuzu.name} 拼点失败，拼好饭仍归柚子。`,
+      {
+        actorId: momo.id,
+        actorName: momo.name,
+        targetIds: [yuzu.id],
+      },
+    );
     return undefined;
   }
-  runtime.log('skill', `🥄 【拼好饭争夺】${momo.name} 拼点成功，在 ${yuzu.name} 拾取前抢走了拼好饭；柚子的勺子攻击仍会继续！`);
+  runtime.log(
+    'skill',
+    `🥄 【拼好饭争夺】${momo.name} 拼点成功，在 ${yuzu.name} 拾取前抢走了拼好饭；柚子的勺子攻击仍会继续！`,
+    {
+      actorId: momo.id,
+      actorName: momo.name,
+      targetIds: [yuzu.id],
+    },
+  );
   consumeToxicMeal(runtime, momo, undefined, `从 ${yuzu.name} 手中抢走拼好饭并吃下`);
   return momo;
 }
@@ -590,10 +680,11 @@ export function processMomoActorTurnEnd(runtime: MomoRuntime, actor: Fighter, pe
 export function cleanseMomoCaptains(runtime: MomoRuntime, momo: Fighter): number {
   let removed = 0;
   activeMomoCaptains(runtime, momo, true).forEach((captain) => {
-    removed += runtime.dispelStatusEffects(captain, {
+    const result = runtime.dispelStatusEffects(captain, {
       strength: 'normal',
       direction: 'negative',
-    }).removed.length;
+    });
+    removed += new Set(result.removed.map(statusPresentationGroupKey)).size;
   });
   return removed;
 }

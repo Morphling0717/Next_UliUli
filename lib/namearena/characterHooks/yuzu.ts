@@ -35,6 +35,7 @@ function asYuzuRuntime(runtime: CharacterHookRuntime): YuzuRuntime {
   return {
     fighters: runtime.fighters,
     turnCount: runtime.turnCount,
+    battleState: runtime.battleState,
     getTeamId: runtime.getTeamId,
     isActiveCombatant: runtime.isActiveCombatant,
     log: runtime.log,

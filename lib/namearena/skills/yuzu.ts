@@ -60,6 +60,7 @@ function yuzuRuntime(ctx: SkillContext): YuzuRuntime {
     fighters: ctx.fighters,
     turnCount: ctx.turnCount,
     largeRound: ctx.largeRound,
+    battleState: ctx.battleState,
     getTeamId: ctx.getTeamId,
     isActiveCombatant: isActive,
     log: ctx.log,
@@ -201,6 +202,11 @@ function calculateYuzuHitDamage(ctx: SkillContext, target: Fighter, plan: YuzuAt
 function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon): void {
   const healRatio = weapon.selfHealMaxHpRatio ?? 0;
   if (healRatio <= 0) return;
+  const selfMetadata = {
+    actorId: ctx.user.id,
+    actorName: ctx.user.name,
+    targetIds: [ctx.user.id],
+  };
 
   const momoRuntime: MomoRuntime = {
     fighters: ctx.fighters,
@@ -208,7 +214,7 @@ function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon):
     turnCount: ctx.turnCount,
     getTeamId: ctx.getTeamId,
     isActiveCombatant: (fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0,
-    log: (type, text, metadata) => ctx.log(type, text, metadata),
+    log: (type, text, metadata) => ctx.log(type, text, metadata ?? selfMetadata),
     syncHpPct: (fighter) => {
       fighter.hpPct = fighter.maxHp > 0 ? fighter.currentHp / fighter.maxHp : 0;
     },
@@ -225,15 +231,15 @@ function applyYuzuPreAttackWeaponEffects(ctx: SkillContext, weapon: YuzuWeapon):
     kind: 'direct',
     sourceId: '拼好饭',
     healer: ctx.user,
-  }, ctx.log);
+  }, (type, text) => ctx.log(type, text, selfMetadata));
   if (healing.actual > 0) {
-    ctx.log('heal', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，恢复 ${healing.actual} 点生命（按最大生命的 ${Math.round(healRatio * 100)}% 计算），随后继续攻击！`);
+    ctx.log('heal', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，恢复 ${healing.actual} 点生命（按最大生命的 ${Math.round(healRatio * 100)}% 计算），随后继续攻击！`, selfMetadata);
   } else if (healing.outcome === 'blocked') {
-    ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但治疗被完全阻止，随后继续攻击！`);
+    ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但治疗被完全阻止，随后继续攻击！`, selfMetadata);
   } else {
-    ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但生命已满，随后继续攻击！`);
+    ctx.log('info', `🥄 【拼好饭】${ctx.user.name} 抽出勺子，马上拾取一份拼好饭，但生命已满，随后继续攻击！`, selfMetadata);
   }
-  consumeOwlFoodForYuzu(ctx.fighters, ctx.user, (type, text) => ctx.log(type, text));
+  consumeOwlFoodForYuzu(ctx.fighters, ctx.user, (type, text) => ctx.log(type, text, selfMetadata));
 }
 
 type YuzuHitResult = {
@@ -266,6 +272,10 @@ function executeYuzuHit(
     respectDefenses: true,
   };
   const actual = ctx.applyDamage(target, amount + fatigueBonus, 'skill', false, ctx.user, options);
+  if (options.targetWithdrawnDuringDamage) {
+    ctx.flushDeferredDamageEvents?.();
+    return { canContinue: isActive(ctx.user), hitMarkedTarget: false };
+  }
   const redirectKind = getDamageRedirectKind(options);
   const redirected = redirectKind !== null;
   const resolvedActual = getResolvedDamageTotal(actual, options);
@@ -360,11 +370,20 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
   for (let i = 0; i < plan.hits; i += 1) {
     const targetSelection = i === 0 ? firstTargetSelection : chooseYuzuTarget(ctx, plan);
     if (!targetSelection) {
-      ctx.log('info', `🪞 【${plan.actionName}】镜界里已经找不到可以攻击的目标。`);
+      ctx.log(
+        'info',
+        `🪞 【${plan.actionName}】镜界里已经找不到可以攻击的目标。`,
+        {
+          actorId: ctx.user.id,
+          actorName: ctx.user.name,
+          targetIds: [],
+        },
+      );
       registerMarkedSkillIfNeeded();
       return true;
     }
     const { target, protectedTarget } = targetSelection;
+    ctx.setOffensiveTarget(protectedTarget ?? target);
     if (protectedTarget) {
       const interceptionKey = `${protectedTarget.id}:${target.id}`;
       if (!loggedPuppetInterceptions.has(interceptionKey)) {
@@ -372,14 +391,35 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
         const markText = ctx.user.yuzuMarkedTargetId === protectedTarget.id
           ? '镜界标记仍保留在宿主身上，'
           : '';
-        ctx.log('info', `🛡️ 【傀儡援护】${target.name} 挡在 ${protectedTarget.name} 身前，${markText}${ctx.user.name} 的【${plan.actionName}】先由傀儡承受！`);
+        ctx.log(
+          'info',
+          `🛡️ 【傀儡援护】${target.name} 挡在 ${protectedTarget.name} 身前，${markText}${ctx.user.name} 的【${plan.actionName}】先由傀儡承受！`,
+          {
+            actorId: ctx.user.id,
+            actorName: ctx.user.name,
+            targetIds: [target.id],
+          },
+        );
       }
     }
     const forcedWeapon = plan.furioso && i === plan.hits - 1 ? 'scythe' : undefined;
     const targetJobBeforeHit = target.job;
     const hitResult = executeYuzuHit(ctx, target, protectedTarget, plan, i, forcedWeapon, fatigueBonus);
-    if (i < plan.hits - 1 && isActive(target) && target.job !== targetJobBeforeHit) {
-      ctx.log('info', `🪞 【镜界追击】${target.name} 在本击结算中重构为【${target.jobData.name}】，${ctx.user.name} 重新确认目标后继续后续连击！`);
+    if (
+      hitResult.canContinue &&
+      i < plan.hits - 1 &&
+      isActive(target) &&
+      target.job !== targetJobBeforeHit
+    ) {
+      ctx.log(
+        'info',
+        `🪞 【镜界追击】${target.name} 在本击结算中重构为【${target.jobData.name}】，${ctx.user.name} 重新确认目标后继续后续连击！`,
+        {
+          actorId: ctx.user.id,
+          actorName: ctx.user.name,
+          targetIds: [target.id],
+        },
+      );
     }
     if (hitResult.hitMarkedTarget) markedTargetHitThisSkill = protectedTarget ?? target;
     if (!hitResult.canContinue) {
@@ -393,7 +433,15 @@ function executeYuzuAttackPlan(ctx: SkillContext, plan: YuzuAttackPlan): boolean
   if (plan.furioso) {
     ctx.user.yuzuMarkedHitCount = 0;
     ctx.user.yuzuFuriosoReady = false;
-    ctx.log('info', `🪞 【Furioso-Replica】${ctx.user.name} 的终幕复写结束，镜界计数重新归零。`);
+    ctx.log(
+      'info',
+      `🪞 【Furioso-Replica】${ctx.user.name} 的终幕复写结束，镜界计数重新归零。`,
+      {
+        actorId: ctx.user.id,
+        actorName: ctx.user.name,
+        targetIds: [ctx.user.id],
+      },
+    );
   }
   return true;
 }

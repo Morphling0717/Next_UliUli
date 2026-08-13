@@ -1,6 +1,7 @@
 import { isActiveCombatant, isWinningCombatant, resolveHealing, setCurrentHp } from './combatState';
 import type {
   BattleLogMetadata,
+  BattleState,
   BattleEngineCore,
   DamageApplicationOptions,
   DefeatOptions,
@@ -21,13 +22,11 @@ import {
   removeEffects,
 } from './statusSystem';
 import { getStatusIdentityIdsByTag } from './statusRegistry';
+import { configureNpcUnit, setNpcCombatCapabilities } from './npcCombat';
 
 export const ORIGINIUM_DISEASE_STATUS = 'ORIGINIUM_DISEASE';
 export const PURUISAISHI_SETTLEMENT_MESSAGE = '我会一直看着你，预言家';
 
-const PURUISAISHI_SPAWN_START_TURN = 30;
-const PURUISAISHI_SPAWN_END_TURN = 260;
-const PURUISAISHI_SPAWN_CHANCE = 0.0015;
 const PURUISAISHI_PHASE_TWO_TURN = 50;
 const PURUISAISHI_PHASE_TWO_SHIELD = 16000;
 const PURUISAISHI_PHASE_TWO_STACKS = 4;
@@ -85,6 +84,7 @@ export const ORIGINIUM_MAX_STACKS = 80;
 export interface PuruisaishiRuntime {
   fighters: Fighter[];
   core: BattleEngineCore;
+  battleState?: BattleState;
   turnCount: number;
   largeRound?: number;
   completedLargeRound?: number;
@@ -104,13 +104,14 @@ export interface PuruisaishiRuntime {
     options?: DamageApplicationOptions,
   ) => number;
   flushDeferredDamageEvents?: (fighter: Fighter, phase?: 'mitigation' | 'all') => void;
+  deferDamageAftermath?: (fighter: Fighter, action: () => void) => void;
   markDefeated: (target: Fighter, options?: DefeatOptions) => boolean;
   onPuruisaishiPhaseTwoStarted?: (puruisaishi: Fighter) => void;
   onPuruisaishiRetreat?: (puruisaishi: Fighter, reason: string) => boolean;
   canApplyOriginiumInfection?: (target: Fighter, reason: string) => boolean;
 }
 
-type PuruisaishiSpawnRuntime = Pick<PuruisaishiRuntime, 'fighters' | 'core' | 'turnCount' | 'log' | 'largeRound'>;
+type PuruisaishiSpawnRuntime = Pick<PuruisaishiRuntime, 'fighters' | 'core' | 'battleState' | 'turnCount' | 'log' | 'largeRound'>;
 
 function createNpcJob(name: string, icon: string): JobDefinition {
   return {
@@ -138,7 +139,7 @@ function npcId(runtime: Pick<PuruisaishiRuntime, 'core' | 'fighters'>): string {
 
 function makeNpcBase(runtime: Pick<PuruisaishiRuntime, 'core' | 'fighters'>, name: string, jobName: string, icon: string, hp: number): Fighter {
   const jobData = createNpcJob(jobName, icon);
-  return {
+  return configureNpcUnit({
     id: npcId(runtime),
     name,
     displayName: name,
@@ -161,10 +162,7 @@ function makeNpcBase(runtime: Pick<PuruisaishiRuntime, 'core' | 'fighters'>, nam
     statuses: [],
     stats: { kills: 0, dmgDealt: 0, dmgTaken: 0 },
     teamId: 'PURUISAISHI_EVENT',
-    isNpc: true,
-    cannotWin: true,
-    cannotAct: true,
-  };
+  }, 'puruisaishi', 'puruisaishi');
 }
 
 function createPuruisaishi(runtime: Pick<PuruisaishiRuntime, 'core' | 'fighters' | 'turnCount'>): Fighter {
@@ -174,6 +172,11 @@ function createPuruisaishi(runtime: Pick<PuruisaishiRuntime, 'core' | 'fighters'
   puruisaishi.puruisaishiEnteredTurn = runtime.turnCount;
   puruisaishi.puruisaishiAppeared = true;
   puruisaishi.untargetableUntilTurn = Number.MAX_SAFE_INTEGER;
+  configureNpcUnit(puruisaishi, 'puruisaishi', 'puruisaishi', {
+    targetable: false,
+    aoeVulnerable: false,
+    blocksSettlement: true,
+  });
   return puruisaishi;
 }
 
@@ -185,6 +188,7 @@ function createAnanna(runtime: Pick<PuruisaishiRuntime, 'core' | 'fighters' | 't
   ananna.originiumSpawnTurn = runtime.turnCount;
   ananna.originiumGrowthRoundActorIds = [];
   ananna.untargetableUntilTurn = runtime.turnCount + ANANNA_UNTARGETABLE_TURNS;
+  configureNpcUnit(ananna, 'puruisaishi', 'originium_core');
   return ananna;
 }
 
@@ -199,6 +203,7 @@ function createOriginiumCrystal(runtime: PuruisaishiRuntime, parentId: string): 
   crystal.originiumSpawnLargeRound = runtime.largeRound ?? 1;
   crystal.originiumGrowthRoundActorIds = [];
   crystal.untargetableUntilTurn = runtime.turnCount + CRYSTAL_UNTARGETABLE_TURNS;
+  configureNpcUnit(crystal, 'puruisaishi', 'originium_crystal');
   return crystal;
 }
 
@@ -244,30 +249,23 @@ export function hasPuruisaishiAppeared(fighters: Fighter[]): boolean {
   return fighters.some((fighter) => fighter.isPuruisaishi || fighter.puruisaishiAppeared);
 }
 
-export function shouldTrySpawnPuruisaishi(runtime: PuruisaishiRuntime): boolean {
-  if (runtime.fighters.some((fighter) => fighter.isPuruisaishi || fighter.puruisaishiAppeared)) return false;
-  if (runtime.turnCount < PURUISAISHI_SPAWN_START_TURN || runtime.turnCount > PURUISAISHI_SPAWN_END_TURN) return false;
-  if (activeWinningParticipants(runtime).length < 5) return false;
-  return Math.random() < PURUISAISHI_SPAWN_CHANCE;
-}
-
 export function spawnPuruisaishiEvent(runtime: PuruisaishiSpawnRuntime, reason = '源石映像干涉战场'): Fighter {
   const existing = runtime.fighters.find((fighter) => fighter.isPuruisaishi);
   if (existing) return existing;
 
   const puruisaishi = createPuruisaishi(runtime);
+  if (runtime.battleState) {
+    runtime.battleState.majorNpcEvent = {
+      kind: 'puruisaishi',
+      startedTurn: runtime.turnCount,
+    };
+  }
   runtime.fighters.push(puruisaishi);
   const ananna = createAnanna(runtime, puruisaishi);
   runtime.fighters.push(ananna);
   runtime.log('system', `🜲 【普瑞赛斯】${reason}，${puruisaishi.name} 出现在战场边缘。她不在参赛名单中，不会攻击，也不会成为胜利者。`);
   runtime.log('skill', `🜚 【阿喃那】最初的源石在 ${puruisaishi.name} 身旁生成；5 回合内无法被选为攻击目标，并将开始增殖源石结晶。`);
   return puruisaishi;
-}
-
-export function trySpawnPuruisaishiEvent(runtime: PuruisaishiRuntime): boolean {
-  if (!shouldTrySpawnPuruisaishi(runtime)) return false;
-  spawnPuruisaishiEvent(runtime);
-  return true;
 }
 
 export function getOriginiumInfectionStacks(target: Fighter): number {
@@ -471,6 +469,11 @@ function processPuruisaishiPhase(runtime: PuruisaishiRuntime): void {
         puruisaishi.puruisaishiPhase = 2;
         puruisaishi.puruisaishiPhaseTwoStartedTurn = phaseTwoTurn;
         puruisaishi.untargetableUntilTurn = undefined;
+        setNpcCombatCapabilities(puruisaishi, {
+          targetable: true,
+          aoeVulnerable: true,
+          blocksSettlement: true,
+        });
         shield = Math.max(getPuruisaishiBarrierTotal(puruisaishi), PURUISAISHI_PHASE_TWO_SHIELD);
         grantBarrier(puruisaishi, shield, {
           identityId: PURUISAISHI_BARRIER_IDENTITY,
@@ -598,6 +601,11 @@ function processOriginiumDot(runtime: PuruisaishiRuntime): void {
 
 export function processPuruisaishiRoundEnd(runtime: PuruisaishiRuntime): void {
   if (!runtime.fighters.some((fighter) => fighter.isPuruisaishi)) return;
+  const puruisaishi = activePuruisaishi(runtime);
+  if (puruisaishi && activeWinningParticipants(runtime).length === 0) {
+    clearAllOriginiumAndRetreat(runtime, puruisaishi, '场上已无存活参赛者');
+    return;
+  }
   processPuruisaishiPhase(runtime);
   processPuruisaishiPhaseTwoPulse(runtime);
   processAnannaGrowth(runtime);
@@ -748,7 +756,22 @@ export function noteOriginiumDamageLanded(
     const reason = source === 'transfer'
       ? `${options?.actionName ? `【${options.actionName}】` : '攻击'}被随机恶作剧转移至 ${target.name}`
       : `攻击 ${target.name}`;
-    addOriginiumInfection(runtime, attacker, CRYSTAL_ATTACK_INFECTION_STACKS, reason);
+    const gained = addOriginiumInfection(
+      runtime,
+      attacker,
+      CRYSTAL_ATTACK_INFECTION_STACKS,
+      reason,
+      { deferDefeat: true },
+    );
+    if (gained > 0 && getOriginiumInfectionStacks(attacker) >= ORIGINIUM_MAX_STACKS) {
+      const defeat = () => runtime.markDefeated(attacker, {
+        message: `💀 【矿石病】${attacker.name} 的矿石病达到 80 层，身体被源石彻底吞没！`,
+        causeName: '矿石病达到 80 层',
+        awardKill: false,
+      });
+      if (runtime.deferDamageAftermath) runtime.deferDamageAftermath(target, defeat);
+      else defeat();
+    }
   }
 }
 
@@ -792,8 +815,12 @@ export function grantOriginiumCrystalBreakReward(
   runtime.log(healing.actual > 0 || reduced > 0 ? 'heal' : 'info', `◆ 【源石破拆】${beneficiary.name} 摧毁 ${crystal.name}，从崩解源石中争取到喘息：${recovery}。`);
 }
 
-export function clearAllOriginiumAndRetreat(runtime: PuruisaishiRuntime, puruisaishi: Fighter): void {
-  if (runtime.onPuruisaishiRetreat?.(puruisaishi, '普瑞赛斯护盾归零')) return;
+export function clearAllOriginiumAndRetreat(
+  runtime: PuruisaishiRuntime,
+  puruisaishi: Fighter,
+  reason = '普瑞赛斯护盾归零',
+): void {
+  if (runtime.onPuruisaishiRetreat?.(puruisaishi, reason)) return;
 
   runtime.fighters.forEach((fighter) => {
     if (hasIdentity(fighter, ORIGINIUM_DISEASE_STATUS)) {
@@ -810,7 +837,17 @@ export function clearAllOriginiumAndRetreat(runtime: PuruisaishiRuntime, puruisa
   setCurrentHp(puruisaishi, 0);
   puruisaishi.isDead = true;
   puruisaishi.isDeadAnnounced = true;
-  runtime.log('system', `🜲 【普瑞赛斯退场】${puruisaishi.name} 的护盾归零，清除全场矿石病层数后离开战场。`);
+  setNpcCombatCapabilities(puruisaishi, {
+    actionMode: 'none',
+    visible: false,
+    targetable: false,
+    aoeVulnerable: false,
+    blocksSettlement: false,
+  });
+  if (runtime.battleState?.majorNpcEvent?.kind === 'puruisaishi') {
+    runtime.battleState.majorNpcEvent.completed = true;
+  }
+  runtime.log('system', `🜲 【普瑞赛斯退场】${reason}，${puruisaishi.name} 清除全场矿石病与源石单位后离开战场。`);
 }
 
 export function isOriginiumNpc(fighter: Fighter): boolean {

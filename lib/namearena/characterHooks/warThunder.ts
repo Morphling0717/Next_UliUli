@@ -4,8 +4,9 @@ import type { Fighter } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 
 import { isSelectableTargetFor } from '../targeting';
-import { applyStatus, hasIdentity, removeBarriers, removeEffects } from '../statusSystem';
+import { applyStatus, hasIdentity } from '../statusSystem';
 import { getStatusIdentityIdsByTag } from '../statusRegistry';
+import { clearReviveEffects } from '../statusMechanics';
 import { getSurtrTacticalHpPct } from '../surtrMechanics';
 
 const WT_BACKUP_COST = 7;
@@ -220,8 +221,7 @@ export const warThunderHook: CharacterHook = {
         runtime.syncHpPct(fighter);
       },
     });
-    removeEffects(fighter, { reason: 'revive' });
-    removeBarriers(fighter);
+    clearReviveEffects(fighter);
     applyStatus(fighter, { identityId: 'WT_ERA' });
     applyStatus(fighter, { identityId: 'INVUL', remainingTurns: 1, attribution: { effectSourceId: 'war_thunder_backup_vehicle' } });
     applyStatus(fighter, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'war_thunder_backup_vehicle' } });

@@ -18,7 +18,16 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     dispelSpecs: [{ strength: 'absolute', direction: 'negative' }],
     condition: (u) => u.hpPct < 0.3,
     text: '🔄 【神权更迭】！{USER} 的水流躯体剧烈沸腾（绝对驱散可清除的负面状态）并瞬间重组！牺牲了部分速度，重塑了 {VAL} 点生命屏障！',
-    onExecute: (ctx) => { applyPermanentStatBuff(ctx.user, { spd: 0.5 }); return false; },
+    onExecute: (ctx) => {
+      ctx.dispelStatusEffects(ctx.user, {
+        strength: 'absolute',
+        direction: 'all',
+        includeIndependent: true,
+        identityIds: ['HEROBRINE_WITNESS'],
+      });
+      applyPermanentStatBuff(ctx.user, { spd: 0.5 });
+      return false;
+    },
   },
   abyssal_prison: {
     name: '深渊水牢', tag: SKILL_TAGS.MAG, mult: 1.5,
@@ -43,17 +52,20 @@ export const morphlingSkills: Record<string, SkillDefinition> = {
     },
   },
   apocalyptic_flood: {
-    name: '神罚·灭世大洪水', tag: SKILL_TAGS.MAG, mult: 4.0, ignoreDef: true,
+    name: '神罚·灭世大洪水', tag: SKILL_TAGS.MAG, mult: 4.0, ignoreDef: true, herobrineCopyTargetCap: 3,
     text: '🌊🌊🌊 【神罚·灭世大洪水】！天地倒转，万物归虚！{USER} 掀起吞噬战场的狂潮，先将 {TARGET} 卷入洪峰，造成 {VAL} 点真实伤害！',
     afterExecute: (ctx, dmg) => {
       const floodDamage = ctx.preMitigationDamage ?? dmg;
       const otherEnemies = (ctx.currentTargets ?? []).filter((f) => f.id !== ctx.target.id && isActiveCombatant(f));
       for (const e of otherEnemies) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
+        if (!ctx.canOffensivelyTarget(e)) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '神罚·灭世大洪水' };
-        const actualDmg = ctx.applyDamage(e, floodDamage, 'skill', false, ctx.user, damageOptions);
-        if (damageOptions.targetWithdrawnDuringDamage) continue;
+        const actualDmg = ctx.applyDamage(e, floodDamage, 'skill', true, ctx.user, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          ctx.flushDeferredDamageEvents?.();
+          continue;
+        }
         if (damageOptions.redirectedByJoker) {
           const redirectedDamage = damageOptions.redirectedJokerDamage ?? 0;
           ctx.log('info', redirectedDamage > 0

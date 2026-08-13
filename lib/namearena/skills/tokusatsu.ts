@@ -48,6 +48,7 @@ function enemiesOf(ctx: SkillContext, user = ctx.user): Fighter[] {
     isSelectableTargetFor({
       fighters: ctx.fighters,
       turnCount: ctx.turnCount,
+      battleState: ctx.battleState,
       getTeamId: ctx.getTeamId,
       isActiveCombatant: isActive,
     }, user, fighter),
@@ -125,8 +126,10 @@ function applyNamedDamageDetailed(
   const damageOptions: DamageApplicationOptions = {
     actionName,
     respectDefenses,
+    deferStatusAftermath: true,
   };
   const actual = ctx.applyDamage(target, amount, 'skill', trueDamage, ctx.user, damageOptions);
+  if (damageOptions.targetWithdrawnDuringDamage) ctx.flushDeferredDamageEvents?.();
   const redirectKind = getDamageRedirectKind(damageOptions);
   const redirectedActual = getResolvedDamageTotal(actual, damageOptions);
   return {
@@ -257,7 +260,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         markIfDefeated(ctx, ctx.target, '黑气斩波');
       }
       for (const enemy of splashTargets) {
-        if (!isActive(enemy)) continue;
+        if (!isActive(enemy) || !ctx.canOffensivelyTarget(enemy)) continue;
         const splashResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * 0.3), '黑气斩波余波', true);
         if (!userCanContinue(ctx)) return true;
         if (!splashResult.redirected && !splashResult.withdrawnDuringDamage) {
@@ -287,9 +290,15 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       ctx.log('skill', `⚔️ 【悲愿居合】${ctx.user.name} 把濒死压力压进刀锋，斩向 ${ctx.target.name}！`, tokusatsuVisual('toku_adversity_flash', ctx.user, [ctx.target]));
       const damageResult = applyNamedDamageDetailed(ctx, ctx.target, base, '悲愿居合', true);
       const actual = damageResult.actual;
+      const effectiveDamage = damageResult.redirected ? damageResult.redirectedActual : actual;
+      const sharedHit = (
+        damageResult.redirectKind === 'momo' ||
+        damageResult.redirectKind === 'yuzu'
+      ) && damageResult.redirectedActual > 0;
       if (!userCanContinue(ctx)) return true;
-      const healing = healAndSync(ctx, ctx.user, Math.floor(actual * 0.25));
-      const recovery = actual > 0
+      if (damageResult.withdrawnDuringDamage) return true;
+      const healing = healAndSync(ctx, ctx.user, Math.floor(effectiveDamage * 0.25));
+      const recovery = effectiveDamage > 0
         ? healing.actual > 0
           ? `${ctx.user.name} 借悲愿回流恢复 ${healing.actual} 点生命`
           : healing.outcome === 'blocked'
@@ -301,11 +310,19 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
           ? `⚔️ 【悲愿居合】${ctx.target.name} 实际承受 ${actual} 点真实伤害，${recovery}！`
           : damageResult.connected
             ? `⚔️ 【悲愿居合】居合斩成功命中 ${ctx.target.name}；但【黄昏余命】期间未再损失生命，${recovery}！`
-          : `⚔️ 【悲愿居合】居合斩被 ${ctx.target.name} 化解，没有造成生命伤害，${recovery}！`);
-        ctx.flushDeferredDamageEvents?.();
-        if (isActive(ctx.target) && !hasIdentity(ctx.target, 'WEAK') && damageResult.connected) {
-          if (ctx.applyStatus(ctx.target, { identityId: 'WEAK', remainingTurns: 2 })) ctx.log('debuff', `⚔️ 【悲愿居合】${ctx.target.name} 被悲愿压制，虚弱 2 回合！`);
-        }
+            : `⚔️ 【悲愿居合】居合斩被 ${ctx.target.name} 化解，没有造成生命伤害，${recovery}！`);
+      } else if (sharedHit) {
+        ctx.log(
+          healing.actual > 0 ? 'heal' : 'skill',
+          `⚔️ 【悲愿居合】${ctx.target.name} 将伤害分摊后，其队友合计实际承受 ${damageResult.redirectedActual} 点伤害，${recovery}！`,
+        );
+      }
+      ctx.flushDeferredDamageEvents?.();
+      if (sharedHit) ctx.suppressOnHitStatuses = false;
+      if (isActive(ctx.target) && !hasIdentity(ctx.target, 'WEAK') && (damageResult.connected || sharedHit)) {
+        if (ctx.applyStatus(ctx.target, { identityId: 'WEAK', remainingTurns: 2 })) ctx.log('debuff', `⚔️ 【悲愿居合】${ctx.target.name} 被悲愿压制，虚弱 2 回合！`);
+      }
+      if (!damageResult.redirected) {
         markIfDefeated(ctx, ctx.target, '悲愿居合');
       }
       return true;
@@ -372,6 +389,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const damageResult = applyNamedDamageDetailed(ctx, ctx.target, base, '能量粉碎', true);
       const actual = damageResult.actual;
       if (!userCanContinue(ctx)) return true;
+      if (damageResult.withdrawnDuringDamage) return true;
       if (damageResult.redirected) return true;
       const removedStatus = damageResult.connected ? removeOnePositiveStatus(ctx, ctx.target) : null;
       const removedName = removedStatus ? buildStatusPresentationMember(removedStatus).name : '';
@@ -410,7 +428,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     },
   },
   bujin_monster_combo: {
-    name: '武神怪兽连斩', tag: SKILL_TAGS.PHYS, visualEffect: 'toku_monster_combo',
+    name: '武神怪兽连斩', tag: SKILL_TAGS.PHYS, visualEffect: 'toku_monster_combo', herobrineCopyTargetCap: 3,
     spellBlockMode: 'perHit',
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN',
     text: '🗡️ {USER} 在怪兽形态下连续挥动武神之刃！',
@@ -421,9 +439,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const base = Math.floor(ctx.getEffectiveStat(ctx.user, 'atk') * 1.1 + ctx.getEffectiveStat(ctx.user, 'spd') * 0.22);
       ctx.log('skill', `🗡️ 【武神怪兽连斩】${ctx.user.name} 以怪兽力量拖动武神之刃，连续斩击 ${hits.map((fighter) => fighter.name).join('、')}！`, tokusatsuVisual('toku_monster_combo', ctx.user, hits));
       for (const [index, enemy] of hits.entries()) {
-        if (!isActive(enemy)) continue;
+        if (!isActive(enemy) || !ctx.canOffensivelyTarget(enemy)) continue;
         const damageResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * (index === 0 ? 1 : 0.72)), '武神怪兽连斩', true);
         if (!userCanContinue(ctx)) return true;
+        if (damageResult.withdrawnDuringDamage) continue;
         if (!damageResult.redirected) {
           ctx.log(damageResult.connected ? 'skill' : 'info', damageResult.actual > 0
             ? `🗡️ 第 ${index + 1} 斩命中 ${enemy.name}，实际造成 ${damageResult.actual} 点真实伤害！`
@@ -438,7 +457,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
     },
   },
   monster_roar: {
-    name: '怪兽咆哮', tag: SKILL_TAGS.MAG, visualEffect: 'toku_monster_roar',
+    name: '怪兽咆哮', tag: SKILL_TAGS.MAG, visualEffect: 'toku_monster_roar', herobrineCopyTargetCap: 3,
     spellBlockMode: 'perHit',
     condition: (u) => !!u.isTokusatsu && u.job === 'MIRACLE_MONSTER_BUJIN',
     text: '📣 {USER} 发出怪兽咆哮，炼金冲击波席卷全场！',
@@ -452,10 +471,11 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       );
       ctx.log('skill', `📣 【怪兽咆哮】${ctx.user.name} 发出压制性咆哮，炼金冲击波扫过 ${enemies.length} 名敌人！`, tokusatsuVisual('toku_monster_roar', ctx.user, enemies));
       for (const enemy of enemies) {
-        if (!isActive(enemy)) continue;
+        if (!isActive(enemy) || !ctx.canOffensivelyTarget(enemy)) continue;
         const damageResult = applyNamedDamageDetailed(ctx, enemy, base, '怪兽咆哮', true);
         const actual = damageResult.actual;
         if (!userCanContinue(ctx)) return true;
+        if (damageResult.withdrawnDuringDamage) continue;
         if (damageResult.redirected) continue;
         ctx.log(damageResult.connected ? 'skill' : 'info', actual > 0
           ? `📣 咆哮冲击命中 ${enemy.name}，实际造成 ${actual} 点真实伤害！`
@@ -578,7 +598,7 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       const primaryResult = applyNamedDamageDetailed(ctx, ctx.target, base, '彩虹狂热', true, false);
       const primary = primaryResult.actual;
       if (!userCanContinue(ctx)) return true;
-      if (!primaryResult.redirected) {
+      if (!primaryResult.redirected && !primaryResult.withdrawnDuringDamage) {
         ctx.log(primaryResult.connected ? 'crit' : 'info', primary > 0
           ? `🌈 【彩虹狂热】${ctx.target.name} 实际承受 ${primary} 点真实伤害！`
           : primaryResult.connected
@@ -588,10 +608,10 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
         markIfDefeated(ctx, ctx.target, '彩虹狂热');
       }
       for (const enemy of splashTargets) {
-        if (!isActive(enemy)) continue;
+        if (!isActive(enemy) || !ctx.canOffensivelyTarget(enemy)) continue;
         const splashResult = applyNamedDamageDetailed(ctx, enemy, Math.floor(base * 0.18), '彩虹狂热余波', true);
         if (!userCanContinue(ctx)) return true;
-        if (!splashResult.redirected) {
+        if (!splashResult.redirected && !splashResult.withdrawnDuringDamage) {
           ctx.log(splashResult.connected ? 'skill' : 'info', splashResult.actual > 0
             ? `🌈 彩虹列车余波撞上 ${enemy.name}，实际造成 ${splashResult.actual} 点真实伤害！`
             : splashResult.connected
@@ -606,7 +626,15 @@ export const tokusatsuSkills: Record<string, SkillDefinition> = {
       applyStatus(ctx.user, { identityId: 'BKB', remainingTurns: 2, attribution: { effectSourceId: 'tokusatsu_rainbow_fever' } });
       applyStatus(ctx.user, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'tokusatsu_rainbow_fever' } });
       applyStatus(ctx.user, { identityId: 'REGEN', remainingTurns: 4 });
-      ctx.log(healing.outcome === 'blocked' ? 'info' : 'heal', `🌈 【彩虹狂热】彩虹炼金余波回流，${ctx.user.name} ${recoveryText(healing)}${cleanseSuffix(cleanCount)}，并获得彩虹抗性、法术抵挡与再生！`);
+      ctx.log(
+        healing.outcome === 'blocked' ? 'info' : 'heal',
+        `🌈 【彩虹狂热】彩虹炼金余波回流，${ctx.user.name} ${recoveryText(healing)}${cleanseSuffix(cleanCount)}，并获得彩虹抗性、法术抵挡与再生！`,
+        {
+          actorId: ctx.user.id,
+          actorName: ctx.user.name,
+          targetIds: [ctx.user.id],
+        },
+      );
       return true;
     },
   },

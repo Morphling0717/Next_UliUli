@@ -156,6 +156,7 @@ function isCasEligibleTarget(ctx: SkillContext, fighter: SkillContext['target'] 
   return isSelectableTargetFor({
     fighters: ctx.fighters,
     turnCount: ctx.turnCount,
+    battleState: ctx.battleState,
     getTeamId: ctx.getTeamId,
     isActiveCombatant,
   }, ctx.user, fighter);
@@ -167,8 +168,15 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     text: '📻 {USER} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 {USER} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！',
     onExecute: (ctx) => {
       const confused = ctx.applyStatus(ctx.user, { identityId: 'CONFUSED', remainingTurns: 2, effectName: 'D点无线电混乱', attribution: { applierId: ctx.user.id, applierName: ctx.user.name } });
-      const allies = (ctx.fighters ?? []).filter((f) => isActiveCombatant(f) && ctx.getTeamId(f) === ctx.getTeamId(ctx.user));
-      allies.forEach((ally) => applyStatus(ally, { identityId: 'WT_RADIO_MORALE', remainingTurns: 3 }));
+      const allies = (ctx.fighters ?? []).filter(
+        (f) =>
+          isActiveCombatant(f) &&
+          ctx.getTeamId(f) === ctx.getTeamId(ctx.user) &&
+          ctx.canProvideSupport(f),
+      );
+      allies.forEach((ally) => {
+        ctx.applyStatus(ally, { identityId: 'WT_RADIO_MORALE', remainingTurns: 3 });
+      });
       ctx.log('buff', confused
         ? `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n毫无意义的指令让 ${ctx.user.name} 自己陷入了深深的【混乱】，同时己方火力系统莫名振奋（攻击力上升）！`
         : `📻 ${ctx.user.name} 疯狂按T-3-4发送无线电："【保卫D点！】【攻击D点！】"\n控制免疫滤掉了无线电噪声，但己方火力系统仍然受到动员（攻击力上升）！`);
@@ -354,7 +362,7 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
     },
   },
   wt_su30_cas: {
-    name: '苏-30SM2 狂暴轰入', tag: SKILL_TAGS.PHYS, ignoreDef: true,
+    name: '苏-30SM2 狂暴轰入', tag: SKILL_TAGS.PHYS, ignoreDef: true, herobrineCopyTargetCap: 3,
     spellBlockMode: 'perHit',
     condition: (u) => (u.wtSpawnPoints ?? 0) >= (hasMechanic(u, 'AIM') ? WT_PRECISE_CAS_COST : WT_CAS_COST),
     text: '✈️ 【CAS 请求确认】{USER} 呼叫空中支援！一架 苏-30SM2 呼啸而过...\n"全体目光向我看齐！狂暴轰入！！！"',
@@ -387,23 +395,41 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
 
       for (const [index, e] of enemies.entries()) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
+        if (!isCasEligibleTarget(ctx, e)) continue;
         const isPrimary = index === 0;
+        const targetMetadata = {
+          actorId: ctx.user.id,
+          actorName: ctx.user.name,
+          targetIds: [e.id],
+        };
         const invul = findDefenseStatus(e, 'INVUL');
         if (invul) {
-          ctx.log('info', formatInvul(invul, e.name, `${ctx.user.name}的【苏-30SM2空袭】`));
+          ctx.log('info', formatInvul(invul, e.name, `${ctx.user.name}的【苏-30SM2空袭】`), targetMetadata);
           continue;
         }
 
         const spellBlock = consumeSpellBlock(e);
         if (spellBlock) {
-          const healing = resolveHealing(e, Math.floor(e.maxHp * 0.15), {}, ctx.log);
+          const healing = resolveHealing(
+            e,
+            Math.floor(e.maxHp * 0.15),
+            {},
+            (type, text) => ctx.log(type, text, {
+              actorId: e.id,
+              actorName: e.name,
+              targetIds: [e.id],
+            }),
+          );
           const healText = healing.actual > 0
             ? `，并恢复了 ${healing.actual} 点生命`
             : healing.outcome === 'blocked'
               ? '，但附带治疗被完全阻止'
               : '，但生命已满，治疗溢出';
-          ctx.log('info', formatSpellBlock(spellBlock, e.name, `${ctx.user.name}的【苏-30SM2空袭】`, healText));
+          ctx.log(
+            'info',
+            formatSpellBlock(spellBlock, e.name, `${ctx.user.name}的【苏-30SM2空袭】`, healText),
+            targetMetadata,
+          );
           continue;
         }
 
@@ -412,8 +438,15 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
           plannedDmg = Math.max(0, e.currentHp - 1);
         }
 
-        const damageOptions: DamageApplicationOptions = { actionName: '苏-30SM2 洗地' };
+        const damageOptions: DamageApplicationOptions = {
+          actionName: '苏-30SM2 洗地',
+          deferStatusAftermath: true,
+        };
         const actualDmg = ctx.applyDamage(e, plannedDmg, 'skill', true, ctx.user, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          ctx.flushDeferredDamageEvents?.();
+          continue;
+        }
         if (isDamageRedirected(damageOptions)) continue;
         const connected = didDamageConnect(actualDmg, damageOptions);
         const airborneImmune = findDefenseStatus(e, 'BKB') || findDefenseStatus(e, 'INVUL');
@@ -422,13 +455,11 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
         } else if (actualDmg <= 0 && airborneImmune) {
           ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！攻击命中 ${e.name}；【黄昏余命】令其不再损失生命，同时${formatControlBlocked(airborneImmune, e.name, isPrimary ? '击飞效果' : '火力压制效果').replace(/^🟡\s*/, '')}`);
         } else if (actualDmg <= 0) {
-          const controlName = isPrimary ? '击飞' : '火力压制';
-          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！攻击命中 ${e.name}；【黄昏余命】期间未再损失生命，并被【${controlName}】！`);
+          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！攻击命中 ${e.name}；【黄昏余命】期间未再损失生命。`);
         } else if (airborneImmune) {
           ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！${e.name} 承受了 ${actualDmg} 点真实伤害，但${formatControlBlocked(airborneImmune, e.name, isPrimary ? '击飞效果' : '火力压制效果').replace(/^🟡\s*/, '')}`);
         } else {
-          const controlName = isPrimary ? '击飞' : '火力压制';
-          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！${e.name} 承受了 ${actualDmg} 点真实伤害并被【${controlName}】！`);
+          ctx.log('crit', `💥 ${isPrimary ? '主目标精确命中' : '爆风余波波及'}！${e.name} 承受了 ${actualDmg} 点真实伤害！`);
         }
 
         ctx.flushDeferredDamageEvents?.();
@@ -459,7 +490,15 @@ export const warThunderSkills: Record<string, SkillDefinition> = {
       }
       if (hasLaserDesignation) {
         consumeAim(ctx.user);
-        ctx.log('info', `🎯 ${ctx.user.name} 消耗了激光测距坐标，本次 CAS 的精确打击窗口关闭。`);
+        ctx.log(
+          'info',
+          `🎯 ${ctx.user.name} 消耗了激光测距坐标，本次 CAS 的精确打击窗口关闭。`,
+          {
+            actorId: ctx.user.id,
+            actorName: ctx.user.name,
+            targetIds: [ctx.user.id],
+          },
+        );
       }
       ctx.user.wtMarkedTargetId = undefined;
       return true;

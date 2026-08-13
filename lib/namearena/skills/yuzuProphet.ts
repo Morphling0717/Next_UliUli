@@ -10,13 +10,13 @@ export const yuzuProphetSkills: Record<string, SkillDefinition> = {
     name: '你不该存在于此时',
     tag: 'special',
     noDamage: true,
-    text: '🜲 {USER} 从被接管者中指定一人，命令其与绑定柚子拼点并释放技能。',
+    text: '🜲 {USER} 从被接管者中指定一人，命令其按自身规则选择目标并释放技能。',
   },
   yuzu_prophet_wrong_place: {
     name: '你不该存在于此地',
     tag: 'special',
     noDamage: true,
-    text: '🜲 {USER} 连续下达三次召唤物释放指令，每次分别与绑定柚子拼点。',
+    text: '🜲 {USER} 连续下达三次召唤物释放指令，每次均由召唤物正常选技和选敌。',
   },
   yuzu_prophet_shatter: {
     name: '我将击碎',

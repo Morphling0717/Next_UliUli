@@ -210,12 +210,19 @@ export interface DamageApplicationOptions {
   statusHitCount?: number;
   /** Status damage and redistribution must not recursively trigger aftermath mechanics. */
   suppressStatusAftermath?: boolean;
+  /** Let a custom skill publish its direct-hit result before rupture/sinking aftermath resolves. */
+  deferStatusAftermath?: boolean;
+  /** Queue fate, form and direct-status aftermath until the caller has published the authoritative hit result. */
   deferTransform?: boolean;
   actionName?: string;
   respectDefenses?: boolean;
+  /** This hit still respects invulnerability and other defenses, but cannot be consumed by spell block. */
+  bypassSpellBlock?: boolean;
   canTriggerWaitCounter?: boolean;
   redirectedByJoker?: boolean;
   redirectedJokerDamage?: number;
+  /** Actual recipients that were defeated by a Joker transfer, including immediate revivals. */
+  redirectedJokerDefeatedTargetIds?: string[];
   redirectedByOriginiumCore?: boolean;
   redirectedOriginiumDamage?: number;
   redirectedByOwlEmperor?: boolean;
@@ -242,6 +249,12 @@ export interface DamageApplicationOptions {
   bypassOwlIncomingModifier?: boolean;
   /** Mechanical self-costs must reduce HP directly instead of consuming shared shields. */
   bypassShields?: boolean;
+  /** Scripted NPC lifecycle damage may bypass ordinary targetability checks. */
+  bypassNpcTargetingRules?: boolean;
+  /** Internal marker: a five-Witness Herobrine hit passed the shield-bypass gate. */
+  herobrineShieldBypassApplied?: boolean;
+  /** Marks a branch as area damage so NPC AOE immunity is checked independently. */
+  isAreaDamage?: boolean;
   /** Filled by the barrier pipeline for causal logs, replay and attribution. */
   barrierAbsorptions?: DamageBarrierAbsorption[];
   targetDefeatedDuringDamage?: boolean;
@@ -350,7 +363,9 @@ export interface DispelOptions {
   excludeBarrierSourceIds?: readonly string[];
   includeBarriers?: boolean;
   /** Routes the exact dispel log through the caller's causal/deferred log queue. */
-  emitLog?: (type: string, text: string) => void;
+  emitLog?: (type: string, text: string, metadata?: BattleLogMetadata) => void;
+  /** Defers damage-producing dispel aftermath until the caller publishes its parent hit result. */
+  deferPostDispelEffect?: (effect: () => void) => void;
 }
 
 export interface DispelResolution {
@@ -423,6 +438,78 @@ export interface LargeRoundState {
   actionCount: number;
 }
 
+export type MajorNpcEventKind = 'puruisaishi' | 'herobrine';
+export type HerobrinePhase = 'fog' | 'phase_one' | 'phase_two' | 'removed' | 'retreated';
+export type HerobrineTraceKind = 'tunnel' | 'leafless_tree' | 'sand_pyramid';
+
+export interface HerobrineCopiedSkillSnapshot {
+  sourceActorId: string;
+  sourceActorName: string;
+  sourceSkillId: string | null;
+  sourceSkillName: string;
+  template: 'single_physical' | 'single_magical' | 'limited_aoe' | 'self_heal' | 'self_buff' | 'ordinary_status';
+  potency: number;
+  damageSchool?: 'physical' | 'magical';
+  targetCap?: number;
+  statusIdentityId?: string;
+}
+
+export interface HerobrineSingleWorldState {
+  targetId: string;
+  tunnelId: string;
+  startedLargeRound: number;
+  endsAfterLargeRound: number;
+}
+
+export interface HerobrineEventState {
+  kind: 'herobrine';
+  startedTurn: number;
+  phase: HerobrinePhase;
+  hiddenAttackResolved: boolean;
+  traceIds: string[];
+  cloneIds: string[];
+  herobrineId?: string;
+  formalAppearanceTurn?: number;
+  phaseTwoStartedTurn?: number;
+  hiddenUntilTurn?: number;
+  directHitsSinceFog?: number;
+  fogBehindPending?: boolean;
+  fogCooldownUntilLargeRound?: number;
+  singleWorldCooldownUntilLargeRound?: number;
+  worldSeedCooldownUntilTurn?: number;
+  dontLookBackCooldownUntilLargeRound?: number;
+  removedReturnTurn?: number;
+  revivalCount: number;
+  directDamageMultiplier: number;
+  herobrineActionCount: number;
+  phaseActionCount: number;
+  lastActionTurn?: number;
+  lastTreeResolutionLargeRound?: number;
+  attackedThisLargeRoundIds: string[];
+  firstShieldBypassConsumedIds: string[];
+  dontLookBackTargetId?: string;
+  dontLookBackExpiresLargeRound?: number;
+  finalPursuit: boolean;
+  finalPursuitOpeningPending?: boolean;
+  /** Sole contestant whose side is allowed to resolve the terminal hunt. */
+  finalPursuitContestantId?: string;
+  /** Conclusive loser of Final Pursuit; no revival path may re-enter this contestant. */
+  finalPursuitDefeatedContestantId?: string;
+  completed: boolean;
+  outcome?: 'true_removal' | 'contestants_defeated';
+  singleWorld?: HerobrineSingleWorldState;
+  singleWorldSpeedBefore?: number;
+  recentSkills: Record<string, HerobrineCopiedSkillSnapshot>;
+}
+
+export interface PuruisaishiMajorEventState {
+  kind: 'puruisaishi';
+  startedTurn: number;
+  completed?: boolean;
+}
+
+export type MajorNpcEventState = PuruisaishiMajorEventState | HerobrineEventState;
+
 export interface BattleState {
   schemaVersion: 1;
   seed: number;
@@ -433,6 +520,8 @@ export interface BattleState {
   largeRound: LargeRoundState;
   /** Set only during the action that closed this round, then consumed at round end. */
   completedLargeRound?: number;
+  /** At most one naturally selected major NPC event may own a battle. */
+  majorNpcEvent?: MajorNpcEventState;
 }
 
 export type BattleEventKind =
@@ -454,6 +543,12 @@ export type BattleCombatEffectId =
   | 'ting_detonation_charge'
   | 'ting_rage'
   | 'ting_wail'
+  | 'herobrine_empty_gaze'
+  | 'herobrine_hidden_strike'
+  | 'herobrine_stripped_leaves'
+  | 'herobrine_world_seed_error'
+  | 'herobrine_single_world'
+  | 'herobrine_clone_attack'
   | 'toku_fan_strike'
   | 'toku_fan_rider_kick'
   | 'toku_fan_cross_beam'
@@ -598,6 +693,7 @@ export type BattleVisualCue =
     };
 
 export type BattleLogMetadata = Partial<Pick<BattleEvent,
+  | 'actionId'
   | 'actorId'
   | 'actorName'
   | 'targetIds'
@@ -624,7 +720,11 @@ export interface BattleEvent {
   actionId?: string;
   actorId?: string;
   actorName?: string;
+  /** Resolved affiliation at event creation time; later control changes must not rewrite history. */
+  actorTeamId?: string;
   targetIds?: string[];
+  /** Resolved target affiliations at event creation time, keyed by fighter ID. */
+  targetTeamIds?: Record<string, string>;
   skillId?: string | null;
   skillName?: string;
   presentation?: SkillPresentation;
@@ -756,6 +856,41 @@ export interface MomoCaptainBonusState {
   active: boolean;
 }
 
+export type NpcActionMode = 'none' | 'normal' | 'scripted';
+export type NpcEventKind = MajorNpcEventKind | 'yuzu_prophet';
+export type NpcUnitKind =
+  | 'puruisaishi'
+  | 'originium_core'
+  | 'originium_crystal'
+  | 'yuzu_prophet'
+  | 'herobrine'
+  | 'herobrine_clone'
+  | 'herobrine_tunnel'
+  | 'herobrine_leafless_tree'
+  | 'herobrine_sand_pyramid';
+
+export interface NpcCombatCapabilities {
+  actionMode: NpcActionMode;
+  visible: boolean;
+  targetable: boolean;
+  aoeVulnerable: boolean;
+  blocksSettlement: boolean;
+  grantsKillCredit: boolean;
+  countsForVictory: boolean;
+}
+
+export interface NpcUnitState {
+  eventKind: NpcEventKind;
+  unitKind: NpcUnitKind;
+  capabilities: NpcCombatCapabilities;
+  traceKind?: HerobrineTraceKind;
+  exposed?: boolean;
+  revealed?: boolean;
+  cloneIndex?: number;
+  markedTargetId?: string;
+  collapseAfterLargeRound?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Fighter — a participant in a battle round
 // ---------------------------------------------------------------------------
@@ -817,6 +952,7 @@ export interface Fighter {
   isNpc?: boolean;         // Non-player battlefield event unit
   cannotWin?: boolean;     // Active unit that must not count as a winner/team for end condition
   cannotAct?: boolean;     // Active unit that should never be picked by the normal action scheduler
+  npcUnitState?: NpcUnitState;
 
   // ── Puruisaishi / originium battlefield-event system ────────────────
   isPuruisaishi?: boolean;
@@ -978,6 +1114,8 @@ export interface DefeatOptions {
   killer?: Fighter;
   /** Player-facing cause used when a defeat has no direct fighter source. */
   causeName?: string;
+  /** The target was defeated without HP damage, so event-NPC exits must preserve an explicit outcome log. */
+  directExecution?: boolean;
   logType?: string;
   awardKill?: boolean;
   setHpZero?: boolean;
@@ -993,6 +1131,7 @@ export interface DefeatOptions {
 export interface SkillContext {
   user: Fighter;
   target: Fighter;
+  battleState?: BattleState;
   /** Planned primary-hit damage before the target's mitigation and redirection pipeline. */
   preMitigationDamage?: number;
   targetWasIntercepted?: boolean;
@@ -1004,7 +1143,13 @@ export interface SkillContext {
   log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   /** Declares every intended target before the action's first player-visible log is emitted. */
   setVisualTargets: (targets: readonly Fighter[]) => void;
+  /** Replaces the outer action's planned target with the target actually chosen by custom skill logic. */
+  setOffensiveTarget: (target: Fighter) => void;
+  /** Revalidates a queued offensive target against the current battlefield relationship and targetability rules. */
+  canOffensivelyTarget: (target: Fighter) => boolean;
   getTeamId: (f: Fighter) => string;
+  /** Whether this actor may currently provide healing, barriers, dispels or buffs to the target. */
+  canProvideSupport: (target: Fighter) => boolean;
   /** Reads a combat stat after all active generic stat modifiers. */
   getEffectiveStat: (fighter: Fighter, key: StatKey) => number;
   applyDamage: (
@@ -1158,6 +1303,8 @@ export interface SkillDefinition {
   presentation?: Exclude<SkillPresentation, 'basic'>;
   rate?: number;
   mult?: number;
+  /** Safe target cap used only when Herobrine copies this skill as a bounded template. */
+  herobrineCopyTargetCap?: 2 | 3;
   /** Overrides the default attack/magic scaling stat without changing damage school. */
   scalingStat?: 'atk' | 'mag';
   /** Flat reduction to the target's relevant defense or resistance in the standard formula. */

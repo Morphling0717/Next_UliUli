@@ -16,7 +16,11 @@ import {
   createCombatActorMotionPlan,
   getCombatActorMotionTiming,
 } from "@/lib/namearena/combatActorMotion";
-import { getBattlePhase } from "@/lib/namearena/battlePresentation";
+import {
+  buildMajorNpcEventPresentation,
+  getBattlePhase,
+  type MajorNpcEventPresentation,
+} from "@/lib/namearena/battlePresentation";
 import {
   GACHA_COMBAT_EFFECT_IDS,
   TOKUSATSU_COMBAT_EFFECT_IDS,
@@ -39,6 +43,12 @@ import {
   type StageLogGroup,
   type StagePosition,
 } from "@/lib/namearena/battleStageModel";
+import {
+  getHerobrineArtSlot,
+  getHerobrineDisplayIcon,
+  getHerobrineDisplayJobName,
+  getHerobrineDisplayPhaseLabel,
+} from "@/lib/namearena/herobrineArt";
 import {
   EXODIA_STAR_ORDER,
   getSummonCardArt,
@@ -65,6 +75,7 @@ import type {
   BattleEvent,
   BattleCombatEffectId,
   BattleFormIdentity,
+  BattleState,
   BattleVisualCue,
   Fighter,
   SummonCinematicKind,
@@ -109,6 +120,7 @@ type RoundProgress = {
 
 type NameArenaBattleStageProps = {
   fighters: Fighter[];
+  battleState: BattleState;
   displayLogs: ArenaBattleLogEntry[];
   logGroups: StageLogGroup[];
   battleTurn: number;
@@ -249,6 +261,7 @@ function getShield(fighter: Fighter) {
 
 function getFighterAccent(fighter?: Fighter) {
   if (!fighter) return "#39d9ff";
+  if (fighter.npcUnitState?.eventKind === 'herobrine') return "#f5f5f4";
   if (fighter.isPuruisaishi || fighter.isOriginiumCore || fighter.isOriginiumCrystal || fighter.isYuzuProphet) return "#d8ff65";
   if (fighter.isTing) return "#ff6767";
   if (fighter.isGacha) return "#ffc84a";
@@ -273,6 +286,10 @@ function getPhaseNumber(fighter: Fighter) {
 }
 
 function getPhaseLabel(fighter: Fighter) {
+  if (fighter.npcUnitState?.unitKind === 'herobrine') return fighter.job === 'HEROBRINE_PHASE_TWO' ? 'H2' : 'H1';
+  const herobrineCloneLabel = getHerobrineDisplayPhaseLabel(fighter);
+  if (herobrineCloneLabel) return herobrineCloneLabel;
+  if (fighter.npcUnitState?.traceKind) return 'TRACE';
   if (fighter.isOriginiumCore) return "CORE";
   if (fighter.isOriginiumCrystal) return "ORE";
   if (fighter.isSummon) return fighter.isAdvancedSummon ? "ADV" : "SUM";
@@ -680,6 +697,7 @@ const StageFighterCard = React.memo(function StageFighterCard({
   const statusBadges = allStatusBadges.slice(0, visibleStatusCount);
   const hiddenStatusCount = Math.max(0, allStatusBadges.length - statusBadges.length);
   const image = getStageFighterImage(fighter);
+  const herobrineArt = getHerobrineArtSlot(fighter);
   return (
     <button
       ref={setNodeRef}
@@ -691,7 +709,18 @@ const StageFighterCard = React.memo(function StageFighterCard({
       aria-pressed={isSelected}
     >
       <span className={styles.portrait}>
-        {image ? <Image src={image} alt="" fill sizes="54px" unoptimized={image.startsWith("/namearena/")} /> : <span className={styles.emblem}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>}
+        {image ? (
+          <Image src={image} alt="" fill sizes="54px" unoptimized={image.startsWith("/namearena/")} />
+        ) : herobrineArt ? (
+          <span
+            className={styles.herobrinePlaceholder}
+            data-herobrine-slot={herobrineArt.id}
+            role="img"
+            aria-label={`${herobrineArt.label}占位`}
+          ><i /></span>
+        ) : (
+          <span className={styles.emblem}>{getHerobrineDisplayIcon(fighter) || fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>
+        )}
         {teamLabel ? <span className={styles.teamBadge} style={{ "--team-color": fighter.color } as CSSProperties}>{teamLabel}</span> : null}
         <span className={styles.phase}>{getPhaseLabel(fighter)}</span>
       </span>
@@ -803,6 +832,23 @@ const StageRoundOrbit = React.memo(function StageRoundOrbit({
       <b>{String(number).padStart(2, "0")}</b>
       <small>{acted}/{total}</small>
     </div>
+  );
+});
+
+const StageMajorNpcEventHud = React.memo(function StageMajorNpcEventHud({
+  event,
+}: {
+  event: MajorNpcEventPresentation | null;
+}) {
+  if (!event) return null;
+  return (
+    <aside className={styles.majorNpcEvent} data-tone={event.tone} aria-label={event.title}>
+      <span>{event.kind === "herobrine" ? "MAJOR ANOMALY" : "BATTLEFIELD EVENT"}</span>
+      <strong>{event.title}</strong>
+      <b>{event.phase}</b>
+      <small>{event.detail}</small>
+      {event.countdown ? <em>{event.countdown}</em> : null}
+    </aside>
   );
 });
 
@@ -929,7 +975,7 @@ const StageDossier = React.memo(function StageDossier({
         <div className={styles.dossierHeading}>
           <div>
             <div className={styles.dossierMetaRow}>
-              <span>{fighter.jobData?.name ?? "未知职业"}</span>
+              <span>{getHerobrineDisplayJobName(fighter) ?? fighter.jobData?.name ?? "未知职业"}</span>
               {isManualFocus ? (
                 <button
                   type="button"
@@ -1037,7 +1083,7 @@ const StagePulseButton = React.memo(function StagePulseButton({
       {image ? (
         <Image src={image} alt="" fill sizes="34px" unoptimized={image.startsWith("/namearena/")} />
       ) : (
-        <span className={styles.pulseGlyph}>{fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>
+        <span className={styles.pulseGlyph}>{getHerobrineDisplayIcon(fighter) || fighter.jobData?.icon || fighter.name.slice(0, 1)}</span>
       )}
     </button>
   );
@@ -1196,6 +1242,7 @@ const StageFeedPanel = React.memo(function StageFeedPanel({
 
 export function NameArenaBattleStage({
   fighters,
+  battleState,
   displayLogs,
   logGroups,
   battleTurn,
@@ -1261,6 +1308,10 @@ export function NameArenaBattleStage({
   const developmentFinisherPreviewRef = useRef<FinisherCinematic | null>(null);
 
   const stageFighters = useMemo(() => fighters.filter(shouldRenderFighterOnStage), [fighters]);
+  const majorNpcEvent = useMemo(
+    () => buildMajorNpcEventPresentation(battleState, fighters, battleTurn),
+    [battleState, battleTurn, fighters],
+  );
   const hasTokusatsuFighter = stageFighters.some((fighter) => fighter.isTokusatsu);
   const stageRosterKey = stageFighters.map((fighter) => fighter.id).join("\u001f");
   const densityPopulation = stageFighters.length;
@@ -1666,10 +1717,23 @@ export function NameArenaBattleStage({
     wakeFxLoopRef.current();
   }, [getNodeCenter]);
 
-  const spawnBeam = useCallback((actorId: string, targetId: string, color: string) => {
+  const spawnBeam = useCallback((
+    actorId: string,
+    targetId: string,
+    color: string,
+    sourceFallback?: 'arena_edge',
+  ) => {
     if (stageFxSuspendedRef.current || document.hidden) return;
-    const from = getNodeCenter(actorId);
     const to = getNodeCenter(targetId);
+    const arena = arenaRef.current;
+    const from = getNodeCenter(actorId) ?? (
+      sourceFallback === 'arena_edge' && arena && to
+        ? {
+            x: to.x <= arena.clientWidth / 2 ? arena.clientWidth + 24 : -24,
+            y: Math.max(20, Math.min(arena.clientHeight - 20, to.y - Math.min(48, arena.clientHeight * 0.12))),
+          }
+        : null
+    );
     if (!from || !to) return;
     beamsRef.current.push({
       x1: from.x,
@@ -2340,6 +2404,21 @@ export function NameArenaBattleStage({
               label: explicitCombatCue?.kind === "combat_fx" || explicitCombatCue?.kind === "reaction_fx" ? explicitCombatCue.label : undefined,
               count: explicitCombatCue?.kind === "combat_fx" || explicitCombatCue?.kind === "reaction_fx" ? explicitCombatCue.count : undefined,
             });
+          } else if (combatEffect.theme === "herobrine") {
+            const color = combatEffect.impact === "herobrine_fog"
+              ? "#b7c3c8"
+              : combatEffect.impact === "herobrine_glitch"
+                ? "#d7fbff"
+                : "#ffffff";
+            effectTargetIds.forEach((targetId) => {
+              spawnBeam(
+                effectSource.id,
+                targetId,
+                color,
+                combatEffect.motion === "hidden_strike" ? "arena_edge" : undefined,
+              );
+              spawnBurst(targetId, color, combatEffect.motion === "single_world" ? 52 : 34, 5);
+            });
           } else {
             spawnTokusatsuEffect(combatEffect, effectSource.id, effectTargetIds);
           }
@@ -2360,6 +2439,8 @@ export function NameArenaBattleStage({
             ? 780
             : combatEffect?.theme === "gacha"
               ? 680
+              : combatEffect?.theme === "herobrine"
+                ? 760
               : combatEffect?.theme === "tokusatsu"
                 ? 820
               : 460;
@@ -2520,6 +2601,7 @@ export function NameArenaBattleStage({
         ) : null}
 
         <StageActionBanner activeLog={activeLog} battleTurn={battleTurn} accent={actionAccent} />
+        <StageMajorNpcEventHud event={majorNpcEvent} />
         <StageRoundOrbit
           number={roundProgress.number}
           acted={roundProgress.acted}

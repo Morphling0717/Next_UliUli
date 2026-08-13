@@ -96,6 +96,7 @@
 
 .root[data-cinematic-active="true"] :is(
   .actionBanner,
+  .majorNpcEvent,
   .roundOrbit,
   .fighterLayer,
   .popupLayer,
@@ -450,6 +451,77 @@
 .impactFlash[data-impact-theme="tokusatsu_rainbow"] > i:nth-child(2) { background: #ffd44c; box-shadow: 0 0 22px #ffd44c; }
 .impactFlash[data-impact-theme="tokusatsu_rainbow"] > i:nth-child(3) { background: #4cecff; box-shadow: 0 0 22px #4cecff; }
 
+.impactFlash[data-impact-theme="herobrine_eye"] {
+  animation: herobrine-eye-impact 760ms steps(2, end) both;
+}
+
+.impactFlash[data-impact-theme="herobrine_eye"] > i {
+  display: block;
+  top: 44%;
+  left: calc(50% - 42px);
+  width: 28px;
+  height: 8px;
+  background: #f8fdff;
+  box-shadow:
+    56px 0 0 #f8fdff,
+    0 0 26px rgba(255, 255, 255, 0.95),
+    56px 0 26px rgba(255, 255, 255, 0.95);
+}
+
+.impactFlash[data-impact-theme="herobrine_eye"] > i:nth-child(n + 2) {
+  display: none;
+}
+
+.impactFlash[data-impact-theme="herobrine_fog"] {
+  animation: herobrine-fog-impact 760ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="herobrine_fog"] > i {
+  display: block;
+  inset: 12% -8%;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 7px, rgba(238, 248, 250, 0.08) 8px 9px),
+    radial-gradient(ellipse at center, rgba(226, 237, 240, 0.22), transparent 68%);
+  filter: blur(5px);
+}
+
+.impactFlash[data-impact-theme="herobrine_glitch"] {
+  animation: herobrine-glitch-impact 760ms steps(3, end) both;
+}
+
+.impactFlash[data-impact-theme="herobrine_glitch"] > i {
+  display: block;
+  right: 4%;
+  left: 4%;
+  height: 3px;
+  top: 28%;
+  background: rgba(237, 253, 255, 0.76);
+  box-shadow: 0 58px 0 rgba(181, 206, 211, 0.62), 0 146px 0 rgba(255, 255, 255, 0.42);
+}
+
+.impactFlash[data-impact-theme="herobrine_blocks"] {
+  animation: herobrine-block-impact 920ms ease-out both;
+}
+
+.impactFlash[data-impact-theme="herobrine_blocks"] > i {
+  display: block;
+  top: calc(50% - 58px);
+  left: calc(50% - 58px);
+  width: 116px;
+  height: 116px;
+  border: 3px solid rgba(244, 251, 252, 0.8);
+  box-shadow: inset 0 0 26px rgba(255, 255, 255, 0.13), 0 0 24px rgba(255, 255, 255, 0.18);
+}
+
+.impactFlash[data-impact-theme="herobrine_blocks"] > i:nth-child(2) {
+  transform: rotate(45deg) scale(0.72);
+}
+
+.impactFlash[data-impact-theme="herobrine_blocks"] > i:nth-child(3) {
+  transform: scale(1.42);
+  opacity: 0.3;
+}
+
 .actionBanner {
   position: absolute;
   z-index: 50;
@@ -503,6 +575,62 @@
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.majorNpcEvent {
+  position: absolute;
+  z-index: 23;
+  top: 18px;
+  right: 18px;
+  display: grid;
+  width: min(310px, 31%);
+  min-width: 220px;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-right: 3px solid var(--magenta);
+  background: rgba(7, 11, 14, 0.92);
+  box-shadow: -14px 14px 40px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+  contain: layout paint style;
+}
+
+.majorNpcEvent[data-tone="originium"] {
+  border-right-color: #63dfbd;
+}
+
+.majorNpcEvent[data-tone="herobrine"] {
+  border-right-color: rgba(255, 255, 255, 0.92);
+}
+
+.majorNpcEvent > span,
+.majorNpcEvent > small,
+.majorNpcEvent > em {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.majorNpcEvent > strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.majorNpcEvent > b {
+  color: #f8f9fa;
+  font-size: 12px;
+}
+
+.majorNpcEvent > em {
+  color: var(--amber);
 }
 
 .roundOrbit {
@@ -675,6 +803,103 @@
   text-overflow: ellipsis;
   text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
   white-space: nowrap;
+}
+
+.herobrinePlaceholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #07090b;
+}
+
+.herobrinePlaceholder::before,
+.herobrinePlaceholder::after,
+.herobrinePlaceholder i {
+  position: absolute;
+  display: block;
+  content: "";
+}
+
+.herobrinePlaceholder[data-herobrine-slot="herobrine"],
+.herobrinePlaceholder[data-herobrine-slot="white_eye_clone"] {
+  background:
+    radial-gradient(circle at 50% 56%, rgba(225, 238, 242, 0.14), transparent 38%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 4px),
+    #050607;
+}
+
+.herobrinePlaceholder[data-herobrine-slot="herobrine"]::before,
+.herobrinePlaceholder[data-herobrine-slot="white_eye_clone"]::before {
+  top: 27px;
+  left: calc(50% - 14px);
+  width: 10px;
+  height: 4px;
+  background: #fff;
+  box-shadow: 18px 0 0 #fff, 0 0 12px rgba(255, 255, 255, 0.9), 18px 0 12px rgba(255, 255, 255, 0.9);
+}
+
+.herobrinePlaceholder[data-herobrine-slot="white_eye_clone"]::after {
+  inset: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  transform: translate(2px, -1px);
+}
+
+.herobrinePlaceholder[data-herobrine-slot="two_by_two_tunnel"] {
+  background:
+    linear-gradient(90deg, transparent 47%, rgba(230, 242, 245, 0.3) 48% 52%, transparent 53%),
+    linear-gradient(0deg, transparent 47%, rgba(230, 242, 245, 0.3) 48% 52%, transparent 53%),
+    #080b0d;
+}
+
+.herobrinePlaceholder[data-herobrine-slot="two_by_two_tunnel"]::before {
+  inset: 9px;
+  border: 2px solid rgba(238, 246, 248, 0.72);
+  box-shadow: inset 0 0 14px rgba(255, 255, 255, 0.12);
+}
+
+.herobrinePlaceholder[data-herobrine-slot="leafless_tree"] i {
+  bottom: 5px;
+  left: calc(50% - 2px);
+  width: 4px;
+  height: 47px;
+  background: #9da6a8;
+  transform: rotate(5deg);
+}
+
+.herobrinePlaceholder[data-herobrine-slot="leafless_tree"]::before,
+.herobrinePlaceholder[data-herobrine-slot="leafless_tree"]::after {
+  top: 15px;
+  left: 50%;
+  width: 30px;
+  height: 3px;
+  background: #9da6a8;
+  transform-origin: left center;
+}
+
+.herobrinePlaceholder[data-herobrine-slot="leafless_tree"]::before {
+  transform: rotate(-36deg);
+}
+
+.herobrinePlaceholder[data-herobrine-slot="leafless_tree"]::after {
+  transform: rotate(216deg);
+}
+
+.herobrinePlaceholder[data-herobrine-slot="sand_pyramid"]::before {
+  inset: 9px 6px 8px;
+  background: #d7d4c8;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
+}
+
+.herobrinePlaceholder[data-herobrine-slot="sand_pyramid"]::after {
+  right: 9px;
+  bottom: 13px;
+  left: 9px;
+  height: 2px;
+  background: #151719;
+  box-shadow: 0 -8px 0 rgba(21, 23, 25, 0.58), 0 -16px 0 rgba(21, 23, 25, 0.36);
 }
 
 .phase {
@@ -3521,6 +3746,35 @@
   100% { background: transparent; }
 }
 
+@keyframes herobrine-eye-impact {
+  0%, 100% { opacity: 0; background: transparent; transform: translate(0); }
+  18% { opacity: 1; background: rgba(234, 245, 248, 0.08); transform: translate(-3px, 1px); }
+  42% { opacity: 0.88; background: rgba(255, 255, 255, 0.14); transform: translate(4px, -1px); }
+  68% { opacity: 0.46; background: rgba(181, 198, 203, 0.06); transform: translate(-2px, 0); }
+}
+
+@keyframes herobrine-fog-impact {
+  0% { opacity: 0; transform: scale(0.94); }
+  24% { opacity: 0.82; transform: scale(1.02); }
+  72% { opacity: 0.38; transform: scale(1.08); }
+  100% { opacity: 0; transform: scale(1.13); }
+}
+
+@keyframes herobrine-glitch-impact {
+  0%, 100% { opacity: 0; background: transparent; transform: translate(0); }
+  16% { opacity: 1; background: rgba(225, 249, 252, 0.12); transform: translate(7px, -2px); }
+  34% { opacity: 0.45; transform: translate(-11px, 1px); }
+  52% { opacity: 0.92; background: rgba(255, 255, 255, 0.08); transform: translate(4px, 0); }
+  74% { opacity: 0.3; transform: translate(-3px, 2px); }
+}
+
+@keyframes herobrine-block-impact {
+  0% { opacity: 0; transform: scale(0.62) rotate(-8deg); background: rgba(255, 255, 255, 0); }
+  28% { opacity: 1; transform: scale(1) rotate(0); background: rgba(232, 244, 247, 0.1); }
+  70% { opacity: 0.46; transform: scale(1.08) rotate(3deg); }
+  100% { opacity: 0; transform: scale(1.18) rotate(5deg); background: transparent; }
+}
+
 @keyframes glitch-shift {
   0%, 100% { filter: none; transform: translate(0); }
   20% { filter: hue-rotate(75deg); transform: translate(3px, 0); }
@@ -3826,6 +4080,28 @@
     font-size: 9px;
     line-height: 1.35;
     -webkit-line-clamp: 1;
+  }
+
+  .majorNpcEvent {
+    top: 70px;
+    right: 8px;
+    width: min(300px, 34%);
+    min-width: 190px;
+    padding: 6px 8px;
+  }
+
+  .majorNpcEvent > span,
+  .majorNpcEvent > small,
+  .majorNpcEvent > em {
+    font-size: 7px;
+  }
+
+  .majorNpcEvent > strong {
+    font-size: 11px;
+  }
+
+  .majorNpcEvent > b {
+    font-size: 9px;
   }
 
   .dossier {
@@ -4360,6 +4636,12 @@
 
   .actionBanner {
     width: calc(100% - 32px);
+  }
+
+  .majorNpcEvent {
+    top: 124px;
+    right: 16px;
+    width: min(300px, calc(100% - 32px));
   }
 
   .fighter {

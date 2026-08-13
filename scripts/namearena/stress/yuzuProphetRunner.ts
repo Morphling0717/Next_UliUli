@@ -24,7 +24,7 @@ type ProphetStressSpec = BattleSpec & {
   prophetMode: 'phase-one' | 'phase-two-bound' | 'phase-two-unbound';
 };
 
-type ProphetMetrics = {
+export type ProphetMetrics = {
   spawns: number;
   bindings: number;
   takeovers: number;
@@ -137,7 +137,7 @@ function countText(result: BattleResult, text: string): number {
   return result.logs.filter((entry) => entry.text.includes(text)).length;
 }
 
-function collectMetrics(result: BattleResult): ProphetMetrics {
+export function collectProphetMetrics(result: BattleResult): ProphetMetrics {
   return {
     spawns: countText(result, '【柚子·预言家登场】'),
     bindings: countText(result, '【绑定柚子】'),
@@ -189,7 +189,10 @@ function emptyMetrics(): ProphetMetrics {
   };
 }
 
-function semanticIssues(result: BattleResult, metrics: ProphetMetrics): Array<{ kind: string; detail: string }> {
+export function auditYuzuProphetResult(
+  result: BattleResult,
+  metrics = collectProphetMetrics(result),
+): Array<{ kind: string; detail: string }> {
   const issues: Array<{ kind: string; detail: string }> = [];
   if (metrics.spawns !== 1) issues.push({ kind: 'spawn-count', detail: `expected 1 spawn, got ${metrics.spawns}` });
   if (metrics.bindings !== 1) issues.push({ kind: 'binding-count', detail: `expected 1 binding, got ${metrics.bindings}` });
@@ -225,18 +228,170 @@ function semanticIssues(result: BattleResult, metrics: ProphetMetrics): Array<{ 
     });
   }
   if (metrics.phaseTwos > 1) issues.push({ kind: 'duplicate-phase-two', detail: `phaseTwos=${metrics.phaseTwos}` });
+  const fighterById = new Map(result.fighterDirectory.map((fighter) => [fighter.id, fighter]));
+  const controlledSummonIds = new Set<string>();
+  const confusionTargets = new Map<string, string>();
+  result.events.forEach((event) => {
+    if (
+      event.kind === 'log' &&
+      event.text.includes('【混乱】') &&
+      event.actorId &&
+      event.targetIds?.length === 1
+    ) {
+      confusionTargets.set(event.actorId, event.targetIds[0]!);
+    }
+    if (
+      event.kind === 'log' &&
+      (
+        event.text.includes('【预言家接管】') ||
+        event.text.includes('【预言家保底召唤】')
+      )
+    ) {
+      (event.targetIds ?? []).forEach((targetId) => {
+        if (fighterById.get(targetId)?.isSummon) controlledSummonIds.add(targetId);
+      });
+    }
+    if (event.kind === 'action_start' && controlledSummonIds.has(event.actorId ?? '')) {
+      const forcedConfusionTargetId = event.actorId
+        ? confusionTargets.get(event.actorId)
+        : undefined;
+      const illegalTargetIds = (event.targetIds ?? []).filter((targetId) => {
+        const target = fighterById.get(targetId);
+        return (
+          targetId !== forcedConfusionTargetId &&
+          (
+            targetId === event.actorId ||
+            controlledSummonIds.has(targetId) ||
+            !!target?.isYuzuProphet
+          )
+        );
+      });
+      if (illegalTargetIds.length > 0) {
+        issues.push({
+          kind: 'controlled-summon-illegal-target',
+          detail: `${event.actorName ?? event.actorId ?? 'controlled summon'} targeted event ally/self: ${illegalTargetIds.join(', ')}`,
+        });
+      }
+      if (event.actorId) confusionTargets.delete(event.actorId);
+    }
+    if (
+      event.kind === 'log' &&
+      (
+        event.text.includes('【控制权返还】') ||
+        event.text.includes('【阶段抹杀】') ||
+        event.text.includes('【保底召唤退场】') ||
+        event.text.includes('【接管召唤物死亡转化】')
+      )
+    ) {
+      (event.targetIds ?? []).forEach((targetId) => {
+        if (fighterById.get(targetId)?.isSummon) controlledSummonIds.delete(targetId);
+      });
+    }
+  });
+  result.logs
+    .filter((entry) => entry.text.includes('【预言家拼点】'))
+    .forEach((entry) => {
+      const participantIds = [entry.actorId, ...(entry.targetIds ?? [])]
+        .filter((id): id is string => !!id);
+      if (!participantIds.some((id) => fighterById.get(id)?.isYuzuProphet)) {
+        issues.push({
+          kind: 'controlled-summon-entered-clash',
+          detail: `clash did not include Yuzu Prophet: ${entry.text}`,
+        });
+      }
+    });
+  const puruisaishiIds = new Set(
+    result.fighterDirectory
+      .filter((fighter) => fighter.kind === 'npc:puruisaishi')
+      .map((fighter) => fighter.id),
+  );
+  const shieldZeroEventIndex = result.events.findIndex((event) =>
+    event.kind === 'log' &&
+    event.text.includes('【普瑞赛斯护盾】') &&
+    /剩余\s*0(?:。|；|$)/.test(event.text),
+  );
+  const retreatStartEventIndex = result.events.findIndex((event, index) =>
+    index > shieldZeroEventIndex &&
+    event.kind === 'log' &&
+    event.text.includes('【预言家共同退场启动】'),
+  );
+  if (shieldZeroEventIndex >= 0 && retreatStartEventIndex > shieldZeroEventIndex) {
+    const interveningAction = result.events
+      .slice(shieldZeroEventIndex + 1, retreatStartEventIndex)
+      .find((event) =>
+        event.kind === 'action_start' &&
+        (event.targetIds ?? []).some((targetId) => puruisaishiIds.has(targetId)),
+      );
+    if (interveningAction) {
+      issues.push({
+        kind: 'post-zero-shield-pre-retreat-action',
+        detail: `${interveningAction.actorName ?? interveningAction.actorId ?? 'unknown actor'} started another action against Puruisaishi after her barrier reached zero`,
+      });
+    }
+  }
   const retreatEndIndex = result.logs.findIndex((entry) => entry.text.includes('【共同退场完成】'));
   if (retreatEndIndex >= 0) {
     const postRetreat = result.logs.slice(retreatEndIndex + 1);
+    const retiredEventIds = new Set(
+      result.fighterDirectory
+        .filter((fighter) =>
+          fighter.isYuzuProphet ||
+          fighter.kind === 'npc:puruisaishi' ||
+          fighter.kind === 'npc:originium_core' ||
+          fighter.kind === 'npc:originium_crystal',
+        )
+        .map((fighter) => fighter.id),
+    );
+    const isHistoricalSurtrDefeatCredit = (entry: BattleResult['logs'][number]) =>
+      entry.type === 'death' &&
+      entry.text.includes('【黄昏尽头】') &&
+      (entry.targetIds ?? []).some((targetId) => fighterById.get(targetId)?.isSurtr);
+    const isInternalStateSync = (entry: BattleResult['logs'][number]) =>
+      entry.displayInFeed === false &&
+      entry.type === 'system' &&
+      entry.text.startsWith('state-sync:');
     const eventGhost = postRetreat.find((entry) =>
-      entry.text.includes('柚子·预言家') ||
-      entry.text.includes('普瑞赛斯的源石映像') ||
-      entry.text.includes('阿喃那'),
+      !isInternalStateSync(entry) &&
+      (
+        (entry.targetIds ?? []).some((targetId) => retiredEventIds.has(targetId)) ||
+        (
+          !!entry.actorId &&
+          retiredEventIds.has(entry.actorId) &&
+          !isHistoricalSurtrDefeatCredit(entry)
+        ) ||
+        (
+          !entry.actorId &&
+          (entry.targetIds?.length ?? 0) === 0 &&
+          (
+            entry.text.includes('柚子·预言家') ||
+            entry.text.includes('普瑞赛斯的源石映像') ||
+            entry.text.includes('阿喃那')
+          )
+        )
+      ),
     );
     if (eventGhost) {
       issues.push({
         kind: 'post-retreat-event-unit-log',
         detail: `retired event unit appeared after common retreat: ${eventGhost.text}`,
+      });
+    }
+    const retreatEndEventIndex = result.events.findIndex((event) =>
+      event.kind === 'log' && event.text.includes('【共同退场完成】'),
+    );
+    const eventUnitAction = retreatEndEventIndex >= 0
+      ? result.events.slice(retreatEndEventIndex + 1).find((event) =>
+        event.kind === 'action_start' &&
+        (
+          (!!event.actorId && retiredEventIds.has(event.actorId)) ||
+          (event.targetIds ?? []).some((targetId) => retiredEventIds.has(targetId))
+        ),
+      )
+      : undefined;
+    if (eventUnitAction) {
+      issues.push({
+        kind: 'post-retreat-event-unit-action',
+        detail: `an action started with a retired event unit after common retreat: ${eventUnitAction.text}`,
       });
     }
     const retreatTurn = result.logs[retreatEndIndex]?.turn;
@@ -330,7 +485,7 @@ export function main(): void {
       forceYuzuProphetUnboundPhaseTwo: spec.prophetMode === 'phase-two-unbound',
     });
     const logPath = writeLog(result);
-    const metrics = collectMetrics(result);
+    const metrics = collectProphetMetrics(result);
     addMetrics(totals, metrics);
     phaseCounts[spec.phase] = (phaseCounts[spec.phase] ?? 0) + 1;
     totalLogs += result.logCount;
@@ -352,7 +507,7 @@ export function main(): void {
         logPath,
       });
     });
-    semanticIssues(result, metrics).forEach((issue) => {
+    auditYuzuProphetResult(result, metrics).forEach((issue) => {
       issues.push({ label: spec.label, seed: spec.seed, ...issue, logPath });
     });
 

@@ -17,7 +17,7 @@ import type { CharacterHookRuntime, ReactionActionDescriptor } from './character
 import type { DamageResolutionRuntime, DamageResult } from './damageResolution';
 import type { StatusProcessingRuntime } from './statusProcessing';
 import type { SummonResolutionRuntime } from './summonResolution';
-import type { SupportResolutionRuntime } from './supportResolution';
+import type { SupportResolutionRuntime, SupportSkillResolution } from './supportResolution';
 import type { TargetingRuntime } from './targeting';
 import type { TurnFlowRuntime } from './turnFlow';
 
@@ -56,9 +56,15 @@ export interface BattleRuntimeHost {
   clearSpinalSword: (fighter: Fighter) => void;
   createCharacterHookRuntime: () => CharacterHookRuntime;
   executeSkillAction: (skillId: string | null, user: Fighter, forcedTarget: Fighter | null, triggerDepth: number) => void;
+  noteOffensiveActionTarget: (target: Fighter) => void;
   runReactionAction: (actor: Fighter, descriptor: ReactionActionDescriptor, callback: () => void) => void;
   executeSummonSkill: (skill: SkillDefinition, user: Fighter, userTeamId: string) => void;
-  executeSupportSkill: (skill: SkillDefinition, user: Fighter, forcedTarget: Fighter | null, userTeamId: string) => boolean;
+  executeSupportSkill: (
+    skill: SkillDefinition,
+    user: Fighter,
+    forcedTarget: Fighter | null,
+    userTeamId: string,
+  ) => SupportSkillResolution;
   finalizeFighterDeath: (
     fighter: Fighter,
     spinalSwordRef: SpinalSwordRef,
@@ -79,6 +85,7 @@ export function buildCharacterHookRuntime(host: BattleRuntimeHost): CharacterHoo
     fighters: host.fighters,
     jobs: host.JOBS,
     turnCount: host.turnCount,
+    battleState: host.battleState,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text, metadata) => host.log(type, text, metadata),
@@ -100,6 +107,7 @@ export function buildTargetingRuntime(host: BattleRuntimeHost): TargetingRuntime
   return {
     fighters: host.fighters,
     turnCount: host.turnCount,
+    battleState: host.battleState,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
   };
@@ -120,7 +128,7 @@ export function buildStatusProcessingRuntime(host: BattleRuntimeHost): StatusPro
   return {
     fighters: host.fighters,
     turnCount: host.turnCount,
-    log: (type, text) => host.log(type, text),
+    log: (type, text, metadata) => host.log(type, text, metadata),
     applyDamage: (target, amount, source, isTrueDamage, attacker, options) => host.applyDamage(target, amount, source, isTrueDamage, attacker, options),
     dispelStatusEffects: (target, options) => host.dispelStatusEffects(target, options),
     markDefeated: (target, options) => host.markDefeated(target, options),
@@ -148,6 +156,7 @@ export function buildSummonResolutionRuntime(host: BattleRuntimeHost): SummonRes
 export function buildSupportResolutionRuntime(host: BattleRuntimeHost): SupportResolutionRuntime {
   return {
     fighters: host.fighters,
+    battleState: host.battleState,
     skillTags: host.SKILL_TAGS,
     data: host.Data,
     turnCount: host.turnCount,
@@ -173,6 +182,7 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     data: host.Data,
     turnCount: host.turnCount,
     largeRound: host.battleState.largeRound.number,
+    battleState: host.battleState,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     log: (type, text, metadata) => host.log(type, text, metadata),
@@ -187,6 +197,7 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
     flushDeferredDamageEvents: (fighter, phase) => host.flushDeferredDamageEvents(fighter, phase),
     executeSkillAction: (skillId, user, forcedTarget, triggerDepth) =>
       host.executeSkillAction(skillId, user, forcedTarget, triggerDepth),
+    noteOffensiveActionTarget: (target) => host.noteOffensiveActionTarget(target),
     runReactionAction: (actor, descriptor, callback) => host.runReactionAction(actor, descriptor, callback),
     executeSummonSkill: (skill, user, userTeamId) => host.executeSummonSkill(skill, user, userTeamId),
     spreadDivaSupport: (skill, user, userTeamId) => host.spreadDivaSupport(skill, user, userTeamId),
@@ -201,6 +212,7 @@ export function buildActionResolutionRuntime(host: BattleRuntimeHost): ActionRes
 export function buildTurnFlowRuntime(host: BattleRuntimeHost): TurnFlowRuntime {
   return {
     fighters: host.fighters,
+    battleState: host.battleState,
     getTeamId: (fighter) => host.getTeamId(fighter),
     isActiveCombatant: (fighter) => host.isActiveCombatant(fighter),
     createCharacterHookRuntime: () => host.createCharacterHookRuntime(),

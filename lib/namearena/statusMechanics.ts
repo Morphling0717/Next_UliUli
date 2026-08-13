@@ -1,4 +1,5 @@
 import type {
+  BattleLogMetadata,
   DamageApplicationOptions,
   DamageSourceKind,
   DamageResolutionRecord,
@@ -35,7 +36,7 @@ export const WT_REPAIRING_PROFILE = {
 
 export interface StatusMechanicsRuntime {
   fighters: Fighter[];
-  log: (type: string, text: string) => void;
+  log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
   applyDamage: (
     target: Fighter,
     amount: number,
@@ -63,6 +64,7 @@ export interface StatusDamageEvent {
   lockblood: boolean;
   phaseTransition: boolean;
   defeated: boolean;
+  withdrawn: boolean;
   hitWithoutHpDamage: boolean;
   redirectedBy?: 'momo' | 'originium_core' | 'owl_emperor' | 'joker' | 'yuzu';
   redirectedDamage?: number;
@@ -71,6 +73,7 @@ export interface StatusDamageEvent {
 export interface BleedTriggerResult {
   triggered: number;
   canContinue: boolean;
+  interruptedByDefeat: boolean;
   events: StatusDamageEvent[];
 }
 
@@ -144,6 +147,7 @@ function makeStatusDamageEvent(
       options.resolution?.outcome === 'lockblood',
     phaseTransition: options.resolution?.phaseTransition === true,
     defeated: target.currentHp <= 0 || target.isDead || target.isDeadAnnounced,
+    withdrawn: options.targetWithdrawnDuringDamage === true,
     hitWithoutHpDamage: options.hitWithoutHpDamage === true,
     redirectedBy,
     redirectedDamage,
@@ -169,6 +173,7 @@ function settleStatusDamage(
   };
   runtime.applyDamage(target, Math.max(1, Math.floor(amount)), 'status', true, applier, damageOptions);
   runtime.flushDeferredDamageEvents(target, 'mitigation');
+  if (damageOptions.targetWithdrawnDuringDamage) runtime.flushDeferredDamageEvents(target);
   return makeStatusDamageEvent(target, status, trigger, amount, damageOptions);
 }
 
@@ -180,11 +185,13 @@ function logStatusSettlement(
   phrase: string,
   remainingCount: number,
 ): void {
+  if (event.withdrawn) return;
   const { name, icon } = statusLabel(status);
   const applier = statusApplier(runtime, status);
   const sourceName = status.attribution?.applierName ?? applier?.name ?? status.attribution?.effectSourceName;
   const sourceText = sourceName ? `；最新施加者 ${sourceName}` : '';
   const settlement = `本次强度 ${status.potency ?? 0}${sourceText}；结算后剩余 ${remainingCount} 次${remainingCount === 0 ? `，【${name}】耗尽` : ''}`;
+  const metadata: BattleLogMetadata = { targetIds: [target.id] };
   if (event.redirectedBy) {
     const redirectedDamage = event.redirectedDamage ?? 0;
     const redirectText = event.redirectedBy === 'momo'
@@ -209,26 +216,27 @@ function logStatusSettlement(
     runtime.log(
       redirectedDamage > 0 ? 'poison' : 'info',
       `${icon} 【${name}】${target.name} ${phrase}，${redirectText}；${target.name}本体未损失生命！（${settlement}）`,
+      metadata,
     );
   } else if (event.hpDamage > 0) {
-    runtime.log('poison', `${icon} 【${name}】${target.name} ${phrase}，实际损失 ${event.hpDamage} 点生命！（${settlement}）`);
+    runtime.log('poison', `${icon} 【${name}】${target.name} ${phrase}，实际损失 ${event.hpDamage} 点生命！（${settlement}）`, metadata);
   } else if (event.shieldDamage > 0) {
-    runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}，但 ${event.shieldDamage} 点伤害被屏障吸收，生命未减少！（${settlement}）`);
+    runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}，但 ${event.shieldDamage} 点伤害被屏障吸收，生命未减少！（${settlement}）`, metadata);
   } else if (event.hitWithoutHpDamage) {
-    runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}并被成功命中；但【黄昏余命】期间显示生命已为 0，未再损失生命！（${settlement}）`);
+    runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}并被成功命中；但【黄昏余命】期间显示生命已为 0，未再损失生命！（${settlement}）`, metadata);
   } else {
-    runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}，伤害被完全化解！（${settlement}）`);
+    runtime.log('info', `${icon} 【${name}】${target.name} ${phrase}，伤害被完全化解！（${settlement}）`, metadata);
   }
   if (event.hpDamage > 0 || event.shieldDamage > 0 || event.hitWithoutHpDamage || (target.pendingDamageEvents?.length ?? 0) > 0) {
     runtime.flushDeferredDamageEvents(target);
   }
 }
 
-function markStatusDefeat(runtime: StatusMechanicsRuntime, target: Fighter, status: StatusInstance): void {
-  if (target.currentHp > 0 || target.isDead || target.isDeadAnnounced) return;
+function markStatusDefeat(runtime: StatusMechanicsRuntime, target: Fighter, status: StatusInstance): boolean {
+  if (target.currentHp > 0 || target.isDead || target.isDeadAnnounced) return false;
   const applier = statusApplier(runtime, status);
   const { name } = statusLabel(status);
-  runtime.markDefeated(target, {
+  return runtime.markDefeated(target, {
     message: `💀 ${target.name} 被【${name}】的后续伤害击倒！`,
     killer: applier,
     causeName: name,
@@ -284,6 +292,7 @@ export function triggerBleedBeforeAttack(
 ): BleedTriggerResult {
   const events: StatusDamageEvent[] = [];
   let triggered = 0;
+  let interruptedByDefeat = false;
   for (let index = 0; index < Math.max(1, times); index += 1) {
     if (!runtime.isActiveCombatant(attacker)) break;
     const bleed = aggregateDualStatus(attacker, 'BLEED');
@@ -296,10 +305,17 @@ export function triggerBleedBeforeAttack(
     consumeMechanicValue(attacker, 'BLEED', 'count', 1);
     logStatusSettlement(runtime, attacker, bleed, event, '强行发动攻击，伤口在出手前裂开', queryMechanic(attacker, 'BLEED').count);
     events.push(event);
-    markStatusDefeat(runtime, attacker, bleed);
-    if (event.lockblood || event.phaseTransition || event.defeated) break;
+    const runItBackCanContinue = hasIdentity(attacker, 'VALO_ULT_RUN_IT_BACK');
+    const wasDefeated = markStatusDefeat(runtime, attacker, bleed);
+    if (wasDefeated && !runItBackCanContinue) interruptedByDefeat = true;
+    if (event.lockblood || event.phaseTransition || event.defeated || interruptedByDefeat) break;
   }
-  return { triggered, canContinue: runtime.isActiveCombatant(attacker), events };
+  return {
+    triggered,
+    canContinue: runtime.isActiveCombatant(attacker) && !interruptedByDefeat,
+    interruptedByDefeat,
+    events,
+  };
 }
 
 export function triggerBleed(
@@ -357,6 +373,7 @@ export function changeMorale(
   delta: number,
   log?: StatusMechanicsRuntime['log'],
   sourceName = '精神影响',
+  metadata?: BattleLogMetadata,
 ): { before: number; after: number; breakdown: boolean } {
   if (fighter.isNpc || fighter.morale === undefined || fighter.maxMorale === undefined) {
     return { before: 0, after: 0, breakdown: false };
@@ -369,7 +386,7 @@ export function changeMorale(
     breakdown = true;
     applyStatus(fighter, { identityId: 'MENTAL_BREAKDOWN', charges: 1, attribution: { effectSourceId: 'morale_breakdown' } });
     fighter.morale = Math.min(fighter.maxMorale, 50);
-    log?.('debuff', `🫥 【精神崩溃】${fighter.name} 的士气被${sourceName}压至零，下一次有效行动只能进行无法暴击的普通攻击！（士气恢复至 ${fighter.morale}/${fighter.maxMorale}）`);
+    log?.('debuff', `🫥 【精神崩溃】${fighter.name} 的士气被${sourceName}压至零，下一次有效行动只能进行无法暴击的普通攻击！（士气恢复至 ${fighter.morale}/${fighter.maxMorale}）`, metadata);
   }
   return { before, after: fighter.morale, breakdown };
 }
@@ -396,10 +413,14 @@ function triggerSinking(
       if (event.lockblood || event.phaseTransition || event.defeated) break;
       continue;
     }
-    const change = changeMorale(target, -(sinking.potency ?? 0), runtime.log, '沉沦');
+    const metadata: BattleLogMetadata = { targetIds: [target.id] };
+    const change = changeMorale(target, -(sinking.potency ?? 0), runtime.log, '沉沦', metadata);
     consumeMechanicValue(target, 'SINKING', 'count', 1);
     const remaining = queryMechanic(target, 'SINKING');
-    runtime.log('debuff', `🌊 【沉沦】${target.name} 遭受精神冲击，士气由 ${change.before} 降至 ${change.after}！（本次强度 ${sinking.potency ?? 0}；结算后剩余 ${remaining.count} 次${remaining.count === 0 ? '，【沉沦】耗尽' : ''}）`);
+    const moraleText = change.breakdown
+      ? `士气由 ${change.before} 被压至 0，精神崩溃后重置为 ${change.after}`
+      : `士气由 ${change.before} 降至 ${change.after}`;
+    runtime.log('debuff', `🌊 【沉沦】${target.name} 遭受精神冲击，${moraleText}！（本次强度 ${sinking.potency ?? 0}；结算后剩余 ${remaining.count} 次${remaining.count === 0 ? '，【沉沦】耗尽' : ''}）`, metadata);
   }
   return events;
 }
@@ -489,6 +510,14 @@ export function resetStatusResourcesOnDeath(fighter: Fighter): void {
   delete fighter.maxMorale;
   delete fighter.moraleLostSinceOpportunity;
   fighter.stagger = 0;
+  removeBarriers(fighter);
+}
+
+export function clearReviveEffects(fighter: Fighter): void {
+  removeEffects(fighter, {
+    excludeIdentityIds: getStatusIdentityIdsByTag('death_persistent'),
+    reason: 'revive',
+  });
   removeBarriers(fighter);
 }
 

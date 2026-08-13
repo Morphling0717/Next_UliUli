@@ -1,4 +1,5 @@
 import type {
+  BattleState,
   Fighter,
   JobDefinition,
   OwlSummonKind,
@@ -16,9 +17,14 @@ import { hasIdentity, initializeEffectState, removeEffects, applyStatus, withPer
 import { getEffectiveCombatStat, getPanelCombatStat } from './statusMechanics';
 import { generateUniqueRuntimeId } from './core';
 import { didDamageConnect, isDamageRedirected } from './damageRedirects';
+import {
+  canTargetAcrossHerobrineBoundary,
+  isNpcAoeVulnerable,
+} from './npcCombat';
 
 export interface OwlRuntime {
   fighters: Fighter[];
+  battleState?: BattleState;
   jobs: Partial<Record<string, JobDefinition>>;
   turnCount: number;
   getTeamId: (fighter: Fighter) => string;
@@ -206,7 +212,16 @@ export function switchOwlWarForm(runtime: OwlRuntime, owl: Fighter, next: OwlWar
     ...(next === 'defeat' || next === 'sorrow' ? { remainingTurns: 10 } : {}),
     attribution: { effectSourceId: owl.id, applierId: owl.id, applierName: owl.name },
   });
-  runtime.log('buff', `🦉 【天意侵蚀】${owl.name} 由【${OWL_FORM_NAMES[previous]}】转入【${OWL_FORM_NAMES[next]}】：${reason}。`);
+  const selfMetadata: BattleLogMetadata = {
+    actorId: owl.id,
+    actorName: owl.name,
+    targetIds: [owl.id],
+  };
+  runtime.log(
+    'buff',
+    `🦉 【天意侵蚀】${owl.name} 由【${OWL_FORM_NAMES[previous]}】转入【${OWL_FORM_NAMES[next]}】：${reason}。`,
+    selfMetadata,
+  );
   if (next === 'sorrow') {
     runtime.dispelStatusEffects?.(owl, { strength: 'strong', direction: 'negative' });
     // Strong-dispelling AIRBORNE settles landing damage immediately. If that
@@ -216,13 +231,17 @@ export function switchOwlWarForm(runtime: OwlRuntime, owl: Fighter, next: OwlWar
       kind: 'direct',
       sourceId: '哀兵',
       healer: owl,
-    }, runtime.log);
+    }, (type, text) => runtime.log(type, text, selfMetadata));
     const recoveryText = healing.actual > 0
       ? `恢复 ${healing.actual} 点生命`
       : healing.outcome === 'blocked'
         ? '治疗被完全阻止'
         : '生命已经全满';
-    runtime.log(healing.outcome === 'blocked' ? 'info' : 'heal', `🕯️ 【哀兵】${owl.name} 清除所有可驱散的异常与减益（矿石病等不可驱散状态保留）；${recoveryText}！`);
+    runtime.log(
+      healing.outcome === 'blocked' ? 'info' : 'heal',
+      `🕯️ 【哀兵】${owl.name} 清除所有可驱散的异常与减益（矿石病等不可驱散状态保留）；${recoveryText}！`,
+      selfMetadata,
+    );
   }
   return true;
 }
@@ -304,6 +323,8 @@ export function getOwlPhaseTwoLightningTargets(runtime: OwlRuntime, owl: Fighter
     runtime.isActiveCombatant(target) &&
     !hasIdentity(target, 'SYNERGY_SLACKING') &&
     !(target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) &&
+    (!target.isNpc || isNpcAoeVulnerable(target)) &&
+    canTargetAcrossHerobrineBoundary(runtime.battleState, owl, target) &&
     (target.untargetableUntilTurn ?? -1) < runtime.turnCount,
   );
 }
@@ -335,6 +356,7 @@ export function releaseOwlPhaseTwoLightning(runtime: OwlRuntime, owl: Fighter): 
       respectDefenses: true,
       suppressOwlCooperation: true,
       deferTransform: true,
+      isAreaDamage: true,
     };
     const actual = runtime.applyDamage?.(target, raw, 'skill', false, owl, damageOptions) ?? 0;
     const redirected = isDamageRedirected(damageOptions);
@@ -347,7 +369,15 @@ export function releaseOwlPhaseTwoLightning(runtime: OwlRuntime, owl: Fighter): 
           ? `⚡ 雷击命中 ${target.name}，实际造成 ${actual} 点伤害。`
           : connected
             ? `⚡ 雷击命中 ${target.name}；但【黄昏余命】期间未再损失生命。`
-          : `⚡ ${target.name} 挡下或化解了雷击，未受到生命伤害。`,
+            : `⚡ ${target.name} 挡下或化解了雷击，未受到生命伤害。`,
+        {
+          actorId: owl.id,
+          actorName: owl.name,
+          targetIds: [target.id],
+          skillId: 'owl_phase_two_lightning',
+          skillName: '煮酒惊雷',
+          presentation: 'skill',
+        },
       );
     }
     runtime.flushDeferredDamageEvents?.(target);
@@ -490,7 +520,15 @@ export function grantOwlHeavenFromDeath(runtime: OwlRuntime, fallen: Fighter): v
     });
     state.heavenStacks = Math.min(OWL_HEAVEN_MAX, state.heavenStacks + 1);
     runtime.syncHpPct(owl);
-    runtime.log('buff', `🦉 【不可能！】${owl.name}：“我二弟天下无敌！”继承 ${fallen.name} 8.5% 数值（${gains.join(' / ')}），天意 ${state.heavenStacks}/${OWL_HEAVEN_MAX}。`);
+    runtime.log(
+      'buff',
+      `🦉 【不可能！】${owl.name}：“我二弟天下无敌！”继承 ${fallen.name} 8.5% 数值（${gains.join(' / ')}），天意 ${state.heavenStacks}/${OWL_HEAVEN_MAX}。`,
+      {
+        actorId: owl.id,
+        actorName: owl.name,
+        targetIds: [fallen.id],
+      },
+    );
     if (state.heavenStacks >= OWL_HEAVEN_MAX) enterOwlPhaseThree(runtime, owl);
   });
 }

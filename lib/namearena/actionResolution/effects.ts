@@ -6,11 +6,12 @@ import type {
 import { resolveHealing } from '../combatState';
 import type { ActionResolutionRuntime } from './types';
 import { isCompetitiveTarget, isSelectableTargetFor } from '../targeting';
-import { consumeStatusValue, findIdentity, grantBarrier, hasIdentity, hasMechanic, queryMechanic, removeEffects, applyStatus } from '../statusSystem';
+import { consumeStatusValue, findIdentity, grantBarrier, getBarrierTotal, hasIdentity, hasMechanic, queryMechanic, removeEffects, applyStatus } from '../statusSystem';
 import { consumeDrain, getDrainPercent, getEffectiveCombatStat } from '../statusMechanics';
 import { buildFighterStatusPresentation, buildStatusPresentationMember } from '../statusPresentation';
 import { getStatusIdentityDefinition } from '../statusRegistry';
 import { didDamageConnect } from '../damageRedirects';
+import { canProvideHerobrineSupport } from '../npcCombat';
 
 const CHIMERA_BABY_SYNC_SKILLS: Record<string, string> = {
   chimera_devour: 'baby_feed',
@@ -115,8 +116,11 @@ export function applySkillStatusEffect(
   user: Fighter,
   target: Fighter,
   allowTargetStatus = true,
+  recipientScope: 'all' | 'user' | 'target' = 'all',
 ): void {
   for (const declared of skill.statusApplications ?? []) {
+    const declaredScope = declared.target === 'user' ? 'user' : 'target';
+    if (recipientScope !== 'all' && declaredScope !== recipientScope) continue;
     const recipient = declared.target === 'user' ? user : target;
     if (!allowTargetStatus && recipient.id === target.id) continue;
     const appliedSourceId = declared.attribution?.effectSourceId ?? declared.identityId;
@@ -157,11 +161,23 @@ export function applySkillStatusEffect(
     runtime.log(
       recipient.id === user.id ? 'buff' : 'debuff',
       `📌 【状态结算】${recipient.name} 获得【${presentation.name}】${valueText}${sourceText}。`,
+      { actorId: user.id, actorName: user.name, targetIds: [recipient.id] },
     );
   }
   for (const declared of skill.barrierApplications ?? []) {
+    const declaredScope = declared.target === 'user' ? 'user' : 'target';
+    if (recipientScope !== 'all' && declaredScope !== recipientScope) continue;
     const recipient = declared.target === 'user' ? user : target;
     if (!allowTargetStatus && recipient.id === target.id) continue;
+    if (!canProvideHerobrineSupport(runtime.battleState, user, recipient)) {
+      runtime.log(
+        'info',
+        `🌫️ 【单人世界】${user.name} 无法越过封闭世界向 ${recipient.name} 施加屏障。`,
+        { actorId: user.id, actorName: user.name, targetIds: [recipient.id] },
+      );
+      continue;
+    }
+    const barrierBefore = getBarrierTotal(recipient);
     const barrier = grantBarrier(recipient, declared.value, {
       identityId: declared.identityId,
       sourceId: declared.sourceId,
@@ -182,7 +198,20 @@ export function applySkillStatusEffect(
         creditOwnerId: declared.attribution?.creditOwnerId,
       },
     });
-    runtime.log('buff', `🔵 【屏障结算】${recipient.name} 获得【${barrier.displayName}】${declared.value} 点屏障。`);
+    if (!barrier) {
+      runtime.log(
+        'info',
+        `🔵 【屏障结算】${recipient.name} 的屏障获取被完全阻止，没有产生有效屏障。`,
+        { actorId: user.id, actorName: user.name, targetIds: [recipient.id] },
+      );
+      continue;
+    }
+    const actualGain = Math.max(0, getBarrierTotal(recipient) - barrierBefore);
+    runtime.log(
+      'buff',
+      `🔵 【屏障结算】${recipient.name} 获得【${barrier.displayName}】${actualGain} 点屏障${actualGain < declared.value ? `（原始值 ${declared.value}，受到护盾获取降低影响）` : ''}。`,
+      { actorId: user.id, actorName: user.name, targetIds: [recipient.id] },
+    );
   }
 }
 
@@ -332,17 +361,34 @@ export function applyLifestealEffects(
         : []),
   ];
   const sourceText = lifestealSources.length > 0 ? `（来源：${lifestealSources.join('、')}）` : '';
+  const selfMetadata = {
+    actorId: user.id,
+    actorName: user.name,
+    targetIds: [user.id],
+  };
   const healing = resolveHealing(user, healAmt, {
     kind: 'lifesteal',
     sourceId: lifestealSources.join('+') || skill.name,
     healer: user,
-  }, runtime.log);
+  }, (type, text) => runtime.log(type, text, selfMetadata));
   if (healing.actual > 0) {
-    runtime.log('heal', `💉 ${user.name} 触发吸血被动${sourceText}，恢复了 ${healing.actual} 点生命！`);
+    runtime.log(
+      'heal',
+      `💉 ${user.name} 触发吸血被动${sourceText}，恢复了 ${healing.actual} 点生命！`,
+      selfMetadata,
+    );
   } else if (healing.modified <= 0) {
-    runtime.log('info', `🥀 ${user.name} 触发吸血被动${sourceText}，但治疗被完全阻止！`);
+    runtime.log(
+      'info',
+      `🥀 ${user.name} 触发吸血被动${sourceText}，但治疗被完全阻止！`,
+      selfMetadata,
+    );
   } else {
-    runtime.log('info', `💉 ${user.name} 触发吸血被动${sourceText}，但生命已满，治疗溢出！`);
+    runtime.log(
+      'info',
+      `💉 ${user.name} 触发吸血被动${sourceText}，但生命已满，治疗溢出！`,
+      selfMetadata,
+    );
   }
 }
 
@@ -357,7 +403,15 @@ export function consumeAimAfterAttack(
   if (aim) consumeStatusValue(user, aim, 'charges');
   if (user.isWT && user.wtMarkedTargetId) {
     user.wtMarkedTargetId = undefined;
-    runtime.log('info', `🎯 ${user.name} 已消耗激光测距坐标，本次火控优先窗口关闭。`);
+    runtime.log(
+      'info',
+      `🎯 ${user.name} 已消耗激光测距坐标，本次火控优先窗口关闭。`,
+      {
+        actorId: user.id,
+        actorName: user.name,
+        targetIds: [user.id],
+      },
+    );
   }
 }
 

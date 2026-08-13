@@ -287,6 +287,54 @@ export function runOwlCases(): string[] {
   }
 
   {
+    const owl = makeFighter('鸮@B');
+    const markedAttacker = makeFighter('过江分摊触发者@A');
+    const yuzu = makeFighter('柚子@B');
+    const teammate = makeFighter('过江分摊队友@B');
+    const { engine } = makeDeathEngine([owl, markedAttacker, yuzu, teammate]);
+    const [engineOwl, engineMarkedAttacker, engineYuzu, engineTeammate] = engine.fighters;
+    enterPhaseTwo(engine, engineOwl);
+    engineOwl.agl = 10000;
+    applyTestStatus(engineOwl, { identityId: 'AIM', charges: 1 });
+    applyOwlRiverMark(engine.createOwlRuntime(), engineOwl, engineMarkedAttacker);
+    [engineOwl, engineYuzu, engineTeammate].forEach(clearYuzuShield);
+    setYuzuShield(engineYuzu, 23, engineYuzu.id, engineYuzu.name);
+    setYuzuShield(engineOwl, 1000, engineYuzu.id, engineYuzu.name);
+    setYuzuShield(engineTeammate, 1000, engineYuzu.id, engineYuzu.name);
+
+    engine.resolveOwlCrossingAssists({
+      id: 'owl-crossing-yuzu-redistribution',
+      actorId: engineMarkedAttacker.id,
+      actorName: engineMarkedAttacker.name,
+      skillId: 'test_attack',
+      skillName: '测试攻击',
+      presentation: 'skill',
+      triggerDepth: 0,
+      primaryTargetId: engineYuzu.id,
+      primaryPreDefenseDamage: 314,
+    });
+
+    const crossingDamage = engine.events.find((event) =>
+      event.kind === 'damage' &&
+      event.damage?.actionName === '过江协同' &&
+      event.damage.targetId === engineYuzu.id,
+    );
+    const stateSync = engine.events.find((event) =>
+      !!crossingDamage &&
+      event.sequence > crossingDamage.sequence &&
+      event.rootEventId === crossingDamage.rootEventId &&
+      event.actionId === crossingDamage.actionId &&
+      event.displayInFeed === false &&
+      event.text === `state-sync:${engineYuzu.id}`,
+    );
+    assert(
+      crossingDamage?.damage?.shieldDamage === 23 && stateSync,
+      'Crossing into Yuzu redistribution must commit the consumed shield and shared damage before the assist action ends',
+    );
+    cases.push('Crossing assist commits a playback snapshot after Yuzu redistribution');
+  }
+
+  {
     const owl = makeFighter('鸮@A');
     const markedAttacker = makeFighter('过江反击触发者@B');
     const counterTarget = makeFighter('过江反击持有者@C');
@@ -465,8 +513,8 @@ export function runOwlCases(): string[] {
     const lockIndex = logs.findIndex((entry) => entry.text.includes('【濒死锁血】'));
     const resultIndex = logs.findIndex((entry) => entry.text.includes('测试结果'));
     assert(actual === 0, '已在 1 点生命的归溟幽灵鲨应由锁血阻止本次入血');
-    assert(lockIndex >= 0 && resultIndex > lockIndex, '濒死锁血原因必须早于零伤害结果日志');
-    cases.push('召唤物濒死锁血在零伤害结果之前说明原因');
+    assert(resultIndex >= 0 && lockIndex > resultIndex, '濒死锁血后果必须晚于权威伤害结果日志');
+    cases.push('召唤物濒死锁血在权威伤害结果之后说明后果');
   }
 
   {
@@ -652,6 +700,25 @@ export function runOwlCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('不会把协同攻击打向自己')), 'Owl should explicitly suppress a Crossing assist whose victim is Owl itself');
     assert(!logs.some((entry) => entry.text.includes('同步过江') && entry.text.includes(engineOwl.name)), 'Owl must not execute a Crossing assist against itself');
     cases.push('Crossing assist never attacks Owl itself');
+  }
+
+  {
+    const zhao = makeFighter('赵云&阿斗@A');
+    zhao.owlSummonState = { kind: 'zhao_adou', spawnedTurn: 0 };
+    const target = makeFighter('长坂冲阵日志靶@B');
+    const { engine, logs } = makeDeathEngine([zhao, target]);
+
+    engine.executeSkillAction('owl_zhao_rampage', engine.fighters[0], engine.fighters[1]);
+
+    assert(
+      logs.some((entry) => entry.text.includes('【长坂冲阵】') && entry.text.includes('不分敌我')),
+      'Zhao & A Dou opening log should use the registered skill name while retaining its indiscriminate-targeting description',
+    );
+    assert(
+      !logs.some((entry) => entry.text.includes('【无差别冲阵】')),
+      'Zhao & A Dou must not introduce a second display name for the same attack',
+    );
+    cases.push('Zhao & A Dou uses one consistent skill name throughout its attack logs');
   }
 
   return cases;

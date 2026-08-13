@@ -16,12 +16,26 @@ import type {
   StatusInstance,
 } from '../../../lib/namearena/types';
 import { createBattleState, withBattleRandom } from '../../../lib/namearena/battleState';
+import { generateUniqueRuntimeId } from '../../../lib/namearena/core';
 import {
   grantPuruisaishiBarrier,
   spawnPuruisaishiEvent,
 } from '../../../lib/namearena/puruisaishiMechanics';
+import { spawnHerobrineEvent } from '../../../lib/namearena/herobrineMechanics';
+import {
+  isHerobrine,
+  isHerobrineClone,
+  setNpcCombatCapabilities,
+} from '../../../lib/namearena/npcCombat';
 import { getBarrierIdentityDefinition, getStatusIdentityDefinition, getStatusMechanicDefinition } from '../../../lib/namearena/statusRegistry';
-import { applyStatus, removeEffects } from '../../../lib/namearena/statusSystem';
+import { applyStatus, initializeEffectState, removeEffects } from '../../../lib/namearena/statusSystem';
+import {
+  enterSurtrAfterglow,
+  initializeSurtrState,
+  SURTR_BASE_STATS,
+  SURTR_TWILIGHT_MAX_HP_GAIN,
+  syncSurtrAffiliation,
+} from '../../../lib/namearena/surtrMechanics';
 import {
   enterYuzuProphetPhaseTwo,
   getYuzuProphetBoundYuzu,
@@ -77,6 +91,11 @@ export type LogEntry = {
   text: string;
   rootEventId?: string;
   actionId?: string;
+  actorId?: string;
+  actorName?: string;
+  targetIds?: string[];
+  skillId?: string | null;
+  skillName?: string;
   turn?: number;
   displayInFeed?: boolean;
   visualCue?: BattleEvent['visualCue'];
@@ -97,9 +116,12 @@ export type RunBattleOptions = {
   scanLogs?: boolean;
   scanRosterNames?: boolean;
   forcePuruisaishi?: boolean;
+  forceHerobrine?: boolean;
   forceYuzuProphet?: boolean;
   forceYuzuProphetPhaseTwo?: boolean;
   forceYuzuProphetUnboundPhaseTwo?: boolean;
+  forceSurtr?: boolean;
+  forceSurtrLifecycle?: 'normal' | 'twilight' | 'afterglow';
 };
 
 export type LogIssue = {
@@ -129,9 +151,25 @@ export type BattleResult = BattleSpec & {
   survivors: string[];
   logs: LogEntry[];
   events: BattleEvent[];
+  fighterDirectory: FighterTraceDescriptor[];
 };
 
 export type BattleEngineInstance = InstanceType<typeof BattleEngine>;
+
+export type FighterTraceDescriptor = {
+  id: string;
+  name: string;
+  kind: string;
+  teamId?: string;
+  summonerId?: string;
+  isNpc: boolean;
+  isSummon: boolean;
+  isSurtr: boolean;
+  isYuzuProphet: boolean;
+  isYuzu: boolean;
+  prophetControlDisposition?: 'controlled' | 'returned' | 'erased' | 'withdrawn';
+  surtrOwnerIds?: string[];
+};
 
 export type LoadedProject = {
   root: string;
@@ -288,6 +326,143 @@ export function makeProjectEngine(
 
 export function makeEngine(fighters: Fighter[], logs: LogEntry[], turnCount = 0): BattleEngineInstance {
   return makeProjectEngine(localProject, fighters, logs, turnCount);
+}
+
+function forcedSurtrName(fighters: readonly Fighter[]): string {
+  const existing = fighters.filter((fighter) =>
+    fighter.isSummon && (fighter.summonBaseName ?? fighter.name).replace(/#\d+$/, '') === '史尔特尔',
+  ).length;
+  return existing === 0 ? '史尔特尔' : `史尔特尔#${existing + 1}`;
+}
+
+export function injectForcedSurtr(
+  project: LoadedProject,
+  engine: BattleEngineInstance,
+  lifecycle: NonNullable<RunBattleOptions['forceSurtrLifecycle']> = 'normal',
+): Fighter {
+  const primaryOwner = engine.fighters.find((fighter) => fighter.isGacha && engine.isActiveCombatant(fighter));
+  const owlOwner = engine.fighters.find((fighter) => fighter.isOwl && engine.isActiveCombatant(fighter));
+  assert(primaryOwner, 'Forced Surtr fixture requires 牢鳄');
+  assert(owlOwner, 'Forced Surtr fixture requires 鸮');
+  const job = project.jobs.ARKNIGHTS_OP ?? project.jobs.WARRIOR;
+  assert(job, 'Forced Surtr fixture requires ARKNIGHTS_OP or WARRIOR job');
+  const primaryTeamId = engine.getTeamId(primaryOwner);
+  const owlTeamId = engine.getTeamId(owlOwner);
+  const summon = makeProjectFighter(project, `史尔特尔测试体@${primaryTeamId}`);
+  summon.id = generateUniqueRuntimeId(
+    engine.fighters.map((fighter) => fighter.id),
+    () => project.core.generateUUID?.() ?? `forced-surtr-${Math.random().toString(36).slice(2)}`,
+    'forced-surtr',
+  );
+  const name = forcedSurtrName(engine.fighters);
+  summon.name = name;
+  summon.displayName = name;
+  summon.job = 'ARKNIGHTS_OP';
+  summon.jobData = { ...job, skills: [...job.skills] };
+  summon.maxHp = SURTR_BASE_STATS.hp;
+  summon.currentHp = SURTR_BASE_STATS.hp;
+  summon.hpPct = 1;
+  summon.atk = SURTR_BASE_STATS.atk;
+  summon.def = SURTR_BASE_STATS.def;
+  summon.spd = SURTR_BASE_STATS.spd;
+  summon.agl = SURTR_BASE_STATS.agl;
+  summon.mag = SURTR_BASE_STATS.mag;
+  summon.res = SURTR_BASE_STATS.res;
+  summon.wis = SURTR_BASE_STATS.wis;
+  summon.critRate = 0.1;
+  summon.color = primaryOwner.color;
+  summon.isDead = false;
+  summon.isDeadAnnounced = false;
+  summon.statuses = [];
+  summon.barriers = [];
+  summon.stats = { kills: 0, dmgDealt: 0, dmgTaken: 0 };
+  summon.summonerId = primaryOwner.id;
+  summon.summonBaseName = '史尔特尔';
+  summon.teamId = primaryTeamId;
+  summon.isSummon = true;
+  summon.isAdvancedSummon = true;
+  summon.isSurtr = true;
+  summon.surtrState = initializeSurtrState(
+    primaryOwner,
+    primaryTeamId,
+    owlOwner,
+    owlTeamId,
+  );
+  initializeEffectState(summon);
+  engine.fighters.push(summon);
+  engine.log(
+    'crit',
+    `🔥 【共同主人确立】${summon.name} 同时认 ${primaryOwner.name} 与 ${owlOwner.name} 为主人（测试场景强制建立完整共同主人关系）。黄昏的尽头，莱万汀将烧尽一切。`,
+    {
+      actorId: summon.id,
+      actorName: summon.name,
+      targetIds: [primaryOwner.id, owlOwner.id],
+    },
+  );
+  syncSurtrAffiliation({
+    fighters: engine.fighters,
+    getTeamId: (fighter) => engine.getTeamId(fighter),
+    isActiveCombatant: (fighter) => engine.isActiveCombatant(fighter),
+    log: (type, text, metadata) => engine.log(type, text, metadata),
+  }, summon, { announceInitial: true, resetBaseline: true });
+  if (lifecycle === 'twilight') {
+    summon.surtrState.twilightUsed = true;
+    summon.surtrState.twilightActivatedTurn = engine.turnCount;
+    summon.maxHp += SURTR_TWILIGHT_MAX_HP_GAIN;
+    summon.currentHp = summon.maxHp;
+    engine.syncHpPct(summon);
+    engine.log(
+      'crit',
+      `🌇 【黄昏】${summon.name}：“莱万汀！”测试场景从黄昏已发动后的权威状态开始；最大生命 +${SURTR_TWILIGHT_MAX_HP_GAIN}，本局唯一一次黄昏已经消耗，并锁定 0 名目标。`,
+      { actorId: summon.id, actorName: summon.name, targetIds: [] },
+    );
+    engine.log(
+      'debuff',
+      `🌇 【黄昏流失启动】${summon.name} 将从下一次自身行动机会结束时流失 1% 最大生命，之后逐次递增，最高 20%。`,
+      { actorId: summon.id, actorName: summon.name, targetIds: [summon.id] },
+    );
+  } else if (lifecycle === 'afterglow') {
+    enterSurtrAfterglow({
+      turnCount: engine.turnCount,
+      syncHpPct: (fighter) => engine.syncHpPct(fighter),
+      log: (type, text, metadata) => engine.log(type, text, metadata),
+    }, summon);
+  }
+  return summon;
+}
+
+function fighterTraceKind(fighter: Fighter): string {
+  if (fighter.isYuzuProphet) return 'npc:yuzu_prophet';
+  if (fighter.isPuruisaishi) return 'npc:puruisaishi';
+  if (isHerobrine(fighter)) return 'npc:herobrine';
+  if (isHerobrineClone(fighter)) return 'npc:herobrine_clone';
+  if (fighter.isOriginiumCore) return 'npc:originium_core';
+  if (fighter.isOriginiumCrystal) return 'npc:originium_crystal';
+  if (fighter.isSurtr) return 'summon:surtr';
+  if (fighter.owlSummonState) return `summon:owl:${fighter.owlSummonState.kind}`;
+  if (fighter.isSummon) return `summon:${(fighter.summonBaseName ?? fighter.name).replace(/#\d+$/, '')}`;
+  if (fighter.isNpc) return `npc:${fighter.name.replace(/#\d+$/, '')}`;
+  return `player:${fighter.name.replace(/#\d+$/, '')}`;
+}
+
+function fighterDirectory(fighters: readonly Fighter[]): FighterTraceDescriptor[] {
+  return fighters.map((fighter) => ({
+    id: fighter.id,
+    name: fighter.name,
+    kind: fighterTraceKind(fighter),
+    teamId: fighter.teamId,
+    summonerId: fighter.summonerId,
+    isNpc: !!fighter.isNpc,
+    isSummon: !!fighter.isSummon,
+    isSurtr: !!fighter.isSurtr,
+    isYuzuProphet: !!fighter.isYuzuProphet,
+    isYuzu: !!fighter.isYuzu,
+    prophetControlDisposition: fighter.yuzuProphetControlState?.disposition,
+    surtrOwnerIds: fighter.surtrState
+      ? [fighter.surtrState.primaryOwnerId, fighter.surtrState.owlOwnerId]
+        .filter((id): id is string => !!id)
+      : undefined,
+  }));
 }
 
 export function snapshot(fighters: Fighter[]): FighterSnapshot[] {
@@ -471,6 +646,16 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
   const pendingCounterOutcomes: Array<{ counterName: string; line: number; text: string; deadline: number }> = [];
   const pendingInterceptions: Array<{ targetName: string; line: number; text: string; deadline: number; settlePattern: RegExp }> = [];
   const pendingGachaPityOutcomes: Array<{ line: number; text: string; deadline: number }> = [];
+  const pendingPostDamageAftermath: Array<{
+    line: number;
+    text: string;
+    deadline: number;
+    subjectName?: string;
+    targetIds?: string[];
+    rootEventId?: string;
+    actionId?: string;
+    turn?: number;
+  }> = [];
   const pendingBlockedHealing: Array<{
     name: string;
     line: number;
@@ -494,6 +679,79 @@ export function scanLogs(logs: LogEntry[], label: string, rosterNames: string[] 
   logs.forEach((entry, index) => {
       const line = index + 1;
       const text = entry.text;
+      const sameCausalWindow = (pending: {
+        rootEventId?: string;
+        actionId?: string;
+        turn?: number;
+      }): boolean => {
+        if (pending.turn !== undefined && entry.turn !== undefined && pending.turn !== entry.turn) return false;
+        if (pending.rootEventId && entry.rootEventId && pending.rootEventId !== entry.rootEventId) return false;
+        if (pending.actionId && entry.actionId && pending.actionId !== entry.actionId) return false;
+        return true;
+      };
+      const sharesTarget = (pending: {
+        subjectName?: string;
+        targetIds?: string[];
+      }, subjectName?: string): boolean => {
+        if (
+          pending.targetIds?.length &&
+          entry.targetIds?.length &&
+          pending.targetIds.some((targetId) => entry.targetIds?.includes(targetId))
+        ) {
+          return true;
+        }
+        return !!pending.subjectName && !!subjectName && pending.subjectName === subjectName;
+      };
+      const settlementSubject = text.match(/^📌 实际结算：(.+?) (?:实际承受|完全抵消|没有承受|未承受)/)?.[1];
+      for (let i = pendingPostDamageAftermath.length - 1; i >= 0; i -= 1) {
+        const pending = pendingPostDamageAftermath[i];
+        if (!pending) continue;
+        if (line > pending.deadline || !sameCausalWindow(pending)) {
+          pendingPostDamageAftermath.splice(i, 1);
+          continue;
+        }
+        if (text.startsWith('state-sync:') && sharesTarget(pending)) {
+          pendingPostDamageAftermath.splice(i, 1);
+          continue;
+        }
+        if (settlementSubject && sharesTarget(pending, settlementSubject)) {
+          issues.push({
+            label,
+            line: pending.line,
+            type: 'aftermath-before-damage-result',
+            text: `${pending.text}\nLATER: ${text}`,
+            name: pending.subjectName,
+          });
+          pendingPostDamageAftermath.splice(i, 1);
+        }
+      }
+      if (
+        /结算前预估/.test(text) &&
+        entry.targetIds?.length
+      ) {
+        for (let i = pendingPostDamageAftermath.length - 1; i >= 0; i -= 1) {
+          const pending = pendingPostDamageAftermath[i];
+          if (pending && sameCausalWindow(pending) && sharesTarget(pending)) {
+            pendingPostDamageAftermath.splice(i, 1);
+          }
+        }
+      }
+      const firstEventTitle = text.match(/【([^】]+)】/)?.[1];
+      if (
+        ['悲愿不倒', 'CONTINUE?', '提前落地', '炮震坠落', '击飞坠地'].includes(firstEventTitle ?? '') ||
+        (firstEventTitle === '欧皇护符' && /致死瞬间|锁住了/.test(text))
+      ) {
+        pendingPostDamageAftermath.push({
+          line,
+          text,
+          deadline: line + 12,
+          subjectName: titledSubjectName(text) ?? leadingMentionedName(text),
+          targetIds: entry.targetIds ? [...entry.targetIds] : undefined,
+          rootEventId: entry.rootEventId,
+          actionId: entry.actionId,
+          turn: entry.turn,
+        });
+      }
       for (let i = pendingBlockedHealing.length - 1; i >= 0; i -= 1) {
         const pending = pendingBlockedHealing[i];
         if (!pending) continue;
@@ -860,32 +1118,50 @@ export function runProjectBattle(project: LoadedProject, spec: BattleSpec, optio
         if (
           (
             options.forcePuruisaishi ||
+            options.forceHerobrine ||
             options.forceYuzuProphet ||
             options.forceYuzuProphetPhaseTwo ||
-            options.forceYuzuProphetUnboundPhaseTwo
+            options.forceYuzuProphetUnboundPhaseTwo ||
+            options.forceSurtr
           ) &&
           i === 0
         ) {
-          const puruisaishi = spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '机制压力测试强制出场');
-          if (
+          if (options.forceSurtr) {
+            injectForcedSurtr(project, engine, options.forceSurtrLifecycle);
+          }
+          if (options.forceHerobrine) {
+            spawnHerobrineEvent(engine.createHerobrineRuntime(), '机制压力测试强制出场');
+          } else if (
+            options.forcePuruisaishi ||
             options.forceYuzuProphet ||
             options.forceYuzuProphetPhaseTwo ||
             options.forceYuzuProphetUnboundPhaseTwo
           ) {
-            puruisaishi.puruisaishiPhase = 2;
-            puruisaishi.puruisaishiPhaseTwoStartedTurn = engine.turnCount;
-            delete puruisaishi.untargetableUntilTurn;
-            grantPuruisaishiBarrier(puruisaishi, 6000, '预言家压力测试');
-            const prophet = trySpawnYuzuProphet(engine.createYuzuProphetRuntime(), puruisaishi, { force: true });
-            if (prophet && (options.forceYuzuProphetPhaseTwo || options.forceYuzuProphetUnboundPhaseTwo)) {
-              enterYuzuProphetPhaseTwo(engine.createYuzuProphetRuntime(), prophet, '机制压力测试强制进入二阶段');
-              if (options.forceYuzuProphetUnboundPhaseTwo) {
-                const boundYuzu = getYuzuProphetBoundYuzu(engine.fighters, prophet);
-                if (boundYuzu) {
-                  project.setCurrentHp(boundYuzu, 0);
-                  boundYuzu.isDead = true;
-                  boundYuzu.isDeadAnnounced = true;
-                  boundYuzu.defeatHooksResolved = true;
+            const puruisaishi = spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '机制压力测试强制出场');
+            if (
+            options.forceYuzuProphet ||
+            options.forceYuzuProphetPhaseTwo ||
+            options.forceYuzuProphetUnboundPhaseTwo
+            ) {
+              puruisaishi.puruisaishiPhase = 2;
+              puruisaishi.puruisaishiPhaseTwoStartedTurn = engine.turnCount;
+              delete puruisaishi.untargetableUntilTurn;
+              setNpcCombatCapabilities(puruisaishi, {
+                targetable: true,
+                aoeVulnerable: true,
+              });
+              grantPuruisaishiBarrier(puruisaishi, 6000, '预言家压力测试');
+              const prophet = trySpawnYuzuProphet(engine.createYuzuProphetRuntime(), puruisaishi, { force: true });
+              if (prophet && (options.forceYuzuProphetPhaseTwo || options.forceYuzuProphetUnboundPhaseTwo)) {
+                enterYuzuProphetPhaseTwo(engine.createYuzuProphetRuntime(), prophet, '机制压力测试强制进入二阶段');
+                if (options.forceYuzuProphetUnboundPhaseTwo) {
+                  const boundYuzu = getYuzuProphetBoundYuzu(engine.fighters, prophet);
+                  if (boundYuzu) {
+                    project.setCurrentHp(boundYuzu, 0);
+                    boundYuzu.isDead = true;
+                    boundYuzu.isDeadAnnounced = true;
+                    boundYuzu.defeatHooksResolved = true;
+                  }
                 }
               }
             }
@@ -934,6 +1210,7 @@ export function runProjectBattle(project: LoadedProject, spec: BattleSpec, optio
       survivors,
       logs,
       events,
+      fighterDirectory: fighterDirectory(fighters),
     };
   });
 }

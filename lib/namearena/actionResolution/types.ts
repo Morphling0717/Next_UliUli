@@ -1,4 +1,5 @@
 import type {
+  BattleState,
   BattleEngineData,
   BattleLogMetadata,
   DamageApplicationOptions,
@@ -11,6 +12,7 @@ import type {
 } from '../types';
 import type { CharacterHookRuntime, ReactionActionDescriptor } from '../characterHooks';
 import type { DamageResult } from '../damageResolution';
+import type { SupportSkillResolution } from '../supportResolution';
 
 export interface ActionResolutionRuntime {
   fighters: Fighter[];
@@ -19,6 +21,7 @@ export interface ActionResolutionRuntime {
   data: BattleEngineData;
   turnCount: number;
   largeRound: number;
+  battleState?: BattleState;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
@@ -49,6 +52,7 @@ export interface ActionResolutionRuntime {
     forcedTarget: Fighter | null,
     triggerDepth: number,
   ) => void;
+  noteOffensiveActionTarget: (target: Fighter) => void;
   runReactionAction: (
     actor: Fighter,
     descriptor: ReactionActionDescriptor,
@@ -61,7 +65,7 @@ export interface ActionResolutionRuntime {
     user: Fighter,
     forcedTarget: Fighter | null,
     userTeamId: string,
-  ) => boolean;
+  ) => SupportSkillResolution;
   createCharacterHookRuntime: () => CharacterHookRuntime;
   prepareYuzuProphetIncomingAction: (user: Fighter, target: Fighter) => boolean;
 }

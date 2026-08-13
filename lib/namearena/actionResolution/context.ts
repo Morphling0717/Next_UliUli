@@ -11,6 +11,8 @@ import type { ActionResolutionRuntime } from './types';
 import { consumeOwlEvadeOpening } from './guards';
 import { getEffectiveCombatStat } from '../statusMechanics';
 import { isDamageRedirected } from '../damageRedirects';
+import { canProvideHerobrineSupport } from '../npcCombat';
+import { isSelectableTargetFor } from '../targeting';
 
 export function createSkillContext(
   runtime: ActionResolutionRuntime,
@@ -37,6 +39,7 @@ export function createSkillContext(
     fighters: runtime.fighters,
     turnCount: runtime.turnCount,
     largeRound: runtime.largeRound,
+    battleState: runtime.battleState,
     log: (type, text, metadata) => {
       const visualTargetIds = metadata?.targetIds ?? (
         !actionVisualEmitted && declaredVisualTargetIds?.length
@@ -44,7 +47,7 @@ export function createSkillContext(
           : [isSupportSkill ? user.id : lastAffectedTargetId ?? context.target.id]
       );
       const canAnchorAction = isSupportSkill
-        ? type === 'buff' || type === 'heal' || type === 'skill'
+        ? type === 'buff' || type === 'heal' || type === 'skill' || type === 'crit'
         : type === 'skill' || type === 'crit' || type === 'poison';
       const explicitVisual = metadata?.visualCue;
       const visualCue = explicitVisual ?? (!actionVisualEmitted && canAnchorAction ? {
@@ -65,7 +68,14 @@ export function createSkillContext(
       if (actionVisualEmitted) return;
       declaredVisualTargetIds = [...new Set(targets.map((fighter) => fighter.id))];
     },
+    setOffensiveTarget: (offensiveTarget) => {
+      runtime.noteOffensiveActionTarget(offensiveTarget);
+    },
+    canOffensivelyTarget: (offensiveTarget) =>
+      isSelectableTargetFor(runtime, user, offensiveTarget),
     getTeamId: (fighter) => runtime.getTeamId(fighter),
+    canProvideSupport: (supportTarget) =>
+      canProvideHerobrineSupport(runtime.battleState, user, supportTarget),
     getEffectiveStat: (fighter, key) => getEffectiveCombatStat(fighter, key, 'custom'),
     applyDamage: (damageTarget, amount, source, trueDamage, attacker, options) => {
       lastAffectedTargetId = damageTarget.id;
@@ -83,10 +93,13 @@ export function createSkillContext(
         statusHitCount: options?.statusHitCount ?? skill?.statusHitCount ?? 1,
       };
       const actualDmg = runtime.applyDamage(damageTarget, amount, source, trueDamage, attacker ?? user, damageOptions);
+      const actionActorDefeatedDuringTransfer =
+        damageOptions.redirectedJokerDefeatedTargetIds?.includes(user.id) ?? false;
       const blockedOutcome = damageOptions.resolution?.outcome === 'spell_blocked' ||
         damageOptions.resolution?.outcome === 'invulnerable' ||
         damageOptions.resolution?.outcome === 'prevented';
       if (
+        !actionActorDefeatedDuringTransfer &&
         skill?.directTarget &&
         source === 'skill' &&
         !customDirectOpeningConsumed &&
@@ -94,12 +107,24 @@ export function createSkillContext(
         consumeOwlEvadeOpening(damageTarget, { ...skill, mult: skill.mult ?? 1 }, false)
       ) {
         customDirectOpeningConsumed = true;
-        runtime.log('debuff', `🍃 【乘风失衡】${damageTarget.name} 的身位破绽被 ${damageAttacker.name} 抓住，这次直接单体攻击必定命中！`);
+        runtime.log(
+          'debuff',
+          `🍃 【乘风失衡】${damageTarget.name} 的身位破绽被 ${damageAttacker.name} 抓住，这次直接单体攻击必定命中！`,
+          {
+            actorId: damageAttacker.id,
+            actorName: damageAttacker.name,
+            targetIds: [damageTarget.id],
+          },
+        );
       }
+      if (actionActorDefeatedDuringTransfer) context.suppressOnHitStatuses = true;
       runtime.flushDeferredDamageEvents(damageTarget, 'mitigation');
       if (options) {
         if (damageOptions.redirectedByJoker) options.redirectedByJoker = true;
         if (damageOptions.redirectedJokerDamage !== undefined) options.redirectedJokerDamage = damageOptions.redirectedJokerDamage;
+        if (damageOptions.redirectedJokerDefeatedTargetIds) {
+          options.redirectedJokerDefeatedTargetIds = [...damageOptions.redirectedJokerDefeatedTargetIds];
+        }
         if (damageOptions.redirectedByOriginiumCore) {
           options.redirectedByOriginiumCore = true;
           options.redirectedOriginiumDamage = damageOptions.redirectedOriginiumDamage ?? actualDmg;
@@ -144,7 +169,12 @@ export function createSkillContext(
       if (damageOptions.redirectedByOriginiumCore || damageOptions.redirectedByOwlEmperor || damageOptions.redirectedByMomo) {
         return 0;
       }
-      if (actualDmg > 0 || damageOptions.hitWithoutHpDamage || (damageTarget.pendingDamageEvents?.length ?? 0) > pendingEventCountBefore) {
+      if (
+        actualDmg > 0 ||
+        damageOptions.hitWithoutHpDamage ||
+        damageOptions.targetWithdrawnDuringDamage ||
+        (damageTarget.pendingDamageEvents?.length ?? 0) > pendingEventCountBefore
+      ) {
         trackDeferredDamageTarget?.(damageTarget);
       }
       return actualDmg;
@@ -174,6 +204,14 @@ export function createSkillContext(
     },
     dispelStatusEffects: (statusTarget, options) => {
       lastAffectedTargetId = statusTarget.id;
+      if (!canProvideHerobrineSupport(runtime.battleState, user, statusTarget)) {
+        runtime.log(
+          'info',
+          `⬜ 【单人世界边界】${user.name} 无法越过隔离驱散 ${statusTarget.name} 的状态。`,
+          { actorId: user.id, actorName: user.name, targetIds: [statusTarget.id] },
+        );
+        return { removed: [], blocked: [], removedBarriers: [], blockedBarriers: [] };
+      }
       return runtime.dispelStatusEffects(statusTarget, options);
     },
     handleWaitCounter: (counterTarget, counterUser, counterActionName) =>

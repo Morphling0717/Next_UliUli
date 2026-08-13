@@ -1,15 +1,18 @@
 import type {
+  BattleState,
   DispelOptions,
   DispelResolution,
   Fighter,
   SkillDispelSpec,
   SkillDefinition,
 } from './types';
+import { canProvideHerobrineSupport } from './npcCombat';
 
 export type SkillDispelTiming = NonNullable<SkillDispelSpec['timing']>;
 
 export interface SkillDispelRuntime {
   fighters: Fighter[];
+  battleState?: BattleState;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   dispelStatusEffects: (target: Fighter, options: DispelOptions) => DispelResolution;
@@ -35,10 +38,14 @@ function resolveTargets(
   if (targetMode === 'allies') {
     const teamId = runtime.getTeamId(user);
     return uniqueFighters(runtime.fighters.filter((fighter) =>
-      runtime.isActiveCombatant(fighter) && runtime.getTeamId(fighter) === teamId,
+      runtime.isActiveCombatant(fighter) &&
+      runtime.getTeamId(fighter) === teamId &&
+      canProvideHerobrineSupport(runtime.battleState, user, fighter),
     ));
   }
-  return [fallbackTarget];
+  return canProvideHerobrineSupport(runtime.battleState, user, fallbackTarget)
+    ? [fallbackTarget]
+    : [];
 }
 
 export function resolveDeclarativeSkillDispel(

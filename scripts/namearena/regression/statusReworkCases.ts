@@ -22,6 +22,7 @@ import {
   getIncomingDirectStatusMultiplier,
   getOpeningCritBonus,
   getOutgoingDirectStatusMultiplier,
+  clearReviveEffects,
   resetStatusResourcesOnDeath,
   resetStatusResourcesOnRevive,
   settleBurnAtLargeRound,
@@ -695,7 +696,9 @@ export function runStatusReworkCases(): string[] {
     const target = prepareFighter(makeFighter('麦霸双算目标@B'));
     target.def = 100;
     const { engine } = makeDeathEngine([momo, target]);
-    engine.executeSkillAction('momo_mic_open', engine.fighters[0], engine.fighters[1]);
+    withRandomSequence([0], () =>
+      engine.executeSkillAction('momo_mic_open', engine.fighters[0], engine.fighters[1]),
+    );
     const engineTarget = engine.fighters[1];
     const micStatus = engineTarget.statuses.find((status) => status.identityId === 'MOMO_MIC_DEF_DOWN');
     assert(engineTarget.def === 100, `Momo Mic must leave the raw defense untouched, got ${engineTarget.def}`);
@@ -787,19 +790,33 @@ export function runStatusReworkCases(): string[] {
     const target = prepareFighter(makeFighter('沉沦玩家@B'));
     const npc = prepareFighter(makeFighter('沉沦NPC@C'));
     npc.isNpc = true;
-    const { engine } = makeDeathEngine([source, target, npc]);
+    const { engine, logs } = makeDeathEngine([source, target, npc]);
     const [engineSource, engineTarget, engineNpc] = engine.fighters;
     engine.applyStatus(engineTarget, { identityId: 'SINKING', potency: 12, count: 2, attribution: { applierId: engineSource.id, applierName: engineSource.name } });
     engine.applyDamage(engineTarget, 20, 'skill', true, engineSource, { sourceKind: 'custom', actionName: '沉沦触发' });
     assert(engineTarget.morale === 88, `player sinking should reduce morale by potency, got ${engineTarget.morale}`);
     assert(queryMechanic(engineTarget, 'SINKING').count === 1, 'player sinking should consume one count');
+    engineTarget.morale = 8;
+    const breakdownLogStart = logs.length;
+    engine.applyDamage(engineTarget, 20, 'skill', true, engineSource, { sourceKind: 'custom', actionName: '沉沦崩溃触发' });
+    const breakdownLogs = logs.slice(breakdownLogStart);
+    assert(engineTarget.morale === 50, 'lethal morale damage should reset morale to fifty after breakdown');
+    assert(
+      breakdownLogs.some((entry) =>
+        entry.actorId === engineSource.id &&
+        entry.targetIds?.includes(engineTarget.id) &&
+        entry.text.includes('士气由 8 被压至 0，精神崩溃后重置为 50')
+      ) &&
+      !breakdownLogs.some((entry) => entry.text.includes('士气由 8 降至 50')),
+      'Sinking breakdown logs must preserve source metadata and must not describe the reset as morale increasing from eight to fifty',
+    );
 
     engine.applyStatus(engineNpc, { identityId: 'SINKING', potency: 10, count: 1, attribution: { applierId: engineSource.id, applierName: engineSource.name } });
     grantBarrier(engineNpc, 5, { sourceId: 'npc-sinking-shield', displayName: 'NPC屏障', tickMode: 'permanent' });
     engine.applyDamage(engineNpc, 1, 'skill', true, engineSource, { sourceKind: 'custom', bypassShields: true, actionName: 'NPC沉沦触发' });
     assert(engineNpc.morale === undefined, 'NPCs must not gain a morale resource');
     assert(Number(engineNpc.currentHp) === 994, `NPC sinking should become potency damage after its shield absorbs five, got ${engineNpc.currentHp}`);
-    cases.push('sinking reduces player morale and becomes shieldable fixed damage on NPCs');
+    cases.push('sinking preserves source attribution, explains morale breakdown, and becomes shieldable fixed damage on NPCs');
   }
 
   {
@@ -1380,6 +1397,8 @@ export function runStatusReworkCases(): string[] {
     applySingleTestStatus(fighter, { identityId: 'DIVA_HEADPHONE_GUARD', remainingTurns: 2, attribution: { effectSourceId: 'death-positive' } });
     applySingleTestStatus(fighter, { identityId: 'CHARGE', potency: 8, attribution: { effectSourceId: 'death-neutral' } });
     applySingleTestStatus(fighter, { identityId: 'MOMO_CAPTAIN', attribution: { effectSourceId: 'death-independent' } });
+    applySingleTestStatus(fighter, { identityId: 'ORIGINIUM_DISEASE', potency: 9, attribution: { effectSourceId: 'death-originium' } });
+    applySingleTestStatus(fighter, { identityId: 'HEROBRINE_WITNESS', potency: 4, attribution: { effectSourceId: 'death-witness' } });
     grantBarrier(fighter, 100, { sourceId: 'death-barrier', displayName: '死亡测试屏障', tickMode: 'permanent' });
     fighter.morale = 23;
     fighter.stagger = 31;
@@ -1387,8 +1406,20 @@ export function runStatusReworkCases(): string[] {
     resetStatusResourcesOnDeath(fighter);
     assert(!fighter.statuses.some((status) => ['BURN', 'DIVA_HEADPHONE_GUARD'].includes(status.identityId)), 'true death should clear ordinary positive and negative statuses');
     assert(fighter.statuses.some((status) => status.identityId === 'CHARGE') && fighter.statuses.some((status) => status.identityId === 'MOMO_CAPTAIN'), 'true death should preserve neutral resources and independent identities for their own revive rules');
+    assert(
+      fighter.statuses.some((status) => status.identityId === 'ORIGINIUM_DISEASE') &&
+      fighter.statuses.some((status) => status.identityId === 'HEROBRINE_WITNESS'),
+      'event statuses declared death-persistent must survive true death',
+    );
     assert(getBarrierTotal(fighter) === 0 && fighter.morale === undefined && fighter.maxMorale === undefined && fighter.stagger === 0, 'true death should clear barriers, morale, and stagger resources');
 
+    clearReviveEffects(fighter);
+    assert(
+      fighter.statuses.length === 2 &&
+      fighter.statuses.some((status) => status.identityId === 'ORIGINIUM_DISEASE') &&
+      fighter.statuses.some((status) => status.identityId === 'HEROBRINE_WITNESS'),
+      'revival cleanup should remove temporary resources while preserving Originium Disease and Witness',
+    );
     resetStatusResourcesOnRevive(fighter);
     assert(fighter.morale === 100 && fighter.maxMorale === 100 && fighter.stagger === 0, 'a player revival should re-enter with full morale and no stagger');
     const npc = prepareFighter(makeFighter('死亡资源NPC@B'));
@@ -1396,7 +1427,7 @@ export function runStatusReworkCases(): string[] {
     resetStatusResourcesOnDeath(npc);
     resetStatusResourcesOnRevive(npc);
     assert(npc.morale === undefined && npc.maxMorale === undefined, 'NPC revival must not create a morale resource');
-    cases.push('true death clears ordinary effects and revive restores only eligible morale resources');
+    cases.push('death and revival cleanup preserve event-persistent statuses while resetting temporary effects and resources');
   }
 
   {

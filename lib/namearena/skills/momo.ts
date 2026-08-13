@@ -15,7 +15,7 @@ import {
   type MomoRuntime,
 } from '../momoMechanics';
 import type { DamageApplicationOptions, Fighter, SkillContext, SkillDefinition } from '../types';
-import { applyStatus, queryMechanic } from '../statusSystem';
+import { queryMechanic } from '../statusSystem';
 import { getSelectableTargets } from '../targeting';
 
 const { SKILL_TAGS } = Data;
@@ -23,6 +23,7 @@ const { SKILL_TAGS } = Data;
 function asMomoRuntime(ctx: SkillContext): MomoRuntime {
   return {
     fighters: ctx.fighters,
+    battleState: ctx.battleState,
     jobs: namerenaJobs,
     turnCount: ctx.turnCount,
     getTeamId: ctx.getTeamId,
@@ -35,7 +36,8 @@ function asMomoRuntime(ctx: SkillContext): MomoRuntime {
     applyStatus: ctx.applyStatus,
     dispelStatusEffects: ctx.dispelStatusEffects,
     markDefeated: ctx.markDefeated,
-    flushDeferredDamageEvents: (fighter) => {
+    flushDeferredDamageEvents: (fighter, phase) => {
+      if (phase === 'mitigation') return;
       if (fighter.id === ctx.target.id || fighter.id === ctx.user.id) ctx.flushDeferredDamageEvents?.();
     },
   };
@@ -153,6 +155,10 @@ function executeSwordVent(ctx: SkillContext): boolean {
     ctx.log('info', `🗡️ 【SWORD VENT】${ctx.user.name} 找不到仍在场的契约者，武器降临失败。`);
     return true;
   }
+  if (!ctx.canProvideSupport(owner)) {
+    ctx.log('info', `⬜ 【单人世界边界】${ctx.user.name} 的【SWORD VENT】无法越过隔离降临到 ${owner.name}。`);
+    return true;
+  }
   const result = grantMomoSword(asMomoRuntime(ctx), owner);
   if (result === 'existing') ctx.log('info', `🗡️ 【SWORD VENT】${owner.name} 已持有村好剑或醒剑，装备不能叠加。`);
   else if (result === 'awakened') ctx.log('crit', `⚔️ 【SWORD VENT】村好剑在降临瞬间与 ${owner.name} 共鸣，直接觉醒为【醒剑】！`);
@@ -165,6 +171,10 @@ function executeGuardVent(ctx: SkillContext): boolean {
     ctx.log('info', `🛡️ 【GUARD VENT】${ctx.user.name} 找不到仍在场的契约者，防御降临失败。`);
     return true;
   }
+  if (!ctx.canProvideSupport(owner)) {
+    ctx.log('info', `⬜ 【单人世界边界】${ctx.user.name} 的【GUARD VENT】无法越过隔离保护 ${owner.name}。`);
+    return true;
+  }
   const exists = queryMechanic(owner, 'SPELL_BLOCK').entries.some((status) =>
     status.attribution.effectSourceId === 'momo_guard_vent',
   );
@@ -172,7 +182,7 @@ function executeGuardVent(ctx: SkillContext): boolean {
     ctx.log('info', `🛡️ 【GUARD VENT】${owner.name} 的防御降临仍未消耗，本次不重复装备。`);
     return true;
   }
-  applyStatus(owner, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'momo_guard_vent' } });
+  ctx.applyStatus(owner, { identityId: 'SPELL_BLOCK', charges: 1, attribution: { effectSourceId: 'momo_guard_vent' } });
   ctx.log('buff', `🛡️ 【GUARD VENT】${ctx.user.name} 降下一面契约盾，为 ${owner.name} 抵挡下一次技能伤害或控制！`);
   return true;
 }
@@ -180,6 +190,10 @@ function executeGuardVent(ctx: SkillContext): boolean {
 function executeFinalVent(ctx: SkillContext): boolean {
   const owner = ownerForDragon(ctx);
   if (!owner) return true;
+  if (!ctx.canProvideSupport(owner)) {
+    ctx.log('info', `⬜ 【单人世界边界】${ctx.user.name} 无法越过隔离与 ${owner.name} 发动【FINAL VENT】。`);
+    return true;
+  }
   if (ctx.targetWasIntercepted && ctx.interceptedProtectedTargetId) {
     const protectedTarget = ctx.fighters.find((fighter) => fighter.id === ctx.interceptedProtectedTargetId);
     if (protectedTarget) {
@@ -250,9 +264,11 @@ function executeTenPull(ctx: SkillContext): boolean {
     ctx.log('buff', `🏰 【浪漫城堡】${castleGains.length} 名舰长的【众宾欢也】实际合计增加 ${actualCastleGain} 层。`);
     cleansed += cleanseMomoCaptains(runtime, ctx.user);
   }
+  let settledSeals = 0;
   for (let i = 0; i < counts.seal; i += 1) {
     if (!isActiveCombatant(ctx.user)) break;
     ctx.executeSkillAction('momo_seal_hit', ctx.user, null, ctx.triggerDepth + 1);
+    settledSeals += 1;
   }
   const recoveryText = healed > 0
     ? `实际恢复 ${healed} 点生命`
@@ -262,7 +278,12 @@ function executeTenPull(ctx: SkillContext): boolean {
   const cleanseText = cleansed > 0
     ? `清除 ${cleansed} 个负面状态`
     : '没有可清除的负面状态';
-  ctx.log('info', `📦 【十连结算】${ctx.user.name} ${recoveryText}，${cleanseText}；${counts.seal} 枚神驹宝玺均已分别完成命中与防护判定。`);
+  const sealText = counts.seal === 0
+    ? '本次未抽到神驹宝玺'
+    : settledSeals === counts.seal
+      ? `${settledSeals} 枚神驹宝玺均已分别完成命中与防护判定`
+      : `抽到 ${counts.seal} 枚神驹宝玺，其中 ${settledSeals} 枚完成结算，其余因 ${ctx.user.name} 退场而取消`;
+  ctx.log('info', `📦 【十连结算】${ctx.user.name} ${recoveryText}，${cleanseText}；${sealText}。`);
   return true;
 }
 
@@ -273,6 +294,7 @@ function executePeaches(ctx: SkillContext): boolean {
   for (let hit = 1; hit <= 4 && isActiveCombatant(ctx.user); hit += 1) {
     const selectableTargets = getSelectableTargets({
       fighters: ctx.fighters,
+      battleState: ctx.battleState,
       turnCount: ctx.turnCount,
       getTeamId: ctx.getTeamId,
       isActiveCombatant,
@@ -362,7 +384,7 @@ export const momoSkills: Record<string, SkillDefinition> = {
   momo_final_vent_hit: {
     name: 'FINAL VENT', tag: SKILL_TAGS.PHYS, mult: 1, presentation: 'finisher',
     damageFormula: finalVentDamageFormula, cannotCrit: true,
-    text: '🦇 {USER} 与无双龙同步跃起，契约骑士踢命中 {TARGET}，造成 {VAL} 点伤害！',
+    text: '🦇 {USER} 延续契约合击，骑士踢命中 {TARGET}，造成 {VAL} 点伤害！',
   },
   momo_dragon_strike: {
     name: '契约龙爪', tag: SKILL_TAGS.PHYS, mult: 1,

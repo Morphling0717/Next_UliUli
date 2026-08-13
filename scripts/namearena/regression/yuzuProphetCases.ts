@@ -26,6 +26,7 @@ import {
   YUZU_PROPHET_SKILLS,
 } from '../../../lib/namearena/yuzuProphetMechanics';
 import { GACHA_SURTR_CARD } from '../../../lib/namearena/gachaMechanics';
+import { setNpcCombatCapabilities } from '../../../lib/namearena/npcCombat';
 import { hasIdentity, removeBarriers } from '../../../lib/namearena/statusSystem';
 import type { Fighter } from '../../../lib/namearena/types';
 import {
@@ -33,6 +34,8 @@ import {
   assert,
   localProject,
   makeFighter,
+  NO_WATER,
+  runBattle,
   withRandomSequence,
   type BattleEngineInstance,
   type LogEntry,
@@ -41,6 +44,7 @@ import { makeDeathEngine } from './deathAccountingCases';
 
 type ProphetTestEngine = {
   selectYuzuProphetPlayerTarget: (prophet: Fighter) => Fighter | undefined;
+  executeYuzuProphetControlledRelease: (summon: Fighter) => Array<{ target: Fighter }>;
   executeYuzuProphetPhaseTwoClash: (
     prophet: Fighter,
     skillId: string,
@@ -91,6 +95,10 @@ function spawnProphetFixture(
   puruisaishi.puruisaishiPhase = 2;
   puruisaishi.puruisaishiPhaseTwoStartedTurn = engine.turnCount;
   delete puruisaishi.untargetableUntilTurn;
+  setNpcCombatCapabilities(puruisaishi, {
+    targetable: true,
+    aoeVulnerable: true,
+  });
   grantPuruisaishiBarrier(puruisaishi, 6000, '预言家回归测试');
   const prophet = withRandomSequence([0], () =>
     trySpawnYuzuProphet(engine.createYuzuProphetRuntime(), puruisaishi, { force: true }),
@@ -159,7 +167,7 @@ export function runYuzuProphetCases(): string[] {
     summon.currentHp = Math.max(1, summon.currentHp - 37);
     applyTestStatus(summon, { identityId: 'BURN', count: 3 });
     const beforeHp = summon.currentHp;
-    const { engine, prophet } = spawnProphetFixture(
+    const { engine, logs, prophet, yuzu, puruisaishi } = spawnProphetFixture(
       ['柚子@A', '接管测试敌人@B', '接管测试旁观者@C'],
       [owner, summon],
     );
@@ -170,7 +178,143 @@ export function runYuzuProphetCases(): string[] {
     assert(controlled.currentHp === beforeHp && hasIdentity(controlled, 'BURN'), 'Takeover must preserve HP and statuses');
     assert(controlled.summonerId === prophet.id && controlled.teamId === YUZU_PROPHET_EVENT_TEAM, 'Takeover should detach owner and move summon to event team');
     assert(controlled.yuzuProphetControlState?.originalSummonerId === engineOwner.id, 'Takeover must retain original owner for return');
-    cases.push('Prophet takeover preserves summon state and records the original owner without fallback duplication');
+
+    const ordinaryTarget = withRandomSequence([0.999, 0.999], () =>
+      resolveTarget(
+        engine.createTargetingRuntime(),
+        controlled,
+        null,
+        engine.getSelectableTargets(controlled),
+      ),
+    );
+    assert(
+      ordinaryTarget && ordinaryTarget.target.id !== yuzu.id,
+      'A controlled summon must use normal weighted targeting instead of forcing the bound Yuzu',
+    );
+
+    for (const fighter of engine.fighters) {
+      if (
+        fighter.id !== controlled.id &&
+        fighter.id !== yuzu.id &&
+        fighter.id !== prophet.id &&
+        fighter.id !== puruisaishi.id
+      ) {
+        fighter.untargetableUntilTurn = engine.turnCount + 10;
+      }
+    }
+    setNpcCombatCapabilities(puruisaishi, {
+      targetable: false,
+      aoeVulnerable: true,
+    });
+    controlled.jobData = { ...controlled.jobData!, skills: [] };
+    controlled.atk = 1000;
+    controlled.wis = 0;
+    controlled.critRate = 0;
+    yuzu.maxHp = 10000;
+    yuzu.def = 0;
+    yuzu.agl = 0;
+    localProject.setCurrentHp(yuzu, 10000);
+    applyTestStatus(controlled, { identityId: 'AIM', charges: 1 });
+    const logStart = logs.length;
+    const eventStart = engine.events.length;
+    const settlements = withRandomSequence(
+      [0.999, 0.5, 0.5, 0.5, 0.5],
+      () => (engine as unknown as ProphetTestEngine).executeYuzuProphetControlledRelease(controlled),
+    );
+    const actualTarget = settlements[settlements.length - 1]?.target;
+    const releaseLogs = logs.slice(logStart);
+    const releaseEvents = engine.events.slice(eventStart);
+    assert(actualTarget?.id === yuzu.id && yuzu.currentHp < 10000, 'A controlled summon should complete its own normal attack');
+    assert(
+      !releaseLogs.some((entry) => entry.text.includes('拼点')),
+      'A controlled summon action must never enter the Prophet clash pipeline',
+    );
+    assert(
+      releaseEvents.some((event) =>
+        event.kind === 'damage' &&
+        event.damage?.attackerId === controlled.id &&
+        event.damage.targetId === yuzu.id
+      ),
+      'The controlled summon must remain the actual attacker and damage source',
+    );
+    assert(
+      !releaseEvents.some((event) => event.kind === 'damage' && event.damage?.attackerId === yuzu.id),
+      'The target must not counter-release a selected skill merely because the controlled summon attacked',
+    );
+    cases.push('Controlled summons keep normal skills and targets and never enter the Prophet clash pipeline');
+  }
+
+  {
+    const { engine, logs, prophet } = spawnProphetFixture([
+      '柚子@A',
+      '鸮@O',
+      '五类召唤物行动靶@B',
+      '五类召唤物行动旁观者@C',
+    ]);
+    const owl = engine.fighters.find((fighter) => fighter.isOwl)!;
+    owl.maxHp = 50000;
+    localProject.setCurrentHp(owl, 20000);
+    engine.handleTransformations(owl);
+    const furry = spawnOwlFurrySquad(engine.createOwlRuntime(), owl);
+    const fallbackSurtr = engine.fighters.find((fighter) =>
+      fighter.isSurtr && fighter.yuzuProphetControlState?.synthetic,
+    );
+    assert(fallbackSurtr, 'Five-kind fixture requires the Prophet fallback Surtr');
+    assert(furry.length === 4, 'Five-kind fixture requires all four Owl summons');
+    const controlled = [fallbackSurtr, ...furry];
+    assert(
+      controlled.every((summon) => isYuzuProphetControlledSummon(summon, prophet.id)),
+      'All five eligible summon kinds must be under Prophet control',
+    );
+
+    engine.fighters
+      .filter((fighter) => !fighter.isNpc && !fighter.isSummon)
+      .forEach((fighter) => {
+        fighter.maxHp = Math.max(fighter.maxHp, 100000);
+        localProject.setCurrentHp(fighter, fighter.maxHp);
+        fighter.agl = 0;
+      });
+    const expectedSkillByKind = new Map<string, string>([
+      ['swire', 'owl_swire_strike'],
+      ['linlang_swire', 'owl_linlang_strike'],
+      ['specter', 'owl_specter_saw'],
+      ['spalter', 'owl_spalter_saw'],
+    ]);
+
+    controlled.forEach((summon) => {
+      applyTestStatus(summon, { identityId: 'AIM', charges: 1 });
+      const eventStart = engine.events.length;
+      const logStart = logs.length;
+      const settlements = withRandomSequence([0.2], () =>
+        (engine as unknown as ProphetTestEngine).executeYuzuProphetControlledRelease(summon),
+      );
+      const target = settlements[settlements.length - 1]?.target;
+      const events = engine.events.slice(eventStart);
+      const actionStart = events.find((event) =>
+        event.kind === 'action_start' && event.actorId === summon.id,
+      );
+      const expectedSkill = summon.isSurtr
+        ? undefined
+        : expectedSkillByKind.get(summon.owlSummonState?.kind ?? '');
+      assert(target && !target.isNpc, `${summon.name} should choose a normal non-NPC enemy target`);
+      assert(actionStart, `${summon.name} should begin its own structured action`);
+      assert(
+        !expectedSkill || actionStart.skillId === expectedSkill,
+        `${summon.name} should retain its own skill ${expectedSkill}`,
+      );
+      assert(
+        events.some((event) =>
+          event.kind === 'damage' &&
+          event.damage?.attackerId === summon.id
+        ),
+        `${summon.name} should remain the damage actor`,
+      );
+      assert(
+        !logs.slice(logStart).some((entry) => entry.text.includes('拼点')),
+        `${summon.name} must not enter Prophet clash while acting normally`,
+      );
+    });
+    cases.push('All five controlled summon kinds retain their own skills, targets, and damage attribution');
   }
 
   {
@@ -465,6 +609,41 @@ export function runYuzuProphetCases(): string[] {
     );
     assert(fixture.logs.some((entry) => entry.text.includes('即使拼点失败也不会撤回')), 'Barrier non-refund must be explicit in logs');
     cases.push('Understand Puruisaishi grants its 300 barrier before clash and keeps it on loss');
+  }
+
+  {
+    const fixture = spawnProphetFixture();
+    removeBarriers(fixture.puruisaishi, {
+      identityIds: [PURUISAISHI_BARRIER_IDENTITY],
+    });
+    grantPuruisaishiBarrier(fixture.puruisaishi, 10, '退场日志顺序回归测试');
+    const options = {
+      actionName: '退场日志顺序回归测试',
+      respectDefenses: true,
+      deferTransform: true,
+    };
+    fixture.engine.applyDamage(
+      fixture.puruisaishi,
+      20,
+      'skill',
+      false,
+      fixture.yuzu,
+      options,
+    );
+    fixture.engine.flushDeferredDamageEvents(fixture.puruisaishi, 'mitigation');
+    assert(
+      !fixture.prophet.yuzuProphetState?.retreatCompleted,
+      'Puruisaishi retreat must wait until the caller has emitted the hit result summary',
+    );
+    fixture.engine.log('info', '🧪 【命中摘要占位】本击结果已经完整写出。');
+    fixture.engine.flushDeferredDamageEvents(fixture.puruisaishi);
+    const summaryIndex = fixture.logs.findIndex((entry) => entry.text.includes('【命中摘要占位】'));
+    const retreatIndex = fixture.logs.findIndex((entry) => entry.text.includes('【预言家共同退场启动】'));
+    assert(
+      summaryIndex >= 0 && retreatIndex > summaryIndex,
+      'Common retreat must be logged after the hit result that depleted Puruisaishi barrier',
+    );
+    cases.push('Puruisaishi barrier depletion defers common retreat until after the hit summary');
   }
 
   {
@@ -787,6 +966,79 @@ export function runYuzuProphetCases(): string[] {
       'The resolving AOE must not append an outcome for a Puruisaishi target that already retired',
     );
     cases.push('AOE resolution stops reporting a Puruisaishi target after its shield triggers immediate retreat');
+  }
+
+  {
+    const result = runBattle({
+      phase: 'prophet-post-retreat-marker-regression',
+      label: 'prophet-post-retreat-marker-regression',
+      names: [...NO_WATER],
+      seed: 3_102_130,
+    }, {
+      forceYuzuProphet: true,
+      maxTurns: 1600,
+      scanLogs: true,
+    });
+    assert(!result.error && result.ended, 'Post-retreat marker regression battle must finish');
+    const retreatEndIndex = result.logs.findIndex((entry) =>
+      entry.text.includes('【共同退场完成】'),
+    );
+    assert(retreatEndIndex >= 0, 'Post-retreat marker regression must trigger common retreat');
+    assert(
+      result.logs.slice(retreatEndIndex + 1).every((entry) =>
+        !entry.text.includes('已经把 柚子·预言家 的标记转化为确认伤害'),
+      ),
+      'Crack Confirm must consume its marker without logging the retired Prophet after common retreat',
+    );
+    cases.push('Crack Confirm leaves no Prophet marker tail log after common retreat');
+  }
+
+  {
+    const fixture = spawnProphetFixture([
+      '柚子@A',
+      '兔卷卷@B',
+      '弹幕退场旁观者@C',
+    ]);
+    const rabbit = fixture.engine.fighters.find((fighter) => fighter.isTuJuanJuan);
+    assert(rabbit, 'Post-retreat barrage fixture requires Rabbit');
+    removeBarriers(fixture.puruisaishi, {
+      identityIds: [PURUISAISHI_BARRIER_IDENTITY],
+    });
+    grantPuruisaishiBarrier(fixture.puruisaishi, 1, '弹幕退场固定回归');
+    withRandomSequence(Array.from({ length: 32 }, () => 0.2), () => {
+      fixture.engine.executeSkillAction(
+        'v_rabbit_calc_rng',
+        rabbit,
+        fixture.puruisaishi,
+      );
+    });
+    const retreatEndIndex = fixture.logs.findIndex((entry) =>
+      entry.text.includes('【共同退场完成】'),
+    );
+    assert(retreatEndIndex >= 0, 'Post-retreat barrage regression must trigger common retreat');
+    const retiredEventNames = fixture.engine.fighters
+      .filter((fighter) =>
+        fighter.isYuzuProphet ||
+        fighter.isPuruisaishi ||
+        fighter.isOriginiumCore ||
+        fighter.isOriginiumCrystal,
+      )
+      .map((fighter) => fighter.name);
+    const postRetreatLogs = fixture.logs.slice(retreatEndIndex + 1);
+    assert(
+      postRetreatLogs.every((entry) =>
+        !entry.text.includes('【弹幕共鸣】') ||
+        retiredEventNames.every((name) => !entry.text.includes(name)),
+      ),
+      'Rabbit barrage must stop describing Prophet event units after common retreat',
+    );
+    assert(
+      postRetreatLogs.some((entry) =>
+        entry.text.includes('进入【计算超频】状态'),
+      ),
+      'Rabbit barrage should still complete the acting Rabbit own overclock cleanup after its target retreats',
+    );
+    cases.push('Rabbit barrage stops at Prophet common retreat while preserving actor cleanup');
   }
 
   return cases;

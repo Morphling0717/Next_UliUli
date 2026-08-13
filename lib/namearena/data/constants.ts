@@ -26,6 +26,26 @@ export const SKILL_TAGS = {
  * Combat, UI and AI code must consume the registry rather than this seed map.
  */
 export const STATUS_IDENTITY_PRESENTATION: Record<string, StatusIdentityPresentationSeed> = {
+  HEROBRINE_WITNESS: {
+    name: '目击',
+    icon: '◻️',
+    desc: '目击白色眼睛留下的异常印记；层数越高，Herobrine 的追猎越危险，但也越能看破异常',
+  },
+  HEROBRINE_WITHER: {
+    name: '枯萎',
+    icon: '🌫️',
+    desc: '无叶之树留下的枯萎：治疗与护盾获取量降低 30%',
+  },
+  HEROBRINE_ISOLATED: {
+    name: '孤立',
+    icon: '⬜',
+    desc: '被拖入单人世界，只能与 Herobrine 直接交战，外界无法提供攻击、治疗、护盾、拦截、分摊或转移',
+  },
+  HEROBRINE_DONT_LOOK_BACK: {
+    name: '不要回头',
+    icon: '👁️',
+    desc: '攻击 Herobrine 或异常痕迹可解除；若转而攻击其他参赛者，Herobrine 会从背后追击',
+  },
   STUN:   { name: '眩晕', icon: '💫', desc: '无法行动' },
   FREEZE: { name: '冰冻', icon: '❄️', desc: '无法行动，物理防御归零' },
   BURN:   { name: '灼烧', icon: '🔥', desc: '每个大回合结束时造成强度×6的伤害并消耗1次，可被屏障吸收' },

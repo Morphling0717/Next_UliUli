@@ -4,7 +4,7 @@ import { applyPermanentStatBuff, healFighter, isActiveCombatant, resolveHealing 
 import { consumeSpellBlock, formatSpellBlock } from '../defenseStatus';
 import { tryExecuteDefeat } from '../executionGuards';
 import { isSelectableTargetFor } from '../targeting';
-import { applyStatus, hasIdentity } from '../statusSystem';
+import { applyStatus } from '../statusSystem';
 import { didDamageConnect, isDamageRedirected } from '../damageRedirects';
 import { getSurtrTacticalHpPct } from '../surtrMechanics';
 
@@ -15,6 +15,7 @@ function activeEnemies(ctx: Parameters<NonNullable<SkillDefinition['onExecute']>
     isSelectableTargetFor({
       fighters: ctx.fighters,
       turnCount: ctx.turnCount,
+      battleState: ctx.battleState,
       getTeamId: ctx.getTeamId,
       isActiveCombatant,
     }, ctx.user, fighter),
@@ -82,9 +83,13 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       ctx.log('crit', `🧙‍♂️ 【Exodia Obliterate】${ctx.user.name} 释放被封印者的怒火，横扫 ${enemies.length} 名敌人！`);
       for (const enemy of enemies) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || hasIdentity(enemy, 'SYNERGY_SLACKING')) continue;
+        if (!ctx.canOffensivelyTarget(enemy)) continue;
         const damageOptions: DamageApplicationOptions = { actionName: 'Exodia Obliterate' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          ctx.flushDeferredDamageEvents?.();
+          continue;
+        }
         if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🧙‍♂️ 黑暗大法师的怒火命中 ${enemy.name}，实际造成 ${actualDmg} 点真实伤害！`);
@@ -141,9 +146,13 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       }
       for (const enemy of splashTargets) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || hasIdentity(enemy, 'SYNERGY_SLACKING')) continue;
+        if (!ctx.canOffensivelyTarget(enemy)) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '白龙扫射余波' };
         const actualDmg = ctx.applyDamage(enemy, splashDmg, 'skill', false, ctx.user, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          ctx.flushDeferredDamageEvents?.();
+          continue;
+        }
         if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg > 0) {
           ctx.log('skill', `🌪️ 白龙扫射的余波命中 ${enemy.name}，实际造成 ${actualDmg} 点溅射伤害！`);
@@ -190,9 +199,13 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       ctx.log('crit', `🐉 【究极爆裂疾风弹】${ctx.user.name} 三重龙息横扫 ${enemies.length} 名敌人！（目标越多单体威力越分散）`);
       for (const enemy of enemies) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (enemy.currentHp <= 0 || enemy.isDead || enemy.isDeadAnnounced || hasIdentity(enemy, 'SYNERGY_SLACKING')) continue;
+        if (!ctx.canOffensivelyTarget(enemy)) continue;
         const damageOptions: DamageApplicationOptions = { actionName: '究极爆裂疾风弹' };
         const actualDmg = ctx.applyDamage(enemy, baseDmg, 'skill', true, ctx.user, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          ctx.flushDeferredDamageEvents?.();
+          continue;
+        }
         if (isDamageRedirected(damageOptions)) continue;
         if (actualDmg <= 0 && !isActiveCombatant(enemy)) continue;
         if (actualDmg > 0) {
@@ -211,7 +224,15 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
       ctx.user.blueEyesUltimateStrain = (ctx.user.blueEyesUltimateStrain ?? 0) + 1;
       if ((ctx.user.blueEyesUltimateStrain ?? 0) >= 2) {
         applyPermanentStatBuff(ctx.user, { def: 0.88, res: 0.88 });
-        ctx.log('info', `🧬 【融合不稳定】${ctx.user.name} 的融合负荷加重，面板防御与魔抗各永久降低 12%！`);
+        ctx.log(
+          'info',
+          `🧬 【融合不稳定】${ctx.user.name} 的融合负荷加重，面板防御与魔抗各永久降低 12%！`,
+          {
+            actorId: ctx.user.id,
+            actorName: ctx.user.name,
+            targetIds: [ctx.user.id],
+          },
+        );
       }
       return true;
     },
@@ -232,6 +253,10 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
         const dmg = Math.floor(ctx.getEffectiveStat(ctx.user, 'atk') * 1.55 + ctx.getEffectiveStat(ctx.user, 'mag') * 0.7);
         const damageOptions: DamageApplicationOptions = { actionName: '三重龙首' };
         const actualDmg = ctx.applyDamage(ctx.target, dmg, 'skill', false, ctx.user, damageOptions);
+        if (damageOptions.targetWithdrawnDuringDamage) {
+          ctx.flushDeferredDamageEvents?.();
+          break;
+        }
         if (isDamageRedirected(damageOptions)) {
           const redirectText = damageOptions.redirectedByJoker
             ? `被 ${ctx.target.name} 用随机恶作剧转移`
@@ -280,9 +305,17 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
           ctx.user,
           recoilOptions,
         );
-        ctx.log('info', actualRecoil > 0
-          ? `🧬 【融合不稳定】${ctx.user.name} 承受融合反噬，实际损失 ${actualRecoil} 点生命！`
-          : `🧬 【融合不稳定】${ctx.user.name} 已被压在 1 点生命，融合反噬没有继续扣除生命！`);
+        ctx.log(
+          'info',
+          actualRecoil > 0
+            ? `🧬 【融合不稳定】${ctx.user.name} 承受融合反噬，实际损失 ${actualRecoil} 点生命！`
+            : `🧬 【融合不稳定】${ctx.user.name} 已被压在 1 点生命，融合反噬没有继续扣除生命！`,
+          {
+            actorId: ctx.user.id,
+            actorName: ctx.user.name,
+            targetIds: [ctx.user.id],
+          },
+        );
       }
       return true;
     },
@@ -296,13 +329,23 @@ export const duelMonsterSkills: Record<string, SkillDefinition> = {
     mult: 3.9,
     ignoreDef: true,
     statusApplications: [{ identityId: 'BURN' }],
-    text: '☀️ {USER} 张开黄金羽翼，太阳神烈焰灼烧 {TARGET}，造成 {VAL} 点魔法伤害并灼烧！',
+    text: '☀️ {USER} 张开黄金羽翼，太阳神烈焰灼烧 {TARGET}，造成 {VAL} 点真实魔法伤害并灼烧！',
     afterExecute: (ctx, dmg) => {
       if (!isActiveCombatant(ctx.user) || dmg <= 0) return;
       const healAmount = Math.floor(Math.min(dmg, ctx.target.maxHp) * 0.12);
       if (healAmount <= 0) return;
       const healed = healFighter(ctx.user, healAmount, ctx.log);
-      if (healed > 0) ctx.log('heal', `☀️ ${ctx.user.name} 吸收太阳神火，实际恢复 ${healed} 点生命！`);
+      if (healed > 0) {
+        ctx.log(
+          'heal',
+          `☀️ ${ctx.user.name} 吸收太阳神火，实际恢复 ${healed} 点生命！`,
+          {
+            actorId: ctx.user.id,
+            actorName: ctx.user.name,
+            targetIds: [ctx.user.id],
+          },
+        );
+      }
     },
   },
   ra_divine_pressure: {

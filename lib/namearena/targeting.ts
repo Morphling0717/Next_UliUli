@@ -1,4 +1,4 @@
-import type { Fighter } from './types';
+import type { BattleState, Fighter } from './types';
 import { getAggroMultiplier, getEffectiveCombatStat } from './statusMechanics';
 import { getPuruisaishiBarrierTotal } from './puruisaishiMechanics';
 import { findIdentity, hasIdentity, hasMechanic } from './statusSystem';
@@ -9,10 +9,20 @@ import {
   isSurtrOwnedBy,
 } from './surtrMechanics';
 import { getYuzuProphetPriorityTarget } from './yuzuProphetMechanics';
+import {
+  canTargetAcrossHerobrineBoundary,
+  isHerobrine,
+  isHerobrineClone,
+  isHerobrineTrace,
+  isNpcAoeVulnerable,
+  isNpcTargetable,
+} from './npcCombat';
+import { getWitnessStacks } from './herobrineMechanics';
 
 export interface TargetingRuntime {
   fighters: Fighter[];
   turnCount: number;
+  battleState?: BattleState;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
 }
@@ -44,8 +54,9 @@ export function isSelectableTargetFor(
   user: Fighter,
   target: Fighter,
 ): boolean {
-  if (target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) return false;
+  if (target.isNpc && !isNpcTargetable(target)) return false;
   if ((target.untargetableUntilTurn ?? -1) >= runtime.turnCount) return false;
+  if (!canTargetAcrossHerobrineBoundary(runtime.battleState, user, target)) return false;
   if (user.isSurtr && isSurtrOwnedBy(user, target)) return false;
   const confusedFriendlyTarget = user.confusedForcedTargetId === target.id;
   if (!confusedFriendlyTarget) {
@@ -75,11 +86,12 @@ export function getConfusionTargets(runtime: TargetingRuntime, user: Fighter): F
   const candidates = runtime.fighters.filter((target) =>
     target.id !== user.id &&
     runtime.isActiveCombatant(target) &&
-    !(target.isPuruisaishi && (target.puruisaishiPhase ?? 1) <= 1) &&
+    (!target.isNpc || isNpcTargetable(target)) &&
     target.owlSummonState?.kind !== 'meal' &&
     target.owlSummonState?.kind !== 'rice' &&
     (target.untargetableUntilTurn ?? -1) < runtime.turnCount &&
     !(user.isSurtr && isSurtrOwnedBy(user, target)) &&
+    canTargetAcrossHerobrineBoundary(runtime.battleState, user, target) &&
     !hasIdentity(target, 'SYNERGY_SLACKING'),
   );
   const charmSourceId = findIdentity(user, 'CHARMED')?.attribution.applierId;
@@ -99,7 +111,8 @@ export function findActivePuppetProtector(
     (fighter.summonBaseName ?? fighter.name) === '小汀(傀儡)' &&
     runtime.isActiveCombatant(fighter) &&
     !hasMechanic(fighter, 'STAGGERED') &&
-    fighter.id !== attacker?.id,
+    fighter.id !== attacker?.id &&
+    (!attacker || canTargetAcrossHerobrineBoundary(runtime.battleState, attacker, fighter)),
   );
 }
 
@@ -120,7 +133,7 @@ function getOriginiumTargetingState(runtime: TargetingRuntime): OriginiumTargeti
   };
 }
 
-function targetWeight(target: Fighter, originium: OriginiumTargetingState): number {
+function targetWeight(runtime: TargetingRuntime, target: Fighter, originium: OriginiumTargetingState): number {
   if (target.isOriginiumCrystal) {
     if (!originium.phaseTwo) return 0.32;
     if (originium.activeCrystalCount > 10) return 3.05;
@@ -138,6 +151,22 @@ function targetWeight(target: Fighter, originium: OriginiumTargetingState): numb
     if (originium.activeCrystalCount > 0) return originium.puruisaishiBarrier > 1 ? 1.35 : 0.05;
     return originium.coreActive ? 2.55 : 4.35;
   }
+  if (isHerobrine(target)) return target.job === 'HEROBRINE_PHASE_TWO' ? 3.05 : 2.45;
+  if (isHerobrineClone(target)) return target.npcUnitState?.revealed ? 0.42 : 0.9;
+  if (isHerobrineTrace(target)) {
+    if (!target.npcUnitState?.exposed) return 0;
+    const event = runtime.battleState?.majorNpcEvent?.kind === 'herobrine'
+      ? runtime.battleState.majorNpcEvent
+      : undefined;
+    if (event?.phase === 'removed') {
+      const remaining = Math.max(0, (event.removedReturnTurn ?? runtime.turnCount) - runtime.turnCount);
+      if (remaining <= 3) return 3.6;
+      if (remaining <= 6) return 2.7;
+      return 2;
+    }
+    if (event?.singleWorld) return 2.1;
+    return 1.35;
+  }
   const waitingOnTokusatsuThrone = target.isTokusatsu &&
     target.job === 'MIRACLE_BUJIN' &&
     !hasMechanic(target, 'STAGGERED') &&
@@ -146,7 +175,11 @@ function targetWeight(target: Fighter, originium: OriginiumTargetingState): numb
 }
 
 export function getTargetSelectionWeight(runtime: TargetingRuntime, target: Fighter): number {
-  return targetWeight(target, getOriginiumTargetingState(runtime));
+  return targetWeight(runtime, target, getOriginiumTargetingState(runtime));
+}
+
+export function isAoeVulnerableTarget(target: Fighter): boolean {
+  return !target.isNpc || isNpcAoeVulnerable(target);
 }
 
 function pickWeightedTarget(
@@ -154,12 +187,17 @@ function pickWeightedTarget(
   targets: Fighter[],
   originium = getOriginiumTargetingState(runtime),
 ): Fighter {
-  const totalWeight = targets.reduce((sum, target) => sum + targetWeight(target, originium), 0);
+  const weighted = (target: Fighter) => {
+    const base = targetWeight(runtime, target, originium);
+    if (!isHerobrine(target)) return base;
+    return base * (1 + getWitnessStacks(runtime.fighters.find((fighter) => fighter.isActing) ?? target) * 0.16);
+  };
+  const totalWeight = targets.reduce((sum, target) => sum + weighted(target), 0);
   if (totalWeight <= 0) return targets[Math.floor(Math.random() * targets.length)]!;
 
   let roll = Math.random() * totalWeight;
   for (const target of targets) {
-    roll -= targetWeight(target, originium);
+    roll -= weighted(target);
     if (roll <= 0) return target;
   }
   return targets[targets.length - 1]!;

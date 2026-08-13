@@ -170,6 +170,63 @@ function findUnauthorizedFormMutations(path: string): string[] {
   return issues;
 }
 
+function isFullDeferredDamageFlush(statement: ts.Statement): boolean {
+  if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
+  const call = statement.expression;
+  const callee = call.expression;
+  const name = ts.isIdentifier(callee)
+    ? callee.text
+    : ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : '';
+  if (name !== 'flushDeferredDamageEvents') return false;
+  return !call.arguments.some((argument) =>
+    ts.isStringLiteralLike(argument) && argument.text === 'mitigation',
+  );
+}
+
+function isControlFlowBoundary(statement: ts.Statement): boolean {
+  return ts.isReturnStatement(statement) ||
+    ts.isBreakStatement(statement) ||
+    ts.isContinueStatement(statement) ||
+    ts.isThrowStatement(statement);
+}
+
+function findDeferredFlushBeforeResultLogs(path: string): string[] {
+  const source = readFileSync(path, 'utf8');
+  const sourceFile = ts.createSourceFile(
+    path,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const issues: string[] = [];
+  const resultLogPattern = /\b(?:实际结算|实际造成|实际生命伤害|实际承受|没有造成实际伤害|没有造成生命伤害|未再损失生命)\b/;
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isBlock(node)) {
+      node.statements.forEach((statement, index) => {
+        if (!isFullDeferredDamageFlush(statement)) return;
+        for (let cursor = index + 1; cursor < Math.min(node.statements.length, index + 4); cursor += 1) {
+          const candidate = node.statements[cursor]!;
+          if (isControlFlowBoundary(candidate)) break;
+          const candidateText = candidate.getText(sourceFile);
+          if (/\bapplyDamage\s*\(/.test(candidateText)) break;
+          if (/\blog\s*\(/.test(candidateText) && resultLogPattern.test(candidateText)) {
+            const position = sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile));
+            issues.push(`${relative(process.cwd(), path)}:${position.line + 1}`);
+            break;
+          }
+        }
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return issues;
+}
+
 function activePlayers(fighters: Fighter[]): Fighter[] {
   return fighters.filter((fighter) => !fighter.isDead && !fighter.isDeadAnnounced && fighter.currentHp > 0 && !fighter.isNpc);
 }
@@ -224,6 +281,22 @@ function seededTrace(seed: number): string {
 
 export function runArchitectureCases(): string[] {
   const cases: string[] = [];
+
+  {
+    const battleEngineSource = readFileSync(
+      join(localProject.root, 'lib/namearena/battleEngine.ts'),
+      'utf8',
+    );
+    assert(
+      battleEngineSource.includes('turn-${this.turnCount}-major-npc-event'),
+      'Major NPC post-round settlement should use a shared causal scope',
+    );
+    assert(
+      !battleEngineSource.includes('turn-${this.turnCount}-puruisaishi'),
+      'Herobrine and future major NPC events must not inherit the legacy Puruisaishi causal root',
+    );
+    cases.push('major NPC settlement uses a generic causal event root');
+  }
 
   {
     const fighter = makeFighter('刺猬人@视觉时长');
@@ -322,6 +395,16 @@ export function runArchitectureCases(): string[] {
     assert(localProject.skills.suicide_bomb?.presentation === 'finisher', 'Ting self-destruction should be explicitly classified as a finisher');
     assert([...RED_FURY_POOL, ...SUICIDE_POOL].every((entry) => entry.visualEffect), 'Every Ting random-pool entry must declare its visual subtype');
     cases.push('Ting combat effects are structured by skill and explicit random-pool subtype');
+  }
+
+  {
+    const applications = localProject.skills.yasuo_q?.statusApplications ?? [];
+    assert(
+      applications.some((application) => application.identityId === 'AIRBORNE') &&
+      !applications.some((application) => application.identityId === 'STUN'),
+      'Yasuo tornado text says knock-up, so its declared control must use AIRBORNE rather than STUN',
+    );
+    cases.push('Yasuo tornado declaration matches its knock-up text and landing mechanics');
   }
 
   {
@@ -941,6 +1024,16 @@ export function runArchitectureCases(): string[] {
     assert(positions.length === 30, 'Crowded stage layout should allocate every unit');
     assert(new Set(positions.map((position) => `${position.x.toFixed(3)}:${position.y.toFixed(3)}`)).size === positions.length, 'Crowded stage layout should not assign duplicate centers');
 
+    const herobrineCrowdedPositions = createStagePositions(26, 1200, 720);
+    assert(
+      new Set(herobrineCrowdedPositions.map((position) => position.y.toFixed(2))).size === 3,
+      'A 26-unit desktop event stage should use a three-row grid instead of compressing a third ring at center',
+    );
+    assert(
+      new Set(herobrineCrowdedPositions.map((position) => position.x.toFixed(2))).size >= 8,
+      'A 26-unit desktop event stage should preserve enough horizontal slots for crowded fighter cards',
+    );
+
     const desktopPositions = createStagePositions(12, 900, 430);
     assert(new Set(desktopPositions.map((position) => position.y.toFixed(2))).size > 6, 'A 12-unit desktop stage should use multiple rings instead of collapsing into two packed rows');
     assert(desktopPositions.every((position) => position.y >= 20 && position.y <= 76), 'Desktop ring layouts should preserve top and bottom HUD safe zones');
@@ -1237,6 +1330,12 @@ export function runArchitectureCases(): string[] {
       unauthorizedFormMutations.length === 0,
       `Runtime form fields must change only through commitFormTransition (initializers are explicitly allowlisted): ${unauthorizedFormMutations.join(', ')}`,
     );
+    const deferredFlushOrderingIssues = collectTypeScriptFiles(join(projectRoot, 'lib/namearena'))
+      .flatMap(findDeferredFlushBeforeResultLogs);
+    assert(
+      deferredFlushOrderingIssues.length === 0,
+      `Direct-hit result logs must precede full fate/status flushing: ${deferredFlushOrderingIssues.join(', ')}`,
+    );
     const manualTransformationCueFiles = collectTypeScriptFiles(join(projectRoot, 'lib/namearena'))
       .filter((path) => {
         const normalizedPath = path.replace(/\\/g, '/');
@@ -1305,6 +1404,16 @@ export function runArchitectureCases(): string[] {
       `Only statusRegistry may consume presentation seeds: ${presentationConsumers.map((path) => relative(projectRoot, path)).join(', ')}`,
     );
 
+    const directReviveCleanupFiles = productionFiles.filter((path) => {
+      const normalizedPath = path.replace(/\\/g, '/');
+      if (normalizedPath.endsWith('/statusMechanics.ts')) return false;
+      return /removeEffects\s*\([\s\S]{0,220}?reason\s*:\s*['"]revive['"]/.test(readFileSync(path, 'utf8'));
+    });
+    assert(
+      directReviveCleanupFiles.length === 0,
+      `Revival cleanup must preserve event-persistent statuses through clearReviveEffects: ${directReviveCleanupFiles.map((path) => relative(projectRoot, path)).join(', ')}`,
+    );
+
     Object.values(STATUS_IDENTITIES).forEach((identity) => {
       const mechanicIds = [identity.mechanicId, ...(identity.components ?? []).map((component) => component.mechanicId)];
       mechanicIds.forEach((mechanicId) => {
@@ -1356,6 +1465,7 @@ export function runArchitectureCases(): string[] {
         displayName: identity.displayName,
         attribution: { effectSourceId: `catalog:${identity.identityId}` },
       });
+      if (!barrier) throw new Error(`${identity.identityId} unexpectedly rejected a positive barrier grant`);
       const presentation = buildFighterStatusPresentation(fighter);
       assert(barrier.identityId === identity.identityId, `${identity.identityId} lost its registered barrier identity`);
       assert(presentation.some((item) => item.kind === 'barrier' && item.members.some((member) => member.key === barrier.id)), `${identity.identityId} did not expose its barrier presentation`);
@@ -1752,6 +1862,104 @@ export function runArchitectureCases(): string[] {
     assert(
       contradictoryHealingIssues.some((issue) => issue.type === 'blocked-healing-described-as-full-health'),
       'The scanner must still flag blocked and full-health outcomes for the same fighter in one action',
+    );
+    const prematureAftermathIssues = scanLogs([
+      {
+        type: 'crit',
+        text: '💥 暴击！🛸 【歼灭·全弹发射】克蕾儿丝菲尔 的浮游炮齐射！对 刺猬人 造成 4 次打击，共 5208 伤害！（结算前预估；若伤害发生变化会追加实际结算，附加状态另行确认）',
+        rootEventId: 'action-aftermath-order',
+        actionId: 'action-aftermath-order',
+        targetIds: ['tokusatsu-target'],
+        turn: 50,
+      },
+      {
+        type: 'buff',
+        text: '🔥 【悲愿不倒】刺猬人 的奇迹怪兽武刃拒绝退场！',
+        rootEventId: 'action-aftermath-order',
+        actionId: 'action-aftermath-order',
+        targetIds: ['tokusatsu-target'],
+        turn: 50,
+      },
+      {
+        type: 'poison',
+        text: '🚀 【炮震坠落】刺猬人 从大口径冲击中重重落地，实际损失 114 点生命！',
+        rootEventId: 'action-aftermath-order',
+        actionId: 'action-aftermath-order',
+        targetIds: ['tokusatsu-target'],
+        turn: 50,
+      },
+      {
+        type: 'info',
+        text: '📌 实际结算：刺猬人 实际承受 3142 点伤害（原始预估 5208）。',
+        rootEventId: 'action-aftermath-order',
+        actionId: 'action-aftermath-order',
+        targetIds: ['tokusatsu-target'],
+        turn: 50,
+      },
+    ], '伤害后续抢跑测试', ['克蕾儿丝菲尔', '刺猬人']);
+    assert(
+      prematureAftermathIssues.some((issue) => issue.type === 'aftermath-before-damage-result'),
+      'The scanner must reject death-save or landing aftermath emitted before its parent damage result',
+    );
+    const orderedAftermathIssues = scanLogs([
+      {
+        type: 'crit',
+        text: '💥 暴击！🛸 【歼灭·全弹发射】克蕾儿丝菲尔 对 刺猬人 造成 5208 伤害！（结算前预估）',
+        rootEventId: 'action-ordered-aftermath',
+        actionId: 'action-ordered-aftermath',
+        targetIds: ['tokusatsu-target'],
+        turn: 51,
+      },
+      {
+        type: 'info',
+        text: '📌 实际结算：刺猬人 实际承受 3142 点伤害（原始预估 5208）。',
+        rootEventId: 'action-ordered-aftermath',
+        actionId: 'action-ordered-aftermath',
+        targetIds: ['tokusatsu-target'],
+        turn: 51,
+      },
+      {
+        type: 'system',
+        text: 'state-sync:tokusatsu-target',
+        rootEventId: 'action-ordered-aftermath',
+        actionId: 'action-ordered-aftermath',
+        targetIds: ['tokusatsu-target'],
+        turn: 51,
+      },
+      {
+        type: 'buff',
+        text: '🔥 【悲愿不倒】刺猬人 的奇迹怪兽武刃拒绝退场！',
+        rootEventId: 'action-ordered-aftermath',
+        actionId: 'action-ordered-aftermath',
+        targetIds: ['tokusatsu-target'],
+        turn: 51,
+      },
+    ], '伤害后续正确顺序测试', ['克蕾儿丝菲尔', '刺猬人']);
+    assert(
+      !orderedAftermathIssues.some((issue) => issue.type === 'aftermath-before-damage-result'),
+      'The scanner must accept aftermath emitted after the authoritative damage result',
+    );
+    const removedDeathSaveIdentityIssues = scanLogs([
+      {
+        type: 'skill',
+        text: '📿 【万法归无】剥夺了 刺猬人 的【悲愿抗性护层】、【悲愿不倒】，防护与反击链条被切断！',
+        rootEventId: 'action-nullify',
+        actionId: 'action-nullify',
+        targetIds: ['tokusatsu-target'],
+        turn: 52,
+      },
+      {
+        type: 'info',
+        text: '📌 实际结算：刺猬人 实际承受 499 点伤害（原始预估 994）。',
+        rootEventId: 'action-nullify',
+        actionId: 'action-nullify',
+        targetIds: ['tokusatsu-target'],
+        turn: 52,
+      },
+    ], '移除保命身份不是触发保命测试', ['水人', '刺猬人']);
+    assert(
+      !removedDeathSaveIdentityIssues.some((issue) => issue.type === 'aftermath-before-damage-result'),
+      'Mentioning a removed death-save identity inside another skill must not be treated as aftermath',
     );
     cases.push('log scanner detects damage results emitted before mitigation without crossing state-sync boundaries');
   }

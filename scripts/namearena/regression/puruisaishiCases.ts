@@ -877,5 +877,42 @@ export function runPuruisaishiCases(): string[] {
     cases.push('Puruisaishi shield floor reports crystal diversion without zero-absorb text');
   }
 
+  {
+    const { engine, logs } = makeDeathEngine([
+      makeFighter('事件全灭测试A@A'),
+      makeFighter('事件全灭测试B@B'),
+    ]);
+    spawnPuruisaishiEvent(engine.createPuruisaishiRuntime(), '无参赛者结算回归');
+    engine.fighters
+      .filter((fighter) => !fighter.isNpc)
+      .forEach((fighter) => {
+        engine.markDefeated(fighter, {
+          message: `${fighter.name} 在事件结算回归中退场`,
+          awardKill: false,
+          bypassDeathSaves: true,
+        });
+      });
+
+    processPuruisaishiRoundEnd(engine.createPuruisaishiRuntime());
+
+    const event = engine.battleState.majorNpcEvent;
+    assert(
+      event?.kind === 'puruisaishi' && event.completed,
+      'A Puruisaishi event must stop blocking settlement after every contestant is gone',
+    );
+    assert(
+      !engine.fighters.some((fighter) =>
+        fighter.isNpc &&
+        engine.isActiveCombatant(fighter)
+      ),
+      'Puruisaishi, Ananna, and Originium Crystals must leave when no contestant survives',
+    );
+    assert(
+      logs.some((entry) => entry.text.includes('【普瑞赛斯退场】') && entry.text.includes('场上已无存活参赛者')),
+      'The no-contestant retreat must explain why the event ended',
+    );
+    cases.push('Puruisaishi event exits cleanly when no contestant survives');
+  }
+
   return cases;
 }

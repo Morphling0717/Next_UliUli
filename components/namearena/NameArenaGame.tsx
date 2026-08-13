@@ -7,8 +7,10 @@ import {
 } from "@/components/namearena/NameArenaBattleStage";
 import { StatusDetailContent } from "@/components/namearena/StatusDetailContent";
 import { BattleEngine } from "@/lib/namearena/battleEngine";
+import { buildMajorNpcEventPresentation } from "@/lib/namearena/battlePresentation";
 import {
   cloneFighters,
+  isActiveCombatant,
   isWinningCombatant,
   reconcileFighterSnapshots,
 } from "@/lib/namearena/combatState";
@@ -19,8 +21,9 @@ import { namerenaJobs } from "@/lib/namearena/jobs";
 import {
   hasPuruisaishiAppeared,
   PURUISAISHI_BARRIER_IDENTITY,
-  spawnPuruisaishiEvent,
 } from "@/lib/namearena/puruisaishiMechanics";
+import { forceMajorNpcEvent } from "@/lib/namearena/majorNpcEvents";
+import { getHerobrineDisplayIcon } from "@/lib/namearena/herobrineArt";
 import { parseNameArenaSetupInput } from "@/lib/namearena/setupInput";
 import { namerenaSkills } from "@/lib/namearena/skills";
 import {
@@ -43,12 +46,14 @@ import {
   type BattlePlaybackCommit,
   type BattlePlaybackView,
 } from "@/lib/namearena/battlePlaybackModel";
+import { shouldRenderFighterOnStage } from "@/lib/namearena/battleStageModel";
 import {
   cloneBattleState,
   createBattleState,
   getLargeRoundProgress,
   withBattleRandom,
 } from "@/lib/namearena/battleState";
+import type { MajorNpcEventKind } from "@/lib/namearena/types";
 import {
   claimBattleVisualEvent as claimVisualEventOnce,
   createBattleVisualEventLedger,
@@ -107,7 +112,7 @@ const isTransformLog = (log: BattleLogEntry) =>
 const isHighlightLog = (log: BattleLogEntry) =>
   log.type === 'win' ||
   isTransformLog(log) ||
-  /最终胜者|浴火重生|并没有死|从地狱归来|不甘倒下|欧皇护符|大保底启动|小保底启动|欧皇时刻|究极进化|人设时钟|光速切片|时间轴回拨|帝皇不可阻挡|摸鱼伙伴羁绊|突发状况|脊髓剑|GREAT！MONSTER|GREAT MONSTER|彩虹狂热|GOTCHARD|飓刃】收割|宇宙分裂|复活】|弑神反噬|大招充能完毕|资金充足|冥驹|武神王座|谢幕返场|乘员昏迷|普瑞赛斯|阿喃那|矿石病/.test(log.text);
+  /最终胜者|浴火重生|并没有死|从地狱归来|不甘倒下|欧皇护符|大保底启动|小保底启动|欧皇时刻|究极进化|人设时钟|光速切片|时间轴回拨|帝皇不可阻挡|摸鱼伙伴羁绊|突发状况|脊髓剑|GREAT！MONSTER|GREAT MONSTER|彩虹狂热|GOTCHARD|飓刃】收割|宇宙分裂|复活】|弑神反噬|大招充能完毕|资金充足|冥驹|武神王座|谢幕返场|乘员昏迷|普瑞赛斯|阿喃那|矿石病|【异常目击】|【远处的白眼】|【你不是一个人在玩】|【单人世界】|【Removed Herobrine\.】|【你确定吗？】|【最终追猎】|【真正退场】|【猎杀结束】/.test(log.text);
 
 const getLogPlaybackDelay = (log: BattleLogEntry, speed: number) => {
   const profile = LOG_PLAYBACK_PROFILE_BY_SPEED[speed] ?? LOG_PLAYBACK_PROFILE_BY_SPEED[500];
@@ -431,6 +436,49 @@ const buildResourceChips = (fighter: Fighter, fighters: Fighter[], turnCount: nu
         title: getResourceTitle('普瑞赛斯护盾', String(shield), '场上存在源石结晶时不会低于 1'),
         tone: 'shield',
         priority: 7,
+      });
+    }
+  }
+
+  if (fighter.npcUnitState?.eventKind === 'herobrine') {
+    const event = battleState.majorNpcEvent?.kind === 'herobrine'
+      ? battleState.majorNpcEvent
+      : undefined;
+    const phaseLabel = event?.phase === 'fog'
+      ? '雾中人'
+      : event?.phase === 'phase_one'
+        ? '远处白眼'
+        : event?.phase === 'phase_two'
+          ? '单人猎杀'
+          : event?.phase === 'removed'
+            ? 'Removed'
+            : '已退场';
+    chips.push({
+      icon: fighter.npcUnitState.unitKind === 'herobrine'
+        ? '◻️'
+        : getHerobrineDisplayIcon(fighter) ?? fighter.jobData.icon,
+      label: fighter.npcUnitState.unitKind === 'herobrine' ? '异常阶段' : '异常单位',
+      value: fighter.npcUnitState.traceKind
+        ? fighter.npcUnitState.exposed ? '已暴露' : '不可攻击'
+        : phaseLabel,
+      title: event?.phase === 'removed' && event.removedReturnTurn !== undefined
+        ? `Removed Herobrine：距离回归还有 ${Math.max(0, event.removedReturnTurn - turnCount)} 个全局行动`
+        : `Herobrine 重大 NPC 事件：${phaseLabel}`,
+      tone: 'tech',
+      priority: 8,
+    });
+    if (event?.singleWorld && (
+      fighter.id === event.herobrineId ||
+      fighter.id === event.singleWorld.targetId ||
+      fighter.id === event.singleWorld.tunnelId
+    )) {
+      chips.push({
+        icon: '⬜',
+        label: '单人世界',
+        value: `至大回合${event.singleWorld.endsAfterLargeRound}`,
+        title: '单人世界内外不能互相攻击、治疗、加盾、拦截、分摊或转移；摧毁对应隧道可提前结束',
+        tone: 'combat',
+        priority: 9,
       });
     }
   }
@@ -924,6 +972,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const visualEventLedgerRef = useRef(createBattleVisualEventLedger());
     const [gameState, setGameState] = useState<'SETUP' | 'FIGHTING' | 'END'>('SETUP');
     const [showMvp, setShowMvp] = useState(false);
+    const [herobrineSettlementPromptStep, setHerobrineSettlementPromptStep] = useState<0 | 1 | 2>(0);
 
     const fullLogsRef = useRef<BattleLogEntry[]>([]);
     const fullEventsRef = useRef<BattleEvent[]>([]);
@@ -946,7 +995,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const logPlaybackQueueRef = useRef<BattlePlaybackItem[]>([]);
     const pendingFinalFightersRef = useRef<Fighter[] | null>(null);
     const pendingEndRef = useRef(false);
-    const lastBattleSetupRef = useRef<{ names: string[]; forcePuruisaishi: boolean; seed: number } | null>(null);
+    const lastBattleSetupRef = useRef<{ names: string[]; forcedMajorNpcEvent?: MajorNpcEventKind; seed: number } | null>(null);
     const battlePumpRef = useRef<() => void>(() => {});
     const [currentSpeedLvl, setCurrentSpeedLvl] = useState(1);
     const [battleUiMode, setBattleUiMode] = useState<'next' | 'classic'>('next');
@@ -1036,6 +1085,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         pendingEndRef.current = false;
         setIsFullLogModalOpen(false);
         setShowMvp(false);
+        setHerobrineSettlementPromptStep(0);
         setMobileBattleView('arena');
         setLandscapeHintDismissed(false);
         spinalSwordRef.current = false;
@@ -1054,7 +1104,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         appendDisplayLog(logEntry);
     };
 
-    const launchBattle = (list: string[], forcePuruisaishi: boolean, seed: number) => {
+    const launchBattle = (list: string[], forcedMajorNpcEvent: MajorNpcEventKind | undefined, seed: number) => {
         const nextBattleState = createBattleState(seed, 0);
         const nextFighters = withBattleRandom(nextBattleState, () =>
             list.map(generateNameArenaFighter).filter((fighter): fighter is Fighter => fighter !== null),
@@ -1099,17 +1149,33 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         };
 
         addSetupEvent('system', `⚔️ 战斗开始！本局种子：${nextBattleState.seed}`);
-        if (forcePuruisaishi) {
-            withBattleRandom(nextBattleState, () => spawnPuruisaishiEvent({
-                fighters: nextFighters,
-                core: namerenaCore,
-                turnCount: 0,
-                largeRound: 1,
-                log: addSetupEvent,
-            }, '隐藏调试指令启动'));
+        if (forcedMajorNpcEvent) {
+            withBattleRandom(nextBattleState, () => {
+                forceMajorNpcEvent({
+                    puruisaishi: {
+                        fighters: nextFighters,
+                        core: namerenaCore,
+                        battleState: nextBattleState,
+                        turnCount: 0,
+                        largeRound: 1,
+                        log: addSetupEvent,
+                    },
+                    herobrine: {
+                        fighters: nextFighters,
+                        core: namerenaCore,
+                        battleState: nextBattleState,
+                        turnCount: 0,
+                        largeRound: 1,
+                        log: addSetupEvent,
+                        isActiveCombatant,
+                    },
+                }, forcedMajorNpcEvent, forcedMajorNpcEvent === 'puruisaishi'
+                    ? '隐藏调试指令启动'
+                    : '隐藏调试指令启动，白色眼睛出现在雾里');
+            });
         }
 
-        lastBattleSetupRef.current = { names: [...list], forcePuruisaishi, seed: nextBattleState.seed };
+        lastBattleSetupRef.current = { names: [...list], forcedMajorNpcEvent, seed: nextBattleState.seed };
 	        const initialPlaybackFighters = cloneFighters(nextFighters);
 	        fightersRef.current = nextFighters;
 	        playbackFightersSnapshotRef.current = initialPlaybackFighters;
@@ -1130,7 +1196,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const replayLastBattle = () => {
         const setup = lastBattleSetupRef.current;
         if (!setup) return;
-        launchBattle(setup.names, setup.forcePuruisaishi, setup.seed);
+        launchBattle(setup.names, setup.forcedMajorNpcEvent, setup.seed);
     };
 
     // Synchronous log collector used inside battleStep so every displayed log carries its matching fighter state.
@@ -1344,6 +1410,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
     const names = fighters.map(f => f.name).filter(n => n.length > 0).sort((a,b) => b.length - a.length);
     const nameRegex = names.length > 0 ? new RegExp(`(${names.map(escapeRegExp).join('|')})`, 'g') : null;
     const roundProgress = getLargeRoundProgress(battleState);
+    const majorNpcEventPresentation = buildMajorNpcEventPresentation(battleState, fighters, battleTurn);
     const aliveCount = fighters.filter(isWinningCombatant).length;
     const getStageResourceBadgesForFighter = useCallback(
         (fighter: Fighter) => buildStageResourceBadges(fighter, fighters, battleTurn, battleState),
@@ -1425,6 +1492,9 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
         const showPuruisaishiProphecy =
             hasPuruisaishiAppeared(fighters) &&
             !isYuzuProphetSettlementSuppressed(fighters);
+        const showHerobrinePrompts =
+            battleState.majorNpcEvent?.kind === 'herobrine' &&
+            herobrineSettlementPromptStep > 0;
 
         const mvpDmg = sortedByDmg[0];
         const mvpTank = [...settlementRows].sort((a, b) => b.stats.dmgTaken - a.stats.dmgTaken)[0];
@@ -1441,6 +1511,25 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
 
         return (
             <div className="absolute inset-0 z-30 flex min-h-0 flex-col overflow-y-auto bg-[#080b0e] p-5 text-slate-100 animate-fade-in custom-scrollbar md:p-7">
+                {showHerobrinePrompts ? (
+                    <div className="absolute inset-0 z-50 grid place-items-center bg-black/95 p-6" role="dialog" aria-modal="true" aria-label="Herobrine 结算提示">
+                        <div className="w-full max-w-xl border border-white/20 bg-[#050505] p-8 text-center shadow-[0_0_60px_rgba(255,255,255,0.12)]">
+                            <div className="mb-4 font-mono text-[11px] font-black tracking-[0.32em] text-white/45">
+                                {herobrineSettlementPromptStep === 1 ? 'SERVER MESSAGE' : 'UNKNOWN PLAYER'}
+                            </div>
+                            <div className="font-mono text-2xl font-black text-white md:text-4xl">
+                                {herobrineSettlementPromptStep === 1 ? 'Removed Herobrine.' : '……你确定吗？'}
+                            </div>
+                            <button
+                                type="button"
+                                className="mt-8 min-h-11 border border-white/25 bg-white px-6 font-mono text-sm font-black text-black hover:bg-white/80"
+                                onClick={() => setHerobrineSettlementPromptStep((step) => step === 1 ? 2 : 0)}
+                            >
+                                确定
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
                 <div className="mb-5 flex shrink-0 items-end justify-between border-b border-white/10 pb-4">
                     <div>
                         <span className="font-mono text-[11px] font-black text-cyan-300">AFTER ACTION REPORT</span>
@@ -1448,7 +1537,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                     </div>
                     <button
                         type="button"
-                        onClick={() => setShowMvp(false)}
+                        onClick={() => { setShowMvp(false); setHerobrineSettlementPromptStep(0); }}
                         className="grid h-9 w-9 place-items-center rounded border border-white/15 bg-[#11171d] text-slate-400 transition-colors hover:border-cyan-300 hover:text-white"
                         title="关闭结算面板"
                         aria-label="关闭结算面板"
@@ -1617,7 +1706,11 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                             <button onClick={replayLastBattle} className="flex items-center gap-1 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-bold text-white shadow-lg transition-colors hover:bg-slate-700" title={`按相同种子 ${battleState.seed} 重放`}>
                                 <Icons.RotateCcw size={14}/> <span className="namerena-end-action-label hidden sm:inline">重放本局</span>
                             </button>
-                            <button onClick={() => { setMobileBattleView('arena'); setShowMvp(true); }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 shadow-lg transition-transform hover:scale-105" title="赛后结算">
+                            <button onClick={() => {
+                                setMobileBattleView('arena');
+                                setHerobrineSettlementPromptStep(battleState.majorNpcEvent?.kind === 'herobrine' ? 1 : 0);
+                                setShowMvp(true);
+                            }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1 shadow-lg transition-transform hover:scale-105" title="赛后结算">
                                 <Icons.BarChart size={14}/> <span className="namerena-end-action-label hidden sm:inline">数据统计</span>
                             </button>
                         </>
@@ -1653,17 +1746,17 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                     const { SeededRNG } = namerenaCore;
                                     if (!SeededRNG) return alert("核心组件未加载，请检查 1_core.js");
                                     let list: string[];
-                                    let forcePuruisaishi = false;
+                                    let forcedMajorNpcEvent: MajorNpcEventKind | undefined;
                                     try {
                                         const parsedInput = await parseNameArenaSetupInput(inputNames);
                                         list = parsedInput.names;
-                                        forcePuruisaishi = parsedInput.forcePuruisaishi;
+                                        forcedMajorNpcEvent = parsedInput.forcedMajorNpcEvent;
                                     } catch (error) {
                                         const message = error instanceof Error ? error.message : String(error);
                                         return alert(message);
 	                                    }
 	                                    if(list.length<2) return alert("至少2人");
-	                                    launchBattle(list, forcePuruisaishi, Math.max(1, Math.floor(Date.now() % 2147483646)));
+	                                    launchBattle(list, forcedMajorNpcEvent, Math.max(1, Math.floor(Date.now() % 2147483646)));
                                 }} className="mt-6 flex min-h-12 w-full items-center justify-center gap-2 rounded border border-cyan-200 bg-cyan-300 px-5 py-3 text-base font-black text-slate-950 transition-colors hover:bg-cyan-200 active:bg-cyan-400 md:ml-auto md:w-auto">
                                     <Icons.Play size={20} /> 开始战斗
                                 </button>
@@ -1674,6 +1767,7 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                     <div className="relative flex min-h-0 flex-1 overflow-hidden">
                         <NameArenaBattleStage
                             fighters={fighters}
+                            battleState={battleState}
                             displayLogs={displayLogs}
                             logGroups={displayLogGroups}
                             battleTurn={battleTurn}
@@ -1756,9 +1850,26 @@ export function NameArenaGame({ onExit }: NameArenaGameProps = {}) {
                                     </button>
                                 )}
                             </div>
+                            {majorNpcEventPresentation ? (
+                                <div
+                                    className={`flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs ${
+                                        majorNpcEventPresentation.tone === 'herobrine'
+                                            ? 'border-white/20 bg-black/35 text-slate-100'
+                                            : 'border-emerald-500/30 bg-emerald-950/20 text-emerald-100'
+                                    }`}
+                                    aria-label={majorNpcEventPresentation.title}
+                                >
+                                    <strong>{majorNpcEventPresentation.title}</strong>
+                                    <span>{majorNpcEventPresentation.phase}</span>
+                                    <span className="text-slate-300">{majorNpcEventPresentation.detail}</span>
+                                    {majorNpcEventPresentation.countdown ? (
+                                        <span className="font-mono text-amber-300">{majorNpcEventPresentation.countdown}</span>
+                                    ) : null}
+                                </div>
+                            ) : null}
                             <div className="relative min-h-0 flex-1 overflow-hidden">
                                 <div className="namerena-fighter-grid grid h-full min-h-0 auto-rows-max grid-cols-1 content-start items-start gap-4 overflow-y-auto p-4 md:grid-cols-2 custom-scrollbar">
-                                {[...fighters].sort((a, b) => b.currentHp - a.currentHp).map((f) => (
+                                {fighters.filter(shouldRenderFighterOnStage).sort((a, b) => b.currentHp - a.currentHp).map((f) => (
                                     <div
                                         key={f.id}
                                         className={`namerena-fighter-card min-w-0 max-w-full rounded-lg border p-3 transition-[transform,box-shadow,border-color,background-color] duration-300

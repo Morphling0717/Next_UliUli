@@ -18,7 +18,7 @@ const STRESS_SEEDS = Number.parseInt(process.env.NAMEARENA_SURTR_STRESS_SEEDS ??
 const BASE_SEED = Number.parseInt(process.env.NAMEARENA_SURTR_STRESS_BASE_SEED ?? '2762000', 10);
 const SURTR_NAME = '史尔特尔(?:#\\d+)?';
 
-type SurtrCoverage = {
+export type SurtrCoverage = {
   summons: number;
   twilightActivations: number;
   afterglowStarts: number;
@@ -50,7 +50,7 @@ type Summary = SurtrCoverage & {
   outDir: string;
 };
 
-type ScanResult = {
+export type SurtrScanResult = {
   issues: LogIssue[];
   coverage: SurtrCoverage;
 };
@@ -99,15 +99,54 @@ function issue(result: BattleResult, line: number, type: string, text: string): 
   return { label: result.label, line, type, text };
 }
 
-function scanSurtrLogs(result: BattleResult): ScanResult {
+export function scanSurtrLogs(result: BattleResult): SurtrScanResult {
   const issues: LogIssue[] = [];
   const coverage = emptyCoverage();
   const states = new Map<string, TrackedSurtr>();
   const ownerNames = new Map<string, [string, string]>();
+  const jointKillRoots = new Set<string>();
+  const lastDefeatByScope = new Map<string, string>();
+  const eventIndexById = new Map(
+    result.events.map((event, index) => [event.id, index] as const),
+  );
+
+  const correspondingDamageForLog = (entry: LogEntry, targetName: string) => {
+    const logEventIndex = entry.id ? eventIndexById.get(entry.id) : undefined;
+    if (logEventIndex === undefined) return undefined;
+    const targetId = entry.targetIds?.[0]
+      ?? result.fighterDirectory.find((fighter) => fighter.name === targetName)?.id;
+    const candidates = result.events.flatMap((candidate, eventIndex) => {
+      const sameAction = entry.actionId && candidate.actionId
+        ? entry.actionId === candidate.actionId
+        : entry.rootEventId === candidate.rootEventId;
+      if (
+        !sameAction ||
+        candidate.kind !== 'damage' ||
+        !candidate.damage ||
+        (targetId && candidate.damage.actualTargetId !== targetId && candidate.damage.targetId !== targetId)
+      ) return [];
+      return [{
+        damage: candidate.damage,
+        actorMatches: !entry.actorId || candidate.damage.attackerId === entry.actorId,
+        distance: Math.abs(eventIndex - logEventIndex),
+      }];
+    });
+    candidates.sort((left, right) =>
+      Number(right.actorMatches) - Number(left.actorMatches) || left.distance - right.distance,
+    );
+    return candidates[0]?.damage;
+  };
 
   result.logs.forEach((entry, index) => {
     const line = index + 1;
     const text = entry.text;
+    const settlementScope = entry.actionId ?? entry.rootEventId ?? `line-${line}`;
+    if (entry.type === 'death') {
+      const victim = entry.targetIds?.slice().sort().join(',')
+        || text.match(/【(?:击杀|\|OMO)】([^ ]+)/)?.[1]
+        || `death-line-${line}`;
+      lastDefeatByScope.set(settlementScope, victim);
+    }
     const summon = text.match(new RegExp(`【共同主人确立】(${SURTR_NAME}) 同时认 (.+?) 与 (.+?) 为主人`));
     if (summon?.[1] && summon[2] && summon[3]) {
       coverage.summons += 1;
@@ -175,27 +214,14 @@ function scanSurtrLogs(result: BattleResult): ScanResult {
     if (afterglowHit?.[1]) {
       coverage.afterglowHits += 1;
       const name = afterglowHit[1];
-      const contradictory = /擦身而过|(?:被|完全)化解|没有承受实际伤害|没有造成实际伤害|没有造成生命伤害|未受到生命伤害|伤害被完全化解|本次没有穿透防护|没有被(?:眩晕|击飞|控制|沉默)/;
-      for (let priorIndex = index - 1; priorIndex >= Math.max(0, index - 8); priorIndex -= 1) {
-        const prior = result.logs[priorIndex];
-        if (!prior) continue;
-        const sameAction = entry.actionId && prior.actionId
-          ? entry.actionId === prior.actionId
-          : entry.rootEventId === prior.rootEventId;
-        if (!sameAction) break;
-        if (
-          prior.text.includes(name) &&
-          contradictory.test(prior.text) &&
-          !prior.text.includes('黄昏余命')
-        ) {
-          issues.push(issue(
-            result,
-            priorIndex + 1,
-            'surtr-afterglow-contradictory-context',
-            `${prior.text} -> ${text}`,
-          ));
-          break;
-        }
+      const damage = correspondingDamageForLog(entry, name);
+      if (damage && damage.outcome !== 'prevented') {
+        issues.push(issue(
+          result,
+          line,
+          'surtr-afterglow-contradictory-context',
+          `对应伤害结算为 ${damage.outcome}/${damage.sourceKind ?? damage.source}，却记录为黄昏余命命中：${text}`,
+        ));
       }
     }
 
@@ -213,6 +239,9 @@ function scanSurtrLogs(result: BattleResult): ScanResult {
       }
       state.afterglowActive = true;
       state.afterglowProgress = count;
+      if (count > 8) {
+        issues.push(issue(result, line, 'surtr-afterglow-overrun', text));
+      }
     }
 
     const afterglowEnd = text.match(new RegExp(`【黄昏尽头】(${SURTR_NAME}) 的八次余命耗尽`));
@@ -239,11 +268,27 @@ function scanSurtrLogs(result: BattleResult): ScanResult {
       }
     });
 
-    if (new RegExp(`【共同击杀分账】${SURTR_NAME} 的本次击杀`).test(text)) {
+    const jointKill = text.match(new RegExp(`【共同击杀分账】(${SURTR_NAME}) 的本次击杀`));
+    if (jointKill?.[1]) {
       coverage.jointKillSplits += 1;
-      if ((text.match(/\+0\.5/g) ?? []).length !== 2) {
+      const victim = lastDefeatByScope.get(settlementScope) ?? 'unknown-victim';
+      const surtr = result.fighterDirectory.find((fighter) =>
+        fighter.isSurtr && fighter.name === jointKill[1]
+      );
+      const victimIsOwner = !!surtr?.surtrOwnerIds?.includes(victim);
+      const explainsSelfCreditExclusion = text.includes('不获得自己的击杀分账');
+      const expectedCredits = victimIsOwner ? 1 : 2;
+      if (
+        (text.match(/\+0\.5/g) ?? []).length !== expectedCredits ||
+        explainsSelfCreditExclusion !== victimIsOwner
+      ) {
         issues.push(issue(result, line, 'surtr-joint-kill-split', text));
       }
+      const rootKey = `${settlementScope}:${victim}:${jointKill[1]}`;
+      if (jointKillRoots.has(rootKey)) {
+        issues.push(issue(result, line, 'surtr-joint-kill-split-repeated', text));
+      }
+      jointKillRoots.add(rootKey);
     }
     if (text.includes('预计预计')) {
       issues.push(issue(result, line, 'surtr-duplicate-estimate-wording', text));
@@ -276,22 +321,40 @@ function scanSurtrLogs(result: BattleResult): ScanResult {
     ids.add(event.actorId);
     actorIdsByName.set(event.actorName, ids);
   });
-  const surtrIdsByName = new Map<string, string>();
-  result.events.forEach((event) => {
-    const cue = event.visualCue;
-    if (cue?.kind === 'summon_card' && new RegExp(`^${SURTR_NAME}$`).test(cue.summonName)) {
-      surtrIdsByName.set(cue.summonName, cue.summonId);
-    }
-  });
+  const surtrIdsByName = new Map(
+    result.fighterDirectory
+      .filter((fighter) => fighter.isSurtr)
+      .map((fighter) => [fighter.name, fighter.id] as const),
+  );
   ownerNames.forEach((owners, surtrName) => {
     const surtrId = surtrIdsByName.get(surtrName)
       ?? [...(actorIdsByName.get(surtrName) ?? [])][0];
     if (!surtrId) return;
     const protectedIds = new Set(owners.flatMap((name) => [...(actorIdsByName.get(name) ?? [])]));
+    let prophetControlled = false;
     result.events.forEach((event) => {
+      if (
+        event.kind === 'log' &&
+        event.text.includes('【预言家接管】') &&
+        event.text.includes(`${surtrName} 从 `)
+      ) {
+        prophetControlled = true;
+      }
+      if (
+        event.kind === 'log' &&
+        (
+          event.text.includes(`【控制权返还】${surtrName} `) ||
+          event.text.includes(`【阶段抹杀】${surtrName} `) ||
+          event.text.includes(`【保底召唤退场】${surtrName} `) ||
+          event.text.includes(`【接管召唤物死亡转化】${surtrName} `)
+        )
+      ) {
+        prophetControlled = false;
+      }
       if (
         event.kind === 'action_start'
         && event.actorId === surtrId
+        && !prophetControlled
         && event.targetIds?.some((targetId) => protectedIds.has(targetId))
       ) {
         issues.push(issue(

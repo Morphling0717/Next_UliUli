@@ -1,6 +1,7 @@
 import type { Fighter, HealingKind, HealingResolutionRecord, JobDefinition, StatKey, StatusInstance } from './types';
 import { hasIdentity, queryMechanic, removeEffects, withPersistentStatusShapesSuspended } from './statusSystem';
 import { isSurtrAfterglowActive } from './surtrMechanics';
+import { canEnterNormalActionQueue, getNpcCombatCapabilities } from './npcCombat';
 
 export function cloneJobDefinition(job: JobDefinition): JobDefinition {
   return { ...job, skills: [...job.skills] };
@@ -46,7 +47,16 @@ export function resolveHealing(
   const attempted = Math.max(0, Math.floor(amount));
   const vitality = queryMechanic(fighter, 'VITALITY').potency;
   const exhaustion = queryMechanic(fighter, 'EXHAUSTION').potency;
-  const multiplier = Math.max(0, (1 + vitality / 100) * Math.max(0, 1 - exhaustion / 100));
+  const isolatedFromHealer =
+    !!options.healer &&
+    options.healer.id !== fighter.id &&
+    (
+      hasIdentity(fighter, 'HEROBRINE_ISOLATED') ||
+      hasIdentity(options.healer, 'HEROBRINE_ISOLATED')
+    );
+  const multiplier = isolatedFromHealer
+    ? 0
+    : Math.max(0, (1 + vitality / 100) * Math.max(0, 1 - exhaustion / 100));
   // Ordinary healing must never double as an implicit revival. Explicit
   // revival handlers restore the combatant state before invoking healing.
   const canReceiveHealing =
@@ -70,7 +80,9 @@ export function resolveHealing(
       : effectiveAmount <= 0
         ? 'blocked'
         : 'full';
-  if (attempted > 0 && exhaustion > 0 && effectiveAmount <= 0) {
+  if (attempted > 0 && isolatedFromHealer) {
+    log?.('info', `⬜ 【单人世界边界】${options.healer?.name ?? '外界'} 无法治疗被孤立的 ${fighter.name}。`);
+  } else if (attempted > 0 && exhaustion > 0 && effectiveAmount <= 0) {
     log?.('info', `🥀 【枯竭】${fighter.name} 的治疗被完全阻止！（枯竭 ${exhaustion}%）`);
   } else if (attempted > 0 && (vitality > 0 || exhaustion > 0) && effectiveAmount !== attempted) {
     const statusText = [vitality > 0 ? `生机 ${vitality}%` : '', exhaustion > 0 ? `枯竭 ${exhaustion}%` : '']
@@ -105,13 +117,15 @@ export function isActiveCombatant(fighter: Fighter): boolean {
 }
 
 export function isWinningCombatant(fighter: Fighter): boolean {
-  return isActiveCombatant(fighter) && !fighter.cannotWin && !fighter.isNpc;
+  return isActiveCombatant(fighter) &&
+    !fighter.cannotWin &&
+    getNpcCombatCapabilities(fighter).countsForVictory;
 }
 
 export function canActNormally(fighter: Fighter): boolean {
   return isActiveCombatant(fighter) &&
     !fighter.cannotAct &&
-    (!fighter.isNpc || !!fighter.isYuzuProphet);
+    canEnterNormalActionQueue(fighter);
 }
 
 export function hasStatus(fighter: Fighter, type: string): boolean {
@@ -157,6 +171,10 @@ export function cloneFighter(fighter: Fighter): Fighter {
     yuzuProphetControlState: fighter.yuzuProphetControlState
       ? { ...fighter.yuzuProphetControlState }
       : fighter.yuzuProphetControlState,
+    npcUnitState: fighter.npcUnitState ? {
+      ...fighter.npcUnitState,
+      capabilities: { ...fighter.npcUnitState.capabilities },
+    } : fighter.npcUnitState,
     momoState: fighter.momoState ? {
       ...fighter.momoState,
       assignedMemberIds: fighter.momoState.assignedMemberIds ? [...fighter.momoState.assignedMemberIds] : undefined,

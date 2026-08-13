@@ -2,12 +2,9 @@ import { cloneJobDefinition } from '../combatState';
 import { commitFormTransition } from '../battlePresentation';
 import type { DamageApplicationOptions } from '../types';
 import { isSelectableTargetFor } from '../targeting';
-import {
-  ORIGINIUM_DISEASE_STATUS,
-} from '../puruisaishiMechanics';
 import type { CharacterHook } from './types';
-import { hasIdentity, removeBarriers, removeEffects, withPersistentStatusShapesSuspended } from '../statusSystem';
-import { getEffectiveCombatStat } from '../statusMechanics';
+import { withPersistentStatusShapesSuspended } from '../statusSystem';
+import { clearReviveEffects, getEffectiveCombatStat } from '../statusMechanics';
 import { didDamageConnect, getDamageRedirectKind, getResolvedDamageTotal, isDamageRedirected } from '../damageRedirects';
 
 export const jokerHook: CharacterHook = {
@@ -30,10 +27,18 @@ export const jokerHook: CharacterHook = {
     return true;
   },
 
-  onDefeated: ({ fighter, runtime }) => {
-    if (fighter.isJoker && !fighter.hasResurrected) {
+  onDefeated: ({ fighter, runtime, terminalDefeat }) => {
+    if (fighter.isJoker && !fighter.hasResurrected && !terminalDefeat) {
       fighter.reviveTurns = 3;
-      runtime.log('info', `🃏 ${fighter.name} 没有真正退场，进入 3 次结算的返场倒计时！`);
+      runtime.log(
+        'info',
+        `🃏 ${fighter.name} 没有真正退场，进入 3 次结算的返场倒计时！`,
+        {
+          actorId: fighter.id,
+          actorName: fighter.name,
+          targetIds: [fighter.id],
+        },
+      );
     }
   },
 
@@ -59,18 +64,42 @@ export const jokerHook: CharacterHook = {
     if (hasTeammates) {
       if (!livingFighters.some((ally) => ally.id !== fighter.id && runtime.getTeamId(ally) === myTeamId)) {
         forceRevive = true;
-        runtime.log('info', `⚠️ 己方全灭，${fighter.name} 提前结束读秒，强制返场！`);
+        runtime.log(
+          'info',
+          `⚠️ 己方全灭，${fighter.name} 提前结束读秒，强制返场！`,
+          {
+            actorId: fighter.id,
+            actorName: fighter.name,
+            targetIds: [fighter.id],
+          },
+        );
       }
     } else if (new Set(livingFighters.map((enemy) => runtime.getTeamId(enemy))).size <= 1) {
       forceRevive = true;
-      runtime.log('info', `⚠️ 场上只剩最终的赢家，独狼 ${fighter.name} 决定现在登场截胡！`);
+      runtime.log(
+        'info',
+        `⚠️ 场上只剩最终的赢家，独狼 ${fighter.name} 决定现在登场截胡！`,
+        {
+          actorId: fighter.id,
+          actorName: fighter.name,
+          targetIds: [fighter.id],
+        },
+      );
     }
 
     fighter.reviveTurns = forceRevive ? 0 : (fighter.reviveTurns ?? 0) - 1;
     if ((fighter.reviveTurns ?? 0) > 0) return true;
 
     const GOD_OF_TROLLS = runtime.jobs.GOD_OF_TROLLS;
-    runtime.log('buff', `🤡 【地狱返场】${fighter.name} 的复活读秒结束，开始从地狱重返战场！`);
+    runtime.log(
+      'buff',
+      `🤡 【地狱返场】${fighter.name} 的复活读秒结束，开始从地狱重返战场！`,
+      {
+        actorId: fighter.id,
+        actorName: fighter.name,
+        targetIds: [fighter.id],
+      },
+    );
     const changed = commitFormTransition({
       fighter,
       kind: 'form_shift',
@@ -102,13 +131,17 @@ export const jokerHook: CharacterHook = {
       }),
     });
     if (!changed) {
-      runtime.log('buff', `🤡 ${fighter.name} 已从地狱归来！\n"接下来，是我的谢幕演出！"`);
+      runtime.log(
+        'buff',
+        `🤡 ${fighter.name} 已从地狱归来！\n"接下来，是我的谢幕演出！"`,
+        {
+          actorId: fighter.id,
+          actorName: fighter.name,
+          targetIds: [fighter.id],
+        },
+      );
     }
-    removeEffects(fighter, {
-      excludeIdentityIds: hasIdentity(fighter, ORIGINIUM_DISEASE_STATUS) ? [ORIGINIUM_DISEASE_STATUS] : [],
-      reason: 'revive',
-    });
-    removeBarriers(fighter);
+    clearReviveEffects(fighter);
     const enemies = runtime.fighters.filter((enemy) => isSelectableTargetFor(runtime, fighter, enemy));
     if (enemies.length > 0) {
       runtime.runReactionAction(fighter, {
@@ -140,7 +173,16 @@ export const jokerHook: CharacterHook = {
           const effectiveRes = getEffectiveCombatStat(enemy, 'res', 'custom');
           const actualDmg = runtime.applyDamage(enemy, Math.max(1, aoeDmg - Math.floor(effectiveRes * 0.5)), 'skill', false, fighter, damageOptions);
           runtime.flushDeferredDamageEvents(enemy, 'mitigation');
+          if (damageOptions.targetWithdrawnDuringDamage) {
+            runtime.flushDeferredDamageEvents(enemy);
+            continue;
+          }
           const redirected = isDamageRedirected(damageOptions);
+          const outcomeMetadata = {
+            actorId: fighter.id,
+            actorName: fighter.name,
+            targetIds: [enemy.id],
+          };
           if (!redirected && actualDmg <= 0 && !runtime.isActiveCombatant(enemy)) {
             continue;
           }
@@ -156,7 +198,11 @@ export const jokerHook: CharacterHook = {
                   : redirectKind === 'yuzu'
                     ? `触发【镜界分摊】，队友合计实际损失 ${redirectedDamage} 点生命`
                     : `触发【|OMO】，舰长合计实际损失 ${redirectedDamage} 点生命`;
-            runtime.log('info', `💥 【谢幕返场结算】扫向 ${enemy.name} 的地狱笑话${outcome}；${enemy.name} 本体未受伤，不附加【混乱】。`);
+            runtime.log(
+              'info',
+              `💥 【谢幕返场结算】扫向 ${enemy.name} 的地狱笑话${outcome}；${enemy.name} 本体未受伤，不附加【混乱】。`,
+              outcomeMetadata,
+            );
             if (redirectedDamage > 0 || (enemy.pendingDamageEvents?.length ?? 0) > 0) {
               runtime.flushDeferredDamageEvents(enemy);
             }
@@ -164,11 +210,11 @@ export const jokerHook: CharacterHook = {
           }
           const connected = didDamageConnect(actualDmg, damageOptions);
           if (actualDmg > 0) {
-            runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害！`);
+            runtime.log('info', `💥 地狱笑话命中 ${enemy.name}，实际造成 ${actualDmg} 点魔法伤害！`, outcomeMetadata);
           } else if (connected) {
-            runtime.log('info', `💥 地狱笑话命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`);
+            runtime.log('info', `💥 地狱笑话命中 ${enemy.name}；但【黄昏余命】期间未再损失生命！`, outcomeMetadata);
           } else {
-            runtime.log('info', `💥 地狱笑话扫过 ${enemy.name}，但没有造成实际伤害，【混乱】没有生效！`);
+            runtime.log('info', `💥 地狱笑话扫过 ${enemy.name}，但没有造成实际伤害，【混乱】没有生效！`, outcomeMetadata);
           }
           const confused = connected &&
             enemy.currentHp > 0 &&
@@ -177,7 +223,7 @@ export const jokerHook: CharacterHook = {
             !damageOptions.suppressOnHitStatuses &&
             runtime.applyStatus(enemy, { identityId: 'CONFUSED', remainingTurns: 1, attribution: { applierId: fighter.id, applierName: fighter.name } });
           if (confused) {
-            runtime.log('debuff', `🌀 【谢幕返场】${enemy.name} 被地狱笑话扰乱，陷入 1 回合混乱！`);
+            runtime.log('debuff', `🌀 【谢幕返场】${enemy.name} 被地狱笑话扰乱，陷入 1 回合混乱！`, outcomeMetadata);
           }
           if (connected || (enemy.pendingDamageEvents?.length ?? 0) > 0) runtime.flushDeferredDamageEvents(enemy);
           if (enemy.currentHp <= 0 && !enemy.isDead) {

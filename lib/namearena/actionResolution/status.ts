@@ -3,17 +3,21 @@ import {
   findDefenseStatus,
   formatControlBlocked,
 } from '../defenseStatus';
-import { applyStatus } from '../statusSystem';
+import { applyStatus, type StatusApplicationResult } from '../statusSystem';
 import { getStatusIdentityDefinition, identityHasTag } from '../statusRegistry';
 import type { ActionResolutionRuntime } from './types';
 
 export type HostileStatusOptions = StatusApplication;
+export type HostileStatusResolution = {
+  applied: boolean;
+  result?: StatusApplicationResult;
+};
 
 export function tryApplyHostileStatus(
   runtime: Pick<ActionResolutionRuntime, 'log'>,
   target: Fighter,
   application: HostileStatusOptions,
-): boolean {
+): HostileStatusResolution {
   const type = application.identityId;
   const controlImmune = findDefenseStatus(target, 'BKB');
   if (controlImmune && identityHasTag(type, 'spell_immunity_blocked')) {
@@ -23,11 +27,19 @@ export function tryApplyHostileStatus(
       const effectName = effectSource
         ? effectSource.includes(statusName) ? effectSource : `${effectSource}的${statusName}效果`
         : `${statusName}效果`;
-      runtime.log('info', formatControlBlocked(controlImmune, target.name, effectName));
+      runtime.log(
+        'info',
+        formatControlBlocked(controlImmune, target.name, effectName),
+        {
+          actorId: application.attribution?.applierId,
+          actorName: application.attribution?.applierName,
+          targetIds: [target.id],
+        },
+      );
     }
-    return false;
+    return { applied: false };
   }
 
-  applyStatus(target, application);
-  return true;
+  const result = applyStatus(target, application);
+  return { applied: result.changed, result };
 }

@@ -186,6 +186,41 @@ export function runCharacterHookCases(): string[] {
 
   {
     const joker = makeFighter('屑@A');
+    const attacker = makeFighter('致死状态转移来源@B');
+    const bystander = makeFighter('致死状态转移受害者@B');
+    const { engine, logs } = makeDeathEngine([joker, attacker, bystander]);
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for lethal redirected-status tests');
+    const engineJoker = engine.fighters[0];
+    const engineAttacker = engine.fighters[1];
+    const engineBystander = engine.fighters[2];
+    engineJoker.job = 'GOD_OF_TROLLS';
+    engineJoker.jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    engineAttacker.atk = 10000;
+    engineAttacker.agl = 10000;
+    localProject.setCurrentHp(engineAttacker, 1);
+    localProject.setCurrentHp(engineBystander, 1);
+    applyTestStatus(engineAttacker, { identityId: 'AIM', charges: 1 });
+
+    withRandomSequence(Array(20).fill(0), () => {
+      engine.executeSkillAction('bash', engineAttacker, engineJoker);
+    });
+
+    assert(logs.some((entry) => entry.text.includes('【随机恶作剧】')), 'Lethal redirected-status fixture must trigger Joker transfer');
+    assert(
+      engineAttacker.isDead || engineAttacker.isDeadAnnounced || engineBystander.isDead || engineBystander.isDeadAnnounced,
+      'The redirected recipient should be defeated in the lethal Joker fixture',
+    );
+    assert(
+      logs.some((entry) => entry.text.includes('状态结算') && entry.text.includes('【眩晕】不会跟随伤害转移')),
+      'A hostile status should still explain its omission when Joker transfer defeats the recipient',
+    );
+    assert(!engineJoker.statuses.some((status) => status.identityId === 'STUN'), 'Joker must not receive the status from a redirected hit');
+    cases.push('Joker lethal transfer still explains why target statuses do not follow');
+  }
+
+  {
+    const joker = makeFighter('屑@A');
     const croc = makeFighter('牢鳄@B');
     const bystander = makeFighter('抽卡转移受害者@B');
     const { engine, logs } = makeDeathEngine([joker, croc, bystander]);
@@ -723,6 +758,15 @@ export function runCharacterHookCases(): string[] {
     assert(!engine.fighters[1].statuses.some((status) => status.identityId === 'WAIT_COUNTER'), 'Tokusatsu wait counter hook should remove WAIT_COUNTER status');
     assert(engine.fighters[1].hasUsedGreatMonsterVictory, 'Tokusatsu wait counter hook should fire GREAT MONSTER VICTORY once');
     assert(logs.some((entry) => entry.text.includes('GREAT！MONSTER')), 'Tokusatsu wait counter hook should keep the monster transform log');
+    const monsterVictoryVisuals = engine.events.filter((event) =>
+      (event.visualCue?.kind === 'combat_action' || event.visualCue?.kind === 'combat_fx') &&
+      event.visualCue.sourceId === engine.fighters[1].id,
+    );
+    assert(monsterVictoryVisuals.length > 0, 'Tokusatsu wait counter should publish its own Monster Victory visual');
+    assert(
+      monsterVictoryVisuals.every((event) => event.actorId === engine.fighters[1].id),
+      'Nested Monster Victory visuals must retain Tokusatsu as the authoritative actor',
+    );
     cases.push('Tokusatsu wait counter hook');
   }
 
@@ -778,6 +822,43 @@ export function runCharacterHookCases(): string[] {
     assert(logs.some((entry) => entry.text.includes('悲愿不倒')), 'Tokusatsu defiance should log the lethal prevention');
     assert(logs.some((entry) => entry.text.includes('悲愿反扑')), 'Tokusatsu defiance should log the instant counter');
     cases.push('Tokusatsu monster defiance queues instant counter');
+  }
+
+  {
+    const claire = makeFighter('克蕾儿丝菲尔@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    const { engine, logs } = makeDeathEngine([claire, tokusatsu]);
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for nested landing-order tests');
+    const engineClaire = engine.fighters[0];
+    const engineTokusatsu = engine.fighters[1];
+    engineClaire.mag = 10000;
+    engineClaire.agl = 10000;
+    applyTestStatus(engineClaire, { identityId: 'AIM', charges: 1 });
+    engineTokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    engineTokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    engineTokusatsu.transformed = true;
+    engineTokusatsu.maxHp = 3830;
+    localProject.setCurrentHp(engineTokusatsu, 120);
+    applyTestStatus(engineTokusatsu, {
+      identityId: 'AIRBORNE',
+      remainingTurns: 2,
+      attribution: { effectSourceId: 'war_thunder_airborne' },
+    });
+
+    engine.executeSkillAction('chimera_funnels', engineClaire, engineTokusatsu);
+
+    const previewIndex = logs.findIndex((entry) => entry.text.includes('【歼灭·全弹发射】') && entry.text.includes('结算前预估'));
+    const resultIndex = logs.findIndex((entry) => entry.text.includes('📌 实际结算：刺猬人'));
+    const defianceIndex = logs.findIndex((entry) => entry.text.includes('【悲愿不倒】刺猬人'));
+    const earlyLandingIndex = logs.findIndex((entry) => entry.text.includes('【提前落地】刺猬人'));
+    const landingIndex = logs.findIndex((entry) => entry.text.includes('【炮震坠落】刺猬人'));
+    assert(previewIndex >= 0 && resultIndex > previewIndex, 'The parent hit must publish its authoritative result after the preview');
+    assert(defianceIndex > resultIndex, 'Tokusatsu defiance must resolve after the parent damage result');
+    assert(earlyLandingIndex > defianceIndex, 'Strong-dispel landing must be announced after Tokusatsu defiance');
+    assert(landingIndex > earlyLandingIndex, 'Airborne landing damage must resolve after its early-landing cause');
+    assert(!engineTokusatsu.pendingDamageEvents?.length, 'Nested landing resolution must not leave deferred damage logs behind');
+    cases.push('Tokusatsu lethal cleanse defers airborne landing until after the parent hit result');
   }
 
   {
@@ -993,6 +1074,34 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const morphling = makeFighter('水人@A');
+    const joker = makeFighter('屑@B');
+    const redirectVictim = makeFighter('镜花水月转移受害者@A');
+    const { engine, logs } = makeDeathEngine([morphling, joker, redirectVictim]);
+    const godOfTrolls = localProject.jobs.GOD_OF_TROLLS;
+    assert(godOfTrolls, 'GOD_OF_TROLLS job should exist for Liquid Mirage redirect tests');
+    const engineMorphling = engine.fighters[0];
+    const engineJoker = engine.fighters[1];
+    engineMorphling.maxHp = 10000;
+    localProject.setCurrentHp(engineMorphling, 10000);
+    engineMorphling.agl = 10000;
+    applyTestStatus(engineMorphling, { identityId: 'AIM', charges: 1 });
+    engineJoker.job = 'GOD_OF_TROLLS';
+    engineJoker.jobData = { ...godOfTrolls, skills: [...(godOfTrolls.skills ?? [])] };
+    engineJoker.transformed = true;
+
+    withRandomSequence([0.5, 0.99, 0, 0], () => {
+      engine.executeSkillAction('liquid_mirage', engineMorphling, engineJoker);
+    });
+
+    assert(logs.some((entry) => entry.text.includes('【随机恶作剧】')), 'Liquid Mirage redirect fixture must actually trigger Joker transfer');
+    assert(engineMorphling.statuses.some((status) => status.identityId === 'INVUL' && status.attribution.effectSourceId === 'morphling_liquid_mirage'), 'Liquid Mirage should still grant its caster liquid invulnerability after damage is redirected');
+    assert(!engineJoker.statuses.some((status) => status.identityId === 'INVUL'), 'Redirected Liquid Mirage must not grant invulnerability to its original target');
+    assert(!engine.fighters[2].statuses.some((status) => status.identityId === 'INVUL'), 'Redirected Liquid Mirage must not move its caster-only invulnerability to the transfer victim');
+    cases.push('Liquid Mirage keeps its caster self-buff after damage redirection');
+  }
+
+  {
     const sigua = makeFighter('丝瓜uli@A');
     const target = makeFighter('瞬风测试靶@B');
     applyTestStatus(sigua, { identityId: 'AIM', charges: 1 });
@@ -1072,6 +1181,7 @@ export function runCharacterHookCases(): string[] {
     localProject.setCurrentHp(engineGamer, 100);
     engine.fighters[0].mag = 2000;
     engine.fighters[0].agl = 10000;
+    applyTestStatus(engine.fighters[0], { identityId: 'AIM', charges: 1 });
     engine.fighters[1].maxHp = 100000;
     localProject.setCurrentHp(engine.fighters[1], 100000);
 
@@ -1097,6 +1207,7 @@ export function runCharacterHookCases(): string[] {
     engineGamer.maxHp = 1000;
     localProject.setCurrentHp(engineGamer, 100);
     engine.fighters[0].mag = 1000;
+    applyTestStatus(engine.fighters[0], { identityId: 'AIM', charges: 1 });
 
     engine.executeSkillAction('v_rabbit_megaphone', engine.fighters[0], engine.fighters[1]);
 
@@ -1456,6 +1567,43 @@ export function runCharacterHookCases(): string[] {
     assert(engine.fighters[0].currentHp > beforeHeal, 'Summon lifesteal card should heal the Luck Emperor from summon damage');
     assert(logs.some((entry) => entry.text.includes('吸血牌回流')), 'Summon lifesteal card should log healing from summon damage');
     cases.push('Gacha summon lifesteal heals from summon damage');
+  }
+
+  {
+    const gacha = makeFighter('牢鳄@A');
+    const summon = makeFighter('吸血边界召唤物@A');
+    const enemy = makeFighter('吸血边界敌人@B');
+    const { engine, logs } = makeDeathEngine([gacha, summon, enemy]);
+    forceLuckEmperor(engine.fighters[0]);
+    bindAsGachaSummon(engine.fighters[0], engine.fighters[1], '翼神龙', true);
+    applyTestStatus(engine.fighters[0], { identityId: 'GACHA_SUMMON_LIFESTEAL', remainingTurns: 4 });
+    engine.fighters[0].gachaSummonLifestealPct = 0.3;
+    localProject.setCurrentHp(engine.fighters[0], Math.floor(engine.fighters[0].maxHp * 0.4));
+    const hpBefore = engine.fighters[0].currentHp;
+
+    engine.applyDamage(engine.fighters[1], 100, 'self_cost', true, engine.fighters[1], {
+      sourceKind: 'self_cost',
+      creditAttacker: false,
+      bypassShields: true,
+    });
+    engine.applyDamage(engine.fighters[2], 100, 'status', true, engine.fighters[1], {
+      sourceKind: 'status',
+    });
+    engine.applyDamage(engine.fighters[0], 100, 'momo_share', true, engine.fighters[1], {
+      sourceKind: 'share',
+      originSourceKind: 'custom',
+    });
+
+    assert(engine.fighters[0].currentHp === hpBefore - 100, 'Self-cost, status damage, and friendly redistribution must not trigger summon lifesteal');
+    assert(!logs.some((entry) => entry.text.includes('吸血牌回流')), 'Rejected summon lifesteal branches must not emit healing logs');
+
+    const beforeEnemyHit = engine.fighters[0].currentHp;
+    engine.applyDamage(engine.fighters[2], 100, 'skill', true, engine.fighters[1], {
+      sourceKind: 'transfer',
+      originSourceKind: 'custom',
+    });
+    assert(engine.fighters[0].currentHp > beforeEnemyHit, 'A redirected direct hit that lands on an enemy should still trigger summon lifesteal');
+    cases.push('Gacha summon lifesteal only converts legitimate outward enemy damage');
   }
 
   {
@@ -1926,10 +2074,10 @@ export function runCharacterHookCases(): string[] {
     const lifestealIndex = logs.findIndex((entry) => entry.text.includes('吸血牌回流'));
     const redirectSummaryIndex = logs.findIndex((entry) => entry.text.includes('原目标没有受伤；转移伤害已单独结算'));
     assert(transferIndex >= 0, 'All-out attack should trigger Joker transfer in this regression');
-    assert(lifestealIndex > transferIndex, 'Transferred all-out summon damage should log lifesteal after the transfer landing');
-    assert(redirectSummaryIndex > lifestealIndex, 'All-out attack should explain redirected original target after transfer and lifesteal logs');
+    assert(lifestealIndex < 0, 'A summon hit redirected into its own side must not trigger summon lifesteal');
+    assert(redirectSummaryIndex > transferIndex, 'All-out attack should explain redirected original target after the transfer settles');
     assert(!logs.some((entry) => entry.text.includes('进击被 屑 化解，没有造成实际伤害')), 'All-out attack should not imply redirected summon damage did no damage at all');
-    cases.push('Gacha all-out attack explains Joker redirected summon damage');
+    cases.push('Gacha all-out attack explains friendly Joker transfer without false lifesteal');
   }
 
   {
@@ -2399,6 +2547,57 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const tokusatsu = makeFighter('刺猬人@A');
+    const target = makeFighter('咆哮沉沦顺序测试靶@B');
+    const monsterJob = localProject.jobs.MIRACLE_MONSTER_BUJIN;
+    assert(monsterJob, 'MIRACLE_MONSTER_BUJIN job should exist for Monster Roar aftermath ordering tests');
+    tokusatsu.job = 'MIRACLE_MONSTER_BUJIN';
+    tokusatsu.jobData = JSON.parse(JSON.stringify(monsterJob)) as typeof monsterJob;
+    tokusatsu.isTokusatsu = true;
+    tokusatsu.transformed = true;
+    const roarDamage = Math.floor(
+      getEffectiveCombatStat(tokusatsu, 'mag', 'custom') * 0.95 +
+      getEffectiveCombatStat(tokusatsu, 'atk', 'custom') * 0.22 +
+      getEffectiveCombatStat(tokusatsu, 'wis', 'custom') * 0.15,
+    );
+    target.isNpc = true;
+    target.morale = undefined;
+    target.maxMorale = undefined;
+    target.maxHp = roarDamage + 3;
+    localProject.setCurrentHp(target, roarDamage + 3);
+    applyTestStatus(target, {
+      identityId: 'SINKING',
+      potency: 15,
+      count: 1,
+      attribution: {
+        effectSourceId: 'monster_roar_sinking_fixture',
+        applierId: tokusatsu.id,
+        applierName: tokusatsu.name,
+      },
+    });
+    const { engine, logs } = makeDeathEngine([tokusatsu, target]);
+
+    withRandomSequence([0.9], () => {
+      engine.executeSkillAction('monster_roar', engine.fighters[0], engine.fighters[1]);
+    });
+
+    const hitIndex = logs.findIndex((entry) =>
+      entry.text.includes('咆哮冲击命中') && entry.targetIds?.includes(engine.fighters[1].id),
+    );
+    const sinkingIndex = logs.findIndex((entry, index) =>
+      index > hitIndex && entry.text.includes('【沉沦】') && entry.targetIds?.includes(engine.fighters[1].id),
+    );
+    const defeatIndex = logs.findIndex((entry, index) =>
+      index > sinkingIndex && entry.text.includes('被【沉沦】的后续伤害击倒'),
+    );
+    assert(
+      hitIndex >= 0 && sinkingIndex > hitIndex && defeatIndex > sinkingIndex,
+      'Monster Roar must report direct damage before lethal sinking aftermath and defeat',
+    );
+    cases.push('Monster Roar damage precedes lethal sinking aftermath');
+  }
+
+  {
     const bunny = makeFighter('兔卷卷@A');
     const claire = makeFighter('克蕾儿丝菲尔@B');
     const { engine, logs } = makeDeathEngine([bunny, claire]);
@@ -2857,6 +3056,35 @@ export function runCharacterHookCases(): string[] {
   }
 
   {
+    const morphling = makeFighter('水人@A');
+    const primary = makeFighter('洪水真伤主目标@B');
+    const gacha = makeFighter('牢鳄@B');
+    morphling.mag = 300;
+    morphling.agl = 10000;
+    applyTestStatus(morphling, { identityId: 'AIM', charges: 1 });
+    primary.maxHp = 100000;
+    localProject.setCurrentHp(primary, 100000);
+    gacha.maxHp = 100000;
+    localProject.setCurrentHp(gacha, 100000);
+    forceLuckEmperor(gacha);
+    const { engine, logs } = makeDeathEngine([morphling, primary, gacha]);
+
+    withRandomSequence([0.5, 0.5, 0.5, 0.5], () => {
+      engine.executeSkillAction('apocalyptic_flood', engine.fighters[0], engine.fighters[1]);
+    });
+
+    assert(
+      engine.fighters[2].stats.dmgTaken === engine.fighters[1].stats.dmgTaken,
+      `Apocalyptic Flood secondary true damage must ignore Luck Emperor mitigation; primary took ${engine.fighters[1].stats.dmgTaken}, secondary took ${engine.fighters[2].stats.dmgTaken}`,
+    );
+    assert(
+      !logs.some((entry) => entry.text.includes('【欧皇命格】') && entry.targetIds?.includes(engine.fighters[2].id)),
+      'Luck Emperor mitigation must not trigger for Apocalyptic Flood secondary true damage',
+    );
+    cases.push('Apocalyptic Flood secondary hits retain true-damage semantics');
+  }
+
+  {
     const sigua = makeFighter('丝瓜uli@A');
     const wounded = makeFighter('瓦学妹残局目标@B');
     const healthy = makeFighter('瓦学妹随机干扰目标@C');
@@ -3144,9 +3372,13 @@ export function runCharacterHookCases(): string[] {
     engine.fighters[0].atk = 200;
     engine.fighters[0].maxHp = 500;
     localProject.setCurrentHp(engine.fighters[0], 500);
+    const secondOwnerLogStart = logs.length;
     withRandomSequence([0.3], () => {
       engine.markDefeated(engine.fighters[4], { message: '💀 【测试】表情第二次被击倒。', killer: engine.fighters[0] });
     });
+    const secondOwnerLogs = logs.slice(secondOwnerLogStart).map((entry) => entry.text);
+    assert(secondOwnerLogs.some((text) => text.includes('认主账本余额本已为 0') && text.includes('继续作为复活锚点')), 'Repeated zero-ledger recognition should explain that the reusable anchor remains active');
+    assert(!secondOwnerLogs.some((text) => text.includes('认主账本余额 0 -> 0')), 'Repeated zero-ledger recognition should not use a misleading no-op counter');
     assert(getEffectiveCombatStat(engineOwner, 'atk') === ownerAtkBefore + 12, `Owner second bonus should use only the second killer slice, got ${getEffectiveCombatStat(engineOwner, 'atk')}`);
     assert(engineOwner.maxHp === ownerMaxHpBefore + 31, `Owner second HP bonus should use only the second killer slice, got ${engineOwner.maxHp}`);
 

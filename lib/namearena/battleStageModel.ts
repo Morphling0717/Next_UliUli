@@ -1,6 +1,8 @@
 import type { BattleEvent, Fighter } from './types';
 import { getSummonCardArt } from './summonCardArt';
 import { getTokusatsuFullBodyForJob, getTokusatsuStageAvatar } from './tokusatsuArt';
+import { shouldRenderNpcUnit } from './npcCombat';
+import { getHerobrineArtSlot } from './herobrineArt';
 
 export type StagePosition = { x: number; y: number };
 
@@ -41,11 +43,14 @@ export function resolveStageManualFocusId(
 }
 
 export function shouldRenderFighterOnStage(fighter: Fighter): boolean {
+  if (fighter.isNpc && !shouldRenderNpcUnit(fighter)) return false;
   const defeated = fighter.isDead || fighter.isDeadAnnounced || fighter.currentHp <= 0;
   return !defeated || (!fighter.isNpc && !fighter.isSummon);
 }
 
 export function getStageFighterImage(fighter?: Fighter): string | undefined {
+  const herobrineArt = getHerobrineArtSlot(fighter);
+  if (herobrineArt?.imagePath) return herobrineArt.imagePath;
   if (fighter?.isSigua) return '/Model.webp';
   const tokusatsuAvatar = getTokusatsuStageAvatar(fighter);
   if (tokusatsuAvatar) return tokusatsuAvatar;
@@ -99,12 +104,14 @@ export function createStagePositions(total: number, width: number, height: numbe
   const safeWidth = Math.max(320, width);
   const safeHeight = Math.max(260, height);
   const hasDesktopStage = safeHeight >= 500 || safeWidth >= 900;
-  if (total <= 26 && hasDesktopStage && safeWidth / safeHeight >= 1.05) return ringPositions(total);
+  if (total <= 18 && hasDesktopStage && safeWidth / safeHeight >= 1.05) return ringPositions(total);
 
   const crowded = total > 18;
   const lowStage = safeHeight < 500;
   const nominalCardWidth = crowded
-    ? 78
+    ? lowStage
+      ? safeWidth < 420 ? 80 : 90
+      : safeWidth < 500 ? 110 : 120
     : lowStage && total > 12 && safeWidth < 420
       ? 78
       : lowStage

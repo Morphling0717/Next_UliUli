@@ -306,6 +306,51 @@ export function runMomoCases(): string[] {
   }
 
   {
+    const momo = makeFighter('萌月沫沫@A');
+    const captain = makeFighter('悲愿均摊舰长@A');
+    const tokusatsu = makeFighter('刺猬人@B');
+    captain.maxHp = 10000;
+    localProject.setCurrentHp(captain, captain.maxHp);
+    const { engine, logs } = makeDeathEngine([momo, captain, tokusatsu]);
+    const [engineMomo, engineCaptain, engineTokusatsu] = engine.fighters;
+    engine.initializeMomoTeams();
+    enterPhaseTwo(engine, engineMomo);
+    removeEffects(engineMomo, { identityIds: ['BKB', 'SPELL_BLOCK'], reason: 'scripted' });
+    localProject.setCurrentHp(engineTokusatsu, Math.max(1, Math.floor(engineTokusatsu.maxHp * 0.4)));
+    engine.handleTransformations(engineTokusatsu);
+    assert(engineTokusatsu.job === 'MIRACLE_BUJIN', 'Adversity share regression requires phase-two Tokusatsu');
+    localProject.setCurrentHp(engineTokusatsu, Math.max(1, Math.floor(engineTokusatsu.maxHp * 0.45)));
+    const userHpBefore = engineTokusatsu.currentHp;
+    const momoHpBefore = engineMomo.currentHp;
+    const captainHpBefore = engineCaptain.currentHp;
+    const logStart = logs.length;
+
+    withRandomSequence(Array.from({ length: 80 }, () => 0), () => {
+      engine.executeSkillAction('adversity_flash', engineTokusatsu, engineMomo);
+    });
+
+    const actionLogs = logs.slice(logStart);
+    assert(
+      engineMomo.currentHp === momoHpBefore &&
+      engineCaptain.currentHp < captainHpBefore &&
+      engineTokusatsu.currentHp > userHpBefore,
+      'Adversity Flash shared through |OMO must damage the captain and heal Tokusatsu from the resolved damage',
+    );
+    assert(
+      engineMomo.statuses.some((status) => status.identityId === 'WEAK') &&
+      actionLogs.some((entry) =>
+        entry.text.includes('【悲愿居合】') &&
+        entry.text.includes('队友合计实际承受')
+      ),
+      `A Momo-shared Adversity Flash must retain its Weak follow-up and explicit settlement log on the intended target: ${JSON.stringify({
+        statuses: engineMomo.statuses.map((status) => status.identityId),
+        logs: actionLogs.map((entry) => entry.text),
+      })}`,
+    );
+    cases.push('Adversity Flash preserves healing, Weak, and causal logs when Momo shares the damage');
+  }
+
+  {
     const water = makeFighter('水人@A');
     const primary = makeFighter('洪水主目标@C');
     const momo = makeFighter('萌月沫沫@B');
@@ -415,7 +460,7 @@ export function runMomoCases(): string[] {
     const enemy = makeFighter('无双龙测试敌人@B');
     enemy.maxHp = 50000;
     localProject.setCurrentHp(enemy, 50000);
-    const { engine } = makeDeathEngine([momo, enemy]);
+    const { engine, logs } = makeDeathEngine([momo, enemy]);
     const engineMomo = engine.fighters[0];
     engine.initializeMomoTeams();
     enterPhaseTwo(engine, engineMomo);
@@ -439,6 +484,24 @@ export function runMomoCases(): string[] {
     const kicksBefore = ensureMomoState(engineMomo).riderKickCount;
     engine.executeSkillAction('momo_final_vent', dragon, engine.fighters[1]);
     assert(ensureMomoState(engineMomo).riderKickCount === kicksBefore + 1, 'Contract dragon FINAL VENT should count as Momo rider kick progress');
+    assert(logs.some((entry) => entry.text.includes(`与 ${dragon.name} 同步跃起`)), 'FINAL VENT setup should name the actual contract dragon variant');
+    assert(logs.some((entry) => entry.text.includes('延续契约合击') && entry.text.includes(engine.fighters[1].name)), 'FINAL VENT damage settlement should not replace the named dragon with a hard-coded variant');
+    const finalVentAction = engine.events.find((event) =>
+      event.kind === 'action_start' && event.skillId === 'momo_final_vent' && event.actorId === dragon.id,
+    );
+    const finalVentSetup = engine.events.find((event) =>
+      event.actionId === finalVentAction?.actionId && event.text.includes(`与 ${dragon.name} 同步跃起`),
+    );
+    const riderKickCount = engine.events.find((event) =>
+      event.actionId === finalVentAction?.actionId && event.text.includes('【骑士踢计数】'),
+    );
+    assert(
+      finalVentSetup?.visualCue?.kind === 'combat_action' &&
+        finalVentSetup.visualCue.sourceId === dragon.id &&
+        finalVentSetup.actorId === dragon.id,
+      'FINAL VENT should anchor its combat animation on the dragon-and-owner setup before the nested hit',
+    );
+    assert(!riderKickCount?.visualCue, 'FINAL VENT bookkeeping must not replay the combat animation after the nested hit');
     cases.push('Momo contract dragon is unique and its VENT equipment does not stack');
   }
 
@@ -861,6 +924,28 @@ export function runMomoCases(): string[] {
 
   {
     const momo = makeFighter('萌月沫沫@A');
+    const captain = makeFighter('致死状态均摊舰长@A');
+    const attacker = makeFighter('致死状态均摊攻击者@B');
+    captain.maxHp = 1;
+    localProject.setCurrentHp(captain, 1);
+    attacker.atk = 10000;
+    attacker.agl = 10000;
+    applyTestStatus(attacker, { identityId: 'AIM', charges: 1 });
+    const { engine, logs } = makeDeathEngine([momo, captain, attacker]);
+    const engineMomo = engine.fighters[0];
+    engine.initializeMomoTeams();
+    enterPhaseTwo(engine, engineMomo);
+
+    engine.executeSkillAction('bash', engine.fighters[2], engineMomo);
+
+    assert(engine.fighters[1].isDead || engine.fighters[1].isDeadAnnounced, 'Lethal |OMO status fixture must defeat its captain recipient');
+    assert(logs.some((entry) => entry.text.includes('状态结算') && entry.text.includes('【眩晕】不会跟随伤害转移')), 'A hostile status should still explain its omission when a redirected captain dies');
+    assert(!engineMomo.statuses.some((status) => status.identityId === 'STUN'), 'A redirected lethal hit must not attach its hostile status to Momo');
+    cases.push('Momo lethal redistribution still explains why target statuses do not follow');
+  }
+
+  {
+    const momo = makeFighter('萌月沫沫@A');
     const target = makeFighter('十连日志高血量目标@B');
     target.maxHp = 1000000;
     localProject.setCurrentHp(target, 1000000);
@@ -876,6 +961,27 @@ export function runMomoCases(): string[] {
     assert(revealIndex >= 0 && firstSealImpact > revealIndex, 'Ten-pull prize reveal must appear before any seal damage or death settlement');
     assert(logs.some((entry) => entry.text.includes('【十连结算】')), 'Ten-pull should finish with a separate actual recovery and cleanse settlement');
     cases.push('Momo ten-pull reveals prizes before resolving offensive rewards');
+  }
+
+  {
+    const momo = makeFighter('萌月沫沫@A');
+    const captain = makeFighter('十连组合状态舰长@A');
+    const enemy = makeFighter('十连组合状态旁观者@B');
+    const { engine, logs } = makeDeathEngine([momo, captain, enemy]);
+    const engineMomo = engine.fighters[0];
+    const engineCaptain = engine.fighters[1];
+    engine.initializeMomoTeams();
+    enterPhaseTwo(engine, engineMomo);
+    applyTestStatus(engineCaptain, { identityId: 'YUZU_SLOW', remainingTurns: 3 });
+
+    withRandomSequence([0.975, ...Array(9).fill(0.1)], () => {
+      engine.executeSkillAction('momo_ten_pull', engineMomo, engine.fighters[2]);
+    });
+
+    const settlement = logs.find((entry) => entry.text.includes('【十连结算】'))?.text ?? '';
+    assert(settlement.includes('清除 1 个负面状态'), `Ten-pull cleanse summary should count one visible composite status, got: ${settlement}`);
+    assert(settlement.includes('本次未抽到神驹宝玺'), `Ten-pull without seals should not claim that zero seals completed settlement, got: ${settlement}`);
+    cases.push('Momo ten-pull counts visible composite statuses and describes zero seals naturally');
   }
 
   {

@@ -2,7 +2,7 @@ import type { DamageApplicationOptions, Fighter, SkillDefinition } from '../type
 import { namerenaData as Data } from '../data';
 import { clearZeroedStatPenalty, isActiveCombatant, resolveHealing } from '../combatState';
 import { consumeSpellBlock, formatPreSkillSpellBlock } from '../defenseStatus';
-import { applyStatus, hasIdentity } from '../statusSystem';
+import { applyStatus } from '../statusSystem';
 import { didDamageConnect, isDamageRedirected } from '../damageRedirects';
 
 const { SKILL_TAGS } = Data;
@@ -41,7 +41,7 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
   valo_clutch_execute: { name: '残局处决', tag: SKILL_TAGS.PHYS, mult: 3.8, minDamagePct: 0.6, ignoreDef: true, alwaysHit: true, alwaysCrit: true, text: '🏆 【残局处决】{USER} 抓住 {TARGET} 的破绽，冷静收下这一分，造成 {VAL} 真实伤害！' },
 
   valo_ult_showstopper: {
-    name: '晚安火炮', tag: SKILL_TAGS.PHYS, mult: 3.0, text: '🚀 {USER} 掏出火箭筒："FIRE IN THE HOLE！" 轰炸了 {TARGET}，造成 {VAL} 毁灭伤害！',
+    name: '晚安火炮', tag: SKILL_TAGS.PHYS, mult: 3.0, herobrineCopyTargetCap: 3, text: '🚀 {USER} 掏出火箭筒："FIRE IN THE HOLE！" 轰炸了 {TARGET}，造成 {VAL} 毁灭伤害！',
     afterExecute: (ctx, dmg) => {
       const otherEnemies = (ctx.currentTargets ?? [])
         .filter((f) => f.id !== ctx.target.id && !f.isDead && !f.isDeadAnnounced && f.currentHp > 0)
@@ -60,9 +60,13 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
         const aoeDmg = Math.floor(dmg * 0.8);
         for (const e of otherEnemies) {
           if (!isActiveCombatant(ctx.user)) break;
-          if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
+          if (!ctx.canOffensivelyTarget(e)) continue;
           const damageOptions: DamageApplicationOptions = { actionName: '晚安火炮余波' };
           const actualDmg = ctx.applyDamage(e, aoeDmg, 'skill', false, ctx.user, damageOptions);
+          if (damageOptions.targetWithdrawnDuringDamage) {
+            ctx.flushDeferredDamageEvents?.();
+            continue;
+          }
           if (isDamageRedirected(damageOptions)) continue;
           if (actualDmg > 0) {
             ctx.log('info', `💥 爆炸余波重创了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
@@ -114,9 +118,13 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
           const splashDmg = Math.floor(overflow / otherEnemies.length);
           for (const e of otherEnemies) {
             if (!isActiveCombatant(ctx.user)) break;
-            if (e.currentHp <= 0 || e.isDead || e.isDeadAnnounced || hasIdentity(e, 'SYNERGY_SLACKING')) continue;
+            if (!ctx.canOffensivelyTarget(e)) continue;
             const damageOptions: DamageApplicationOptions = { actionName: '天降以此余波' };
             const actualDmg = ctx.applyDamage(e, splashDmg, 'skill', false, ctx.user, damageOptions);
+            if (damageOptions.targetWithdrawnDuringDamage) {
+              ctx.flushDeferredDamageEvents?.();
+              continue;
+            }
             if (isDamageRedirected(damageOptions)) continue;
             if (actualDmg > 0) {
               ctx.log('info', `🔥 轨道炮的炽热余波溅射到了 ${e.name}，实际造成 ${actualDmg} 点伤害！`);
@@ -139,11 +147,18 @@ export const valoJuniorSkills: Record<string, SkillDefinition> = {
     name: '宇宙分裂', tag: SKILL_TAGS.BUFF, text: '🌍 {USER} 撕裂空间...',
     onExecute: (ctx) => {
       const userTeamId = ctx.getTeamId(ctx.user);
-      const allies = (ctx.fighters ?? []).filter((f) => !f.isDead && !f.isDeadAnnounced && f.currentHp > 0 && ctx.getTeamId(f) === userTeamId);
+      const allies = (ctx.fighters ?? []).filter(
+        (f) =>
+          !f.isDead &&
+          !f.isDeadAnnounced &&
+          f.currentHp > 0 &&
+          ctx.getTeamId(f) === userTeamId &&
+          ctx.canProvideSupport(f),
+      );
       ctx.setVisualTargets(allies);
       ctx.log('buff', `🌍 【宇宙分裂】${ctx.user.name} 撕裂空间，开始庇护并净化 ${allies.length} 名队友：${namesOf(allies)}！`);
       allies.forEach((a) => {
-        applyStatus(a, { identityId: 'INVUL', remainingTurns: 1, attribution: { effectSourceId: 'valorant_astra_cosmic_divide' } });
+        ctx.applyStatus(a, { identityId: 'INVUL', remainingTurns: 1, attribution: { effectSourceId: 'valorant_astra_cosmic_divide' } });
         ctx.dispelStatusEffects(a, { strength: 'strong', direction: 'negative' });
         const idx = (ctx.fighters ?? []).findIndex((x) => x.id === a.id);
         if (idx !== -1) ctx.fighters[idx] = a;

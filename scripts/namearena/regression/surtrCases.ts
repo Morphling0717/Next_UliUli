@@ -574,7 +574,9 @@ export function runSurtrCases(): string[] {
     );
 
     applyTestStatus(engineCounter, { identityId: 'WAIT_COUNTER', charges: 1 });
-    engine.executeSkillAction('surtr_flame_sword', engineSurtr, engineCounter);
+    withRandomSequence(Array.from({ length: 24 }, () => 0), () => {
+      engine.executeSkillAction('surtr_flame_sword', engineSurtr, engineCounter);
+    });
     assert(
       logs.some((entry) =>
         entry.text.includes('强力反击成功命中') &&
@@ -653,6 +655,30 @@ export function runSurtrCases(): string[] {
     assert(getEmoteClaimableKills(engineOwner) === 0.5, 'Emote must treat a 0.5 shared kill as nonzero');
     assert(logs.filter((entry) => entry.text.includes('共同击杀分账')).length === 1, 'One Surtr kill should emit one split log');
     cases.push('Surtr kills split once and Emote preserves fractional nonzero kills');
+  }
+
+  {
+    const owner = makeFighter('牢鳄@A');
+    const owl = makeFighter('鸮@B');
+    const surtr = makeManualSurtr(owner, owl, 'A', 'B');
+    const { engine, logs } = makeDeathEngine([owner, owl, surtr]);
+    const engineOwner = engine.fighters[0];
+    const engineOwl = engine.fighters[1];
+    const engineSurtr = engine.fighters[2];
+
+    engine.markDefeated(engineOwner, {
+      message: '💀 【共同主人受害测试】牢鳄 倒下。',
+      killer: engineSurtr,
+      bypassDeathSaves: true,
+    });
+
+    assert(engineOwner.stats.kills === 0, 'A defeated Surtr owner must not receive credit for their own death');
+    assert(engineOwl.stats.kills === 0.5, 'The other Surtr owner should retain their half kill credit');
+    assert(
+      logs.some((entry) => entry.text.includes('不获得自己的击杀分账')),
+      'Joint-kill logs should explain why the defeated owner received no credit',
+    );
+    cases.push('Surtr joint kill never credits the defeated owner for their own death');
   }
 
   {

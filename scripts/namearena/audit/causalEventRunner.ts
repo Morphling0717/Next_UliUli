@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { BattleEvent } from '../../../lib/namearena/types';
 import { NO_WATER, SPECIALS, runBattle } from '../shared/harness';
 
-type CausalAuditIssue = {
+export type CausalAuditIssue = {
   battle: number;
   seed: number;
   label: string;
@@ -19,6 +19,25 @@ type ActionSpan = {
   start: BattleEvent;
   end?: BattleEvent;
 };
+
+const REVIVALS_THAT_CONTINUE_CURRENT_ACTION = new Set([
+  'valo_run_it_back_revival',
+]);
+
+const EXPLICIT_REVIVAL_TEXT_PATTERNS = [
+  /【认主返场】.*已复活至/,
+  /浴火重生！.*触发【再火一回】.*满血复活/,
+  /【复活完成】.*重新加入战场/,
+  /【死者苏生完成】.*已恢复到/,
+  /【你确定吗？】.*满血回归/,
+  /已从地狱归来/,
+  /【重新部署完成】.*回到战场/,
+  /刚被判定退场.*(?:被.*救起|从水里捞起)/,
+];
+
+function isExplicitVisibleRevival(event: BattleEvent): boolean {
+  return event.visible && EXPLICIT_REVIVAL_TEXT_PATTERNS.some((pattern) => pattern.test(event.text));
+}
 
 const BATTLE_COUNT = Number.parseInt(process.env.NAMEARENA_CAUSAL_AUDIT_BATTLES ?? '100', 10);
 const BASE_SEED = Number.parseInt(process.env.NAMEARENA_CAUSAL_AUDIT_SEED ?? '995000', 10);
@@ -48,7 +67,7 @@ function addIssue(
   });
 }
 
-function auditBattleEvents(
+export function auditBattleEvents(
   events: BattleEvent[],
   battle: number,
   seed: number,
@@ -60,7 +79,13 @@ function auditBattleEvents(
   const actions = new Map<string, ActionSpan>();
   const eventIds = new Set<string>();
   const defeated = new Set<string>();
+  const defeatedActionActors = new Map<string, string>();
+  const revivedActionActors = new Map<string, number>();
   const recentVisibleByRoot = new Map<string, BattleEvent[]>();
+  const lastVisibleIndexByRoot = new Map<string, number>();
+  events.forEach((event, index) => {
+    if (event.visible) lastVisibleIndexByRoot.set(event.rootEventId, index);
+  });
 
   events.forEach((event, index) => {
     counts[event.kind] = (counts[event.kind] ?? 0) + 1;
@@ -71,6 +96,24 @@ function auditBattleEvents(
       addIssue(issues, battle, seed, label, 'duplicate_event_id', event.id, event);
     }
     eventIds.add(event.id);
+
+    const revivedAt = event.actionId ? revivedActionActors.get(event.actionId) : undefined;
+    const isHarmlessPostRevivalBookkeeping = event.kind === 'action_end' || (
+      event.kind === 'log' &&
+      event.displayInFeed === false &&
+      event.text.startsWith('state-sync:')
+    );
+    if (revivedAt !== undefined && event.sequence > revivedAt && !isHarmlessPostRevivalBookkeeping) {
+      addIssue(
+        issues,
+        battle,
+        seed,
+        label,
+        'post_revival_old_action_effect',
+        `action ${event.actionId} emitted ${event.kind}/${event.type} after its actor was defeated and revived`,
+        event,
+      );
+    }
 
     if (event.kind === 'action_start') {
       if (!event.actionId || !event.actorId || !event.skillName) {
@@ -154,6 +197,11 @@ function auditBattleEvents(
           addIssue(issues, battle, seed, label, 'duplicate_defeat_without_revive', targetId, event);
         }
         defeated.add(targetId);
+        const rootActionId = actionStack[0];
+        const rootAction = rootActionId ? actions.get(rootActionId)?.start : undefined;
+        if (rootActionId && rootAction?.actorId === targetId) {
+          defeatedActionActors.set(rootActionId, targetId);
+        }
         const rootWindow = recentVisibleByRoot.get(event.rootEventId) ?? [];
         const hasVisibleCause = rootWindow.some((candidate) =>
           candidate.type === 'death' ||
@@ -166,12 +214,32 @@ function auditBattleEvents(
     }
 
     const cue = event.visualCue;
+    const revivalActionSkillId = event.actionId
+      ? actions.get(event.actionId)?.start.skillId
+      : undefined;
+    const continuesCurrentAction = !!revivalActionSkillId &&
+      REVIVALS_THAT_CONTINUE_CURRENT_ACTION.has(revivalActionSkillId);
     if ((cue?.kind === 'form_shift' && (cue.cause === 'revival' || cue.cause === 'redeploy'))) {
       defeated.delete(cue.fighterId);
+      if (!continuesCurrentAction) {
+        defeatedActionActors.forEach((actorId, actionId) => {
+          if (actorId === cue.fighterId && actions.get(actionId)?.start.rootEventId === event.rootEventId) {
+            revivedActionActors.set(actionId, event.sequence);
+          }
+        });
+      }
     }
-    if (event.visible && /复活|重新部署|浴火重生|死者苏生|拉回战场|被水人救起/.test(event.text)) {
+    if (isExplicitVisibleRevival(event)) {
       event.targetIds?.forEach((targetId) => defeated.delete(targetId));
       if (event.actorId) defeated.delete(event.actorId);
+      if (!continuesCurrentAction) {
+        const revivedIds = new Set([...(event.targetIds ?? []), ...(event.actorId ? [event.actorId] : [])]);
+        defeatedActionActors.forEach((actorId, actionId) => {
+          if (revivedIds.has(actorId) && actions.get(actionId)?.start.rootEventId === event.rootEventId) {
+            revivedActionActors.set(actionId, event.sequence);
+          }
+        });
+      }
     }
 
     if (event.kind === 'action_end') {
@@ -194,10 +262,8 @@ function auditBattleEvents(
   events.forEach((event, index) => {
     if (event.kind !== 'damage' || !event.damage) return;
     if (event.damage.hpDamage <= 0 && event.damage.shieldDamage <= 0) return;
-    const snapshotSettlement = events.slice(index + 1).find((candidate) => (
-      candidate.rootEventId === event.rootEventId && candidate.visible
-    ));
-    if (!snapshotSettlement) {
+    const lastVisibleIndex = lastVisibleIndexByRoot.get(event.rootEventId) ?? -1;
+    if (lastVisibleIndex <= index) {
       addIssue(
         issues,
         battle,

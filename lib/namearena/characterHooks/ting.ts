@@ -79,6 +79,14 @@ export const tingHook: CharacterHook = {
 
     fighter.hasDroppedSword = true;
     spinalSwordRef.current = true;
-    runtime.log('death', `🦴 【脊髓剑遗留】${fighter.name} 退场前拔出自己的脊髓剑插在了地上，等待后来者拾起！`);
+    runtime.log(
+      'death',
+      `🦴 【脊髓剑遗留】${fighter.name} 退场前拔出自己的脊髓剑插在了地上，等待后来者拾起！`,
+      {
+        actorId: fighter.id,
+        actorName: fighter.name,
+        targetIds: [fighter.id],
+      },
+    );
   },
 };

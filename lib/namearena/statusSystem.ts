@@ -13,6 +13,7 @@ import {
   getBarrierIdentityDefinition,
   getStatusIdentityDefinition,
   getStatusMechanicDefinition,
+  identityHasTag,
   isDualValueStatus,
   statusHasTag,
   type StatusTag,
@@ -29,6 +30,12 @@ export interface StatusApplicationResult {
   primary: StatusInstance;
   created: boolean;
   changed: boolean;
+  blockedReason?: 'duration_reduced_to_zero';
+  durationAdjustment?: {
+    reason: 'HEROBRINE_WITNESS';
+    requestedTurns: number;
+    appliedTurns: number;
+  };
 }
 
 export interface BarrierConsumptionResult {
@@ -412,27 +419,84 @@ export function initializeEffectState(fighter: Fighter): void {
   }
 }
 
+function applyWitnessDurationRule(
+  fighter: Fighter,
+  application: StatusApplication,
+  identityDefinition: ReturnType<typeof getStatusIdentityDefinition>,
+): {
+  application: StatusApplication;
+  adjustment?: StatusApplicationResult['durationAdjustment'];
+} {
+  const witnessStacks = fighter.statuses
+    .filter((status) => status.mechanicId === 'HEROBRINE_WITNESS')
+    .reduce((sum, status) => sum + Math.max(0, status.potency ?? 0), 0);
+  const isOrdinaryTimedBuff =
+    witnessStacks >= 3 &&
+    identityDefinition.polarity === 'positive' &&
+    identityDefinition.dispelTier === 'normal' &&
+    identityDefinition.tickMode !== 'permanent' &&
+    identityDefinition.expiresOn !== 'never' &&
+    identityDefinition.expiresOn !== 'trigger' &&
+    !identityHasTag(application.identityId, 'important_removal');
+  if (!isOrdinaryTimedBuff) return { application };
+
+  const requestedTurns = application.remainingTurns ?? 1;
+  const appliedTurns = Math.max(0, requestedTurns - 1);
+  return {
+    application: { ...application, remainingTurns: appliedTurns },
+    adjustment: {
+      reason: 'HEROBRINE_WITNESS',
+      requestedTurns,
+      appliedTurns,
+    },
+  };
+}
+
 export function applyStatus(fighter: Fighter, application: StatusApplication): StatusApplicationResult {
   initializeEffectState(fighter);
-  const attribution = buildAttribution(application.identityId, application.attribution, application.effectName);
   const identityDefinition = getStatusIdentityDefinition(application.identityId);
+  const durationRule = applyWitnessDurationRule(fighter, application, identityDefinition);
+  const resolvedApplication = durationRule.application;
+  const attribution = buildAttribution(
+    resolvedApplication.identityId,
+    resolvedApplication.attribution,
+    resolvedApplication.effectName,
+  );
+  if (durationRule.adjustment?.appliedTurns === 0) {
+    const components = statusComponents(resolvedApplication);
+    const primary = makeStatusInstance(
+      fighter,
+      resolvedApplication,
+      components[0],
+      attribution,
+      resolvedApplication.groupId,
+    );
+    return {
+      statuses: [],
+      primary,
+      created: false,
+      changed: false,
+      blockedReason: 'duration_reduced_to_zero',
+      durationAdjustment: durationRule.adjustment,
+    };
+  }
   const exclusiveGroup = identityDefinition.exclusiveGroup;
   if (exclusiveGroup) {
     removeEffects(fighter, {
       exclusiveGroupIds: [exclusiveGroup],
       applierIds: [attribution.applierId],
-      excludeIdentityIds: [application.identityId],
+      excludeIdentityIds: [resolvedApplication.identityId],
       reason: 'replaced',
     });
   }
   if (identityDefinition.stackMode === 'replace' || identityDefinition.stackMode === 'exclusive') {
     removeEffects(fighter, {
-      identityIds: [application.identityId],
+      identityIds: [resolvedApplication.identityId],
       reason: 'replaced',
     });
   }
-  const components = statusComponents(application);
-  const groupId = application.groupId ?? (components.length > 1
+  const components = statusComponents(resolvedApplication);
+  const groupId = resolvedApplication.groupId ?? (components.length > 1
     ? `${fighter.id}:status-group:${Math.max(0, fighter.statusSequence ?? 0) + 1}`
     : undefined);
   const statuses: StatusInstance[] = [];
@@ -441,7 +505,7 @@ export function applyStatus(fighter: Fighter, application: StatusApplication): S
 
   for (const component of components) {
     const beforePotency = aggregateMechanicPotency(fighter, component.mechanicId);
-    const incoming = makeStatusInstance(fighter, application, component, attribution, groupId);
+    const incoming = makeStatusInstance(fighter, resolvedApplication, component, attribution, groupId);
     const existing = fighter.statuses.find((status) =>
       status.identityId === incoming.identityId &&
       status.mechanicId === incoming.mechanicId &&
@@ -466,8 +530,14 @@ export function applyStatus(fighter: Fighter, application: StatusApplication): S
 
   if (statuses.some((status) => status.mechanicId === 'POISON')) trimMechanicPotency(fighter, 'POISON', 3);
   const primary = statuses.find((status) => fighter.statuses.includes(status)) ?? statuses[statuses.length - 1];
-  if (!primary) throw new Error(`Status application produced no instances: ${application.identityId}`);
-  return { statuses: statuses.filter((status) => fighter.statuses.includes(status)), primary, created, changed };
+  if (!primary) throw new Error(`Status application produced no instances: ${resolvedApplication.identityId}`);
+  return {
+    statuses: statuses.filter((status) => fighter.statuses.includes(status)),
+    primary,
+    created,
+    changed,
+    durationAdjustment: durationRule.adjustment,
+  };
 }
 
 export function applyStatusBundle(
@@ -712,9 +782,16 @@ export function grantBarrier(
     attribution?: Partial<StatusAttribution>;
     stackMode?: 'add' | 'refresh' | 'overwrite';
   },
-): BarrierEntry {
+): BarrierEntry | undefined {
   fighter.barriers = fighter.barriers ?? [];
-  const incoming = Math.max(0, Math.floor(value));
+  const barrierGainReduction = Math.max(0, queryMechanic(fighter, 'BARRIER_GAIN_DOWN').potency);
+  const isolatedFromApplier =
+    hasIdentity(fighter, 'HEROBRINE_ISOLATED') &&
+    !!options.attribution?.applierId &&
+    options.attribution.applierId !== fighter.id;
+  const incoming = isolatedFromApplier
+    ? 0
+    : Math.max(0, Math.floor(value * Math.max(0, 1 - barrierGainReduction / 100)));
   const identityId = options.identityId ?? 'BARRIER';
   const definition = getBarrierIdentityDefinition(identityId);
   if (!options.sourceId.trim()) throw new Error('Barrier sourceId must not be empty');
@@ -724,6 +801,7 @@ export function grantBarrier(
     barrier.sourceId === options.sourceId &&
     sameAttribution(barrier.attribution, attribution),
   );
+  if (incoming <= 0) return undefined;
   if (existing) {
     fighter.barrierSequence = Math.max(0, fighter.barrierSequence ?? 0) + 1;
     existing.appliedSequence = fighter.barrierSequence;
@@ -842,6 +920,7 @@ export function formatStatusValue(status: StatusInstance): string {
   if (status.mechanicId === 'ORIGINIUM_DISEASE') return `${status.potency ?? 0}/80层`;
   if (status.mechanicId === 'MOMO_CROWD_JOY') return `${status.potency ?? 0}/138层`;
   if (status.mechanicId === 'OWL_WILD') return `${status.potency ?? 0}/5层`;
+  if (status.mechanicId === 'HEROBRINE_WITNESS') return `${status.potency ?? 0}/5层`;
   const pieces: string[] = [];
   if (status.potency !== undefined && status.potency !== 0) {
     pieces.push(

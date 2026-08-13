@@ -18,6 +18,14 @@ function hasStatus(fighter: Fighter, type: string): boolean {
   return hasIdentity(fighter, type);
 }
 
+function gamerSelfLogMetadata(fighter: Fighter) {
+  return {
+    actorId: fighter.id,
+    actorName: fighter.name,
+    targetIds: [fighter.id],
+  };
+}
+
 function applyTemporaryGamerStats(
   fighter: Fighter,
   identityId: string,
@@ -82,7 +90,11 @@ function enterWorldStage(ctx: SkillContext, reason: string): void {
   ctx.user.gamerBoostReady = true;
   applyStatus(ctx.user, { identityId: 'GAMER_WORLD_STAGE', remainingTurns: WORLD_STAGE_DURATION });
   applyStatus(ctx.user, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'gamer_world_stage' } });
-  ctx.log('crit', `🏆 【世界赛舞台】${ctx.user.name} APM 拉到 ${ctx.user.apm ?? 0}/${MAX_APM}，${reason}，所有冠军技能短暂进入强化版！`);
+  ctx.log(
+    'crit',
+    `🏆 【世界赛舞台】${ctx.user.name} APM 拉到 ${ctx.user.apm ?? 0}/${MAX_APM}，${reason}，所有冠军技能短暂进入强化版！`,
+    gamerSelfLogMetadata(ctx.user),
+  );
 }
 
 function gainApm(ctx: SkillContext, amount: number, reason: string): void {
@@ -107,7 +119,11 @@ function completeTechnique(ctx: SkillContext, skillType: GamerSkillType, options
   if ((ctx.user.gamerMastery ?? 0) >= 3) {
     ctx.user.gamerMastery = 0;
     ctx.user.gamerBoostReady = true;
-    ctx.log('buff', `🎮 【跨平台精通】${ctx.user.name} 连续切换不同游戏理解，下一次冠军技能将自动强化！`);
+    ctx.log(
+      'buff',
+      `🎮 【跨平台精通】${ctx.user.name} 连续切换不同游戏理解，下一次冠军技能将自动强化！`,
+      gamerSelfLogMetadata(ctx.user),
+    );
   }
 
   if ((ctx.user.gamerClutchWindow ?? 0) > 0) {
@@ -130,6 +146,10 @@ function applyTrackedDamage(
 ): { actualDmg: number; connected: boolean; redirected: boolean } {
   const options: DamageApplicationOptions = { actionName, deferTransform: true, respectDefenses: true };
   const actualDmg = ctx.applyDamage(target, Math.max(0, amount), 'skill', trueDamage, ctx.user, options);
+  if (options.targetWithdrawnDuringDamage) {
+    ctx.flushDeferredDamageEvents?.();
+    return { actualDmg: 0, connected: false, redirected: false };
+  }
   if (isDamageRedirected(options)) {
     ctx.flushDeferredDamageEvents?.();
     return { actualDmg: 0, connected: false, redirected: true };
@@ -179,7 +199,9 @@ function executeCrackConfirm(ctx: SkillContext, label = '破绽确认'): boolean
   const result = applyTrackedDamage(ctx, ctx.target, dmg, label, true, `🥊 【${prefix}】确认命中`);
   if (result.connected && marked) {
     delete ctx.user.gamerMarkedTargetId;
-    ctx.log('info', `👁️ 【读输入】${ctx.user.name} 已经把 ${ctx.target.name} 的标记转化为确认伤害，标记解除。`);
+    if (ctx.target.currentHp > 0 && !ctx.target.isDead && !ctx.target.isDeadAnnounced) {
+      ctx.log('info', `👁️ 【读输入】${ctx.user.name} 已经把 ${ctx.target.name} 的标记转化为确认伤害，标记解除。`);
+    }
   }
   completeTechnique(ctx, 'fighting', { apmGain: result.actualDmg > 0 ? 1 : 0, reason: '用确认连段把比赛节奏接住' });
   return true;
@@ -194,7 +216,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   waterfowl: { name: '水鸟乱舞', tag: SKILL_TAGS.PHYS, mult: 0.8, hits: 5, text: '🦢 {USER} 化身女武神，对 {TARGET} 施展水鸟乱舞！连续劈砍 5 次，共造成 {VAL} 伤害！' },
   bkb_dota: { name: '开启BKB', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'BKB', attribution: { effectSourceId: 'gamer_bkb' } }], text: '🟡 {USER} 开启了黑皇杖，全身散发金光，免疫一切魔法控制！' },
   rush_b: { name: 'Rush B', tag: SKILL_TAGS.BUFF, statusApplications: [{ identityId: 'GAMER_RUSH_B' }], text: "🏃 {USER} 大喊一声 \"Rush B, Don't stop!\"，速度和攻击力飙升！" },
-  yasuo_q: { name: '哈撒给', tag: SKILL_TAGS.MAG, mult: 1.5, statusApplications: [{ identityId: 'STUN' }], text: '🌪️ {USER} 斩出一道龙卷风，将 {TARGET} 高高击飞！造成 {VAL} 伤害！' },
+  yasuo_q: { name: '哈撒给', tag: SKILL_TAGS.MAG, mult: 1.5, statusApplications: [{ identityId: 'AIRBORNE' }], text: '🌪️ {USER} 斩出一道龙卷风，将 {TARGET} 高高击飞！造成 {VAL} 伤害！' },
   teemo_shroom: { name: '种蘑菇', tag: SKILL_TAGS.MAG, mult: 1.0, statusApplications: [{ identityId: 'POISON' }], text: '🍄 {USER} 偷偷在 {TARGET} 脚下种了个毒蘑菇，造成 {VAL} 伤害并施加剧毒！' },
   divine_sunderer: { name: '神圣分离者', tag: SKILL_TAGS.PHYS, mult: 1.5, lifesteal: 0.5, text: '🔨 {USER} 触发耀光效果重击 {TARGET}，造成 {VAL} 伤害并回复自身血量！' },
   judgment_cut: { name: '次元斩', tag: SKILL_TAGS.MAG, mult: 3.0, ignoreDef: true, text: '🗡️ {USER} 拔刀瞬间切开空间，对 {TARGET} 造成 {VAL} 无视魔抗的次元伤害！' },
@@ -281,6 +303,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_tactical_pause: {
     name: '开团指挥',
     tag: SKILL_TAGS.SPECIAL,
+    herobrineCopyTargetCap: 3,
     spellBlockMode: 'perHit',
     condition: (user) => canPay(user, 3),
     text: '⏸️ {USER} 抓住对局节奏强行暂停，读到 {TARGET} 的下一步行动！',
@@ -299,7 +322,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       if (result.connected) applyControl(ctx, ctx.target, 'STUN', boosted ? 2 : 1, '开团眩晕');
       if (boosted && isActiveCombatant(ctx.user)) {
         for (const enemy of extras) {
-          if (!isActiveCombatant(enemy)) continue;
+          if (!ctx.canOffensivelyTarget(enemy)) continue;
           const splash = Math.floor(primary * 0.42);
           applyTrackedDamage(ctx, enemy, splash, '开团指挥余波', false, `⏸️ 【开团余波】波及 ${enemy.name}`);
         }
@@ -312,6 +335,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_wombo_combo: {
     name: 'Wombo Combo',
     tag: SKILL_TAGS.SPECIAL,
+    herobrineCopyTargetCap: 3,
     spellBlockMode: 'perHit',
     condition: (user) => canPay(user, 3),
     text: '🌀 {USER} 开启 MOBA 团战思路，准备打一套群体连招！',
@@ -329,9 +353,11 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       let totalDmg = 0;
       let hitCount = 0;
       let redirectedAny = false;
+      const resolvedTargets: Fighter[] = [];
       for (const enemy of enemies) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (!isActiveCombatant(enemy)) continue;
+        if (!ctx.canOffensivelyTarget(enemy)) continue;
+        resolvedTargets.push(enemy);
         const result = applyTrackedDamage(ctx, enemy, baseDmg, 'Wombo Combo', false, `🎮 连招命中 ${enemy.name}`);
         if (result.redirected) redirectedAny = true;
         if (result.actualDmg > 0) {
@@ -344,21 +370,44 @@ export const gamerSkills: Record<string, SkillDefinition> = {
           kind: 'lifesteal',
           sourceId: '强化Wombo Combo',
           healer: ctx.user,
-        }, ctx.log);
+        }, (type, text) => ctx.log(type, text, gamerSelfLogMetadata(ctx.user)));
         const healText = healing.actual > 0
           ? `${ctx.user.name} 从强化连招中恢复了 ${healing.actual} 点生命`
           : healing.outcome === 'blocked'
             ? `${ctx.user.name} 的强化连招触发吸血，但治疗被完全阻止`
             : `${ctx.user.name} 的强化连招触发吸血，但生命已满，治疗溢出`;
-        ctx.log(healing.actual > 0 ? 'heal' : 'info', `🌀 【团战吸血】${healText}！`);
+        ctx.log(
+          healing.actual > 0 ? 'heal' : 'info',
+          `🌀 【团战吸血】${healText}！`,
+          gamerSelfLogMetadata(ctx.user),
+        );
       }
+      const summaryMetadata = {
+        actorId: ctx.user.id,
+        actorName: ctx.user.name,
+        targetIds: resolvedTargets
+          .filter((enemy) => isActiveCombatant(enemy) || !enemy.isNpc)
+          .map((enemy) => enemy.id),
+      };
       if (totalDmg > 0) {
         const totalLabel = redirectedAny ? '对未被转移的目标总计造成' : '本次团战连招总计造成';
-        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} ${totalLabel} ${totalDmg} 点伤害！`);
+        ctx.log(
+          'info',
+          `🌀 【Wombo Combo】${ctx.user.name} ${totalLabel} ${totalDmg} 点伤害！`,
+          summaryMetadata,
+        );
       } else if (redirectedAny) {
-        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} 的部分伤害被目标防护机制转移，转移伤害已单独结算！`);
+        ctx.log(
+          'info',
+          `🌀 【Wombo Combo】${ctx.user.name} 的部分伤害被目标防护机制转移，转移伤害已单独结算！`,
+          summaryMetadata,
+        );
       } else {
-        ctx.log('info', `🌀 【Wombo Combo】${ctx.user.name} 这轮团战连招没有打出有效伤害！`);
+        ctx.log(
+          'info',
+          `🌀 【Wombo Combo】${ctx.user.name} 这轮团战连招没有打出有效伤害！`,
+          summaryMetadata,
+        );
       }
       completeTechnique(ctx, 'moba', { apmGain: hitCount >= 3 ? 1 : 0, reason: '命中多人后把团战手感续住' });
       return true;
@@ -492,6 +541,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
   gamer_world_combo: {
     name: '全平台冠军连段',
     tag: SKILL_TAGS.SPECIAL,
+    herobrineCopyTargetCap: 3,
     spellBlockMode: 'perHit',
     condition: (user) => hasStatus(user, 'GAMER_WORLD_STAGE') && canPay(user, 6) && !user.hasUsedGamerChampionCombo,
     text: '🏆 {USER} 进入世界赛状态，开始打出全平台冠军连段！',
@@ -511,7 +561,7 @@ export const gamerSkills: Record<string, SkillDefinition> = {
       const splash = Math.floor(primary * 0.28);
       for (const enemy of splashTargets) {
         if (!isActiveCombatant(ctx.user)) break;
-        if (!isActiveCombatant(enemy)) continue;
+        if (!ctx.canOffensivelyTarget(enemy)) continue;
         applyTrackedDamage(ctx, enemy, splash, '全平台冠军连段余波', true, `🏆 【冠军连段余波】波及 ${enemy.name}`);
       }
       applyStatus(ctx.user, { identityId: 'BKB', remainingTurns: 1, attribution: { effectSourceId: 'gamer_world_stage' } });

@@ -18,6 +18,7 @@ import type { CharacterHook, CharacterHookRuntime } from './types';
 function asOwlRuntime(runtime: CharacterHookRuntime): OwlRuntime {
   return {
     fighters: runtime.fighters,
+    battleState: runtime.battleState,
     jobs: runtime.jobs,
     turnCount: runtime.turnCount,
     getTeamId: runtime.getTeamId,
@@ -124,7 +125,15 @@ export const owlHook: CharacterHook = {
 
   onDefeated: ({ fighter, runtime }) => {
     if (fighter.isOwl) {
-      runtime.log('death', `🦉 ${fighter.name}：“死是凉爽的夏夜，可供人无忧的安眠。”`);
+      runtime.log(
+        'death',
+        `🦉 ${fighter.name}：“死是凉爽的夏夜，可供人无忧的安眠。”`,
+        {
+          actorId: fighter.id,
+          actorName: fighter.name,
+          targetIds: [fighter.id],
+        },
+      );
     }
   },
 
@@ -132,7 +141,15 @@ export const owlHook: CharacterHook = {
     const owlRuntime = asOwlRuntime(runtime);
     if (fighter.owlSummonState?.kind === 'emperor') {
       const owner = fighter.summonerId ? runtime.fighters.find((candidate) => candidate.id === fighter.summonerId) : undefined;
-      runtime.log('death', `🐲 ${owner?.name ?? '鸮'}：“不是我害了你，是这乱世害了你啊！爹啊！你死的好惨啊！孩儿对不住你呀！”（毫无感情）`);
+      runtime.log(
+        'death',
+        `🐲 ${owner?.name ?? '鸮'}：“不是我害了你，是这乱世害了你啊！爹啊！你死的好惨啊！孩儿对不住你呀！”（毫无感情）`,
+        {
+          actorId: owner?.id,
+          actorName: owner?.name ?? '鸮',
+          targetIds: [fighter.id],
+        },
+      );
     }
     grantOwlHeavenFromDeath(owlRuntime, fighter);
     enterOwlPrideAfterKill(owlRuntime, killer);

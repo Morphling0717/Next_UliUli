@@ -173,6 +173,7 @@ const CORE: Record<string, StatusMechanicDefinition> = {
 };
 
 const SUPPLEMENTAL: Record<string, StatusMechanicDefinition> = {
+  BARRIER_GAIN_DOWN: numeric('BARRIER_GAIN_DOWN', '屏障获取降低', '🌫️', 'negative', 'barrier', '获得的护盾降低强度百分比'),
   VULNERABILITY: numeric('VULNERABILITY', '易损', '🩹', 'negative', 'incoming_post_mitigation', '受到的非持续直接伤害提高强度百分比'),
   PROTECTION: numeric('PROTECTION', '防护', '🛡️', 'positive', 'incoming_post_mitigation', '受到的非持续直接伤害降低强度百分比'),
   PARALYSIS: trigger('PARALYSIS', '麻痹', '⚡', 'negative', '下一次攻击使用最低伤害且不能暴击'),
@@ -281,6 +282,45 @@ function trigger(
 type StatusIdentityOverride = Partial<Omit<StatusIdentityDefinition, 'identityId' | 'tags'>> & { mechanicId: string };
 
 const IDENTITY_MECHANICS: Record<string, StatusIdentityOverride> = {
+  HEROBRINE_WITNESS: {
+    mechanicId: 'HEROBRINE_WITNESS',
+    defaultPotency: 1,
+    potencyCap: 5,
+    stackMode: 'add',
+    polarity: 'independent',
+    dispelTier: 'none',
+  },
+  HEROBRINE_WITHER: {
+    mechanicId: 'HEROBRINE_WITHER',
+    components: [
+      {
+        mechanicId: 'EXHAUSTION',
+        potency: 30,
+        stackMode: 'highest',
+        calculationStage: 'aftermath',
+        description: '受到的治疗、再生与合法吸血降低 30%',
+      },
+      {
+        mechanicId: 'BARRIER_GAIN_DOWN',
+        potency: 30,
+        stackMode: 'highest',
+        calculationStage: 'barrier',
+        description: '获得的护盾降低 30%',
+      },
+    ],
+  },
+  HEROBRINE_ISOLATED: {
+    mechanicId: 'HEROBRINE_ISOLATED',
+    stackMode: 'replace',
+    polarity: 'independent',
+    dispelTier: 'none',
+  },
+  HEROBRINE_DONT_LOOK_BACK: {
+    mechanicId: 'HEROBRINE_DONT_LOOK_BACK',
+    stackMode: 'replace',
+    polarity: 'independent',
+    dispelTier: 'none',
+  },
   AIM: { mechanicId: 'AIM', defaultCharges: 1, chargeCap: 1, stackMode: 'refresh' },
   SPELL_BLOCK: { mechanicId: 'SPELL_BLOCK', defaultCharges: 1, stackMode: 'refresh' },
   WAIT_COUNTER: { mechanicId: 'WAIT_COUNTER', defaultCharges: 1, chargeCap: 1, stackMode: 'refresh' },
@@ -543,6 +583,7 @@ function registerIdentityPolicies(ids: readonly string[], policy: IdentityPolicy
 
 const SELF = { tickMode: 'self_opportunity', expiresOn: 'self_opportunity_end' } as const;
 const GLOBAL = { tickMode: 'global_action', expiresOn: 'global_action_end' } as const;
+const LARGE = { tickMode: 'large_round', expiresOn: 'large_round_end' } as const;
 const TRIGGERED = { tickMode: 'trigger', expiresOn: 'trigger' } as const;
 const PERMANENT = { tickMode: 'permanent', expiresOn: 'never' } as const;
 const LIFECYCLE = { stackMode: 'refresh', calculationStage: 'lifecycle' } as const;
@@ -657,8 +698,16 @@ registerIdentityPolicies(
     'MOMO_AWAKENED_SWORD', 'PLUG_HEAD', 'PLUG_ARM', 'PLUG_BACK', 'PLUG_HEART',
     'PLUG_EYE', 'PLUG_SKIN', 'PLUG_LEG', 'PLUG_TAIL', 'STYLE_SMART', 'STYLE_SEXY',
     'STYLE_ANGRY', 'STYLE_FOOL', 'STYLE_VAIN', 'STYLE_FAMILY', 'STYLE_EMPEROR',
-    'RABBIT_CHARM_COUNTER', 'RABBIT_STYLE_RAGE',
+    'RABBIT_CHARM_COUNTER', 'RABBIT_STYLE_RAGE', 'HEROBRINE_WITNESS',
   ],
+  { polarity: 'independent', dispelTier: 'none', ...PERMANENT, ...LIFECYCLE },
+);
+registerIdentityPolicies(
+  ['HEROBRINE_WITHER'],
+  { polarity: 'negative', dispelTier: 'normal', ...LARGE, ...LIFECYCLE },
+);
+registerIdentityPolicies(
+  ['HEROBRINE_ISOLATED', 'HEROBRINE_DONT_LOOK_BACK'],
   { polarity: 'independent', dispelTier: 'none', ...PERMANENT, ...LIFECYCLE },
 );
 
@@ -677,7 +726,7 @@ const TAG_IDENTITIES: Record<StatusTag, readonly string[]> = {
   counter_stance: ['CTR_CHARM', 'CTR_STUN', 'CTR_DRAIN', 'CTR_POISON', 'CTR_BURN', 'CTR_FREEZE', 'CTR_VOID', 'CTR_WEAK', 'CTR_CONFUSE', 'CTR_EXECUTE', 'RABBIT_CHARM_COUNTER'],
   slacking_away_state: ['SYNERGY_SLACKING', 'INVUL', 'STUN', 'BKB', 'SPELL_BLOCK'],
   slacking_return_protection: ['INVUL', 'STUN', 'BKB', 'SPELL_BLOCK'],
-  death_persistent: ['ORIGINIUM_DISEASE'],
+  death_persistent: ['ORIGINIUM_DISEASE', 'HEROBRINE_WITNESS'],
   revive_clean: [
     'STUN', 'FREEZE', 'BURN', 'POISON', 'BLIND', 'SILENCE', 'CONFUSED', 'EMBARRASSED',
     'CHARMED', 'VALO_FLASH', 'VALO_AIM_PUNCH', 'VALO_CYPHER_REVEALED',

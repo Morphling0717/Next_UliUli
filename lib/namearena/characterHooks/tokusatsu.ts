@@ -1,6 +1,7 @@
 import { cloneJobDefinition } from '../combatState';
 import { commitFormTransition } from '../battlePresentation';
 import { getStatusIdentityIdsByTag } from '../statusRegistry';
+import type { BattleLogMetadata } from '../types';
 import type { CharacterHook, CharacterHookRuntime } from './types';
 
 import { isSelectableTargetFor } from '../targeting';
@@ -47,11 +48,11 @@ export function enterTokusatsuMonsterForm(
   const MIRACLE_MONSTER = runtime.jobs.MIRACLE_MONSTER_BUJIN;
   target.counterUsed = true;
   removeEffects(target, { identityIds: ['WAIT_COUNTER'], reason: 'consumed' });
-  const deferredDispelLogs: Array<{ type: string; text: string }> = [];
+  const deferredDispelLogs: Array<{ type: string; text: string; metadata?: BattleLogMetadata }> = [];
   runtime.dispelStatusEffects(target, {
     strength: 'strong',
     direction: 'negative',
-    emitLog: (type, text) => deferredDispelLogs.push({ type, text }),
+    emitLog: (type, text, metadata) => deferredDispelLogs.push({ type, text, metadata }),
   });
   const changed = commitFormTransition({
     fighter: target,
@@ -85,9 +86,17 @@ export function enterTokusatsuMonsterForm(
     },
   });
   if (!changed) return false;
-  deferredDispelLogs.forEach((entry) => runtime.log(entry.type, entry.text));
+  deferredDispelLogs.forEach((entry) => runtime.log(entry.type, entry.text, entry.metadata));
   if (user) {
-    runtime.log('info', `🚫 ${user.name} 的攻势被 ${target.name} 的怪兽形态打断，王座余波会被大幅削弱！`);
+    runtime.log(
+      'info',
+      `🚫 ${user.name} 的攻势被 ${target.name} 的怪兽形态打断，王座余波会被大幅削弱！`,
+      {
+        actorId: user.id,
+        actorName: user.name,
+        targetIds: [target.id],
+      },
+    );
     runtime.executeSkillAction('great_monster_victory', target, user, triggerDepth + 1);
   }
   return true;

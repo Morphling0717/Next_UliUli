@@ -10,6 +10,7 @@ import type {
   StatusApplication,
   StatusInstance,
   BattleLogMetadata,
+  BattleState,
 } from './types';
 import { applyPermanentStatBuff, healFighter, resolveHealing } from './combatState';
 import { isSelectableTargetFor } from './targeting';
@@ -26,9 +27,11 @@ import { resolveDeclarativeSkillDispel } from './skillDispel';
 import { primaryStatusIdentity, statusApplicationsOf } from './skillEffects';
 import type { ReactionActionDescriptor } from './characterHooks';
 import { didDamageConnect, getResolvedDamageTotal, isDamageRedirected } from './damageRedirects';
+import { canProvideHerobrineSupport } from './npcCombat';
 
 export interface SupportResolutionRuntime {
   fighters: Fighter[];
+  battleState?: BattleState;
   skillTags: Record<string, string>;
   data: BattleEngineData;
   turnCount: number;
@@ -68,7 +71,12 @@ export function spreadDivaSupport(
 ): void {
   if (user.job !== 'VIRTUAL_DIVA' || (skill.tag !== runtime.skillTags.BUFF && skill.tag !== runtime.skillTags.HEAL)) return;
 
-  const teammates = runtime.fighters.filter((fighter) => runtime.isActiveCombatant(fighter) && fighter.id !== user.id && runtime.getTeamId(fighter) === userTeamId);
+  const teammates = runtime.fighters.filter((fighter) =>
+    runtime.isActiveCombatant(fighter) &&
+    fighter.id !== user.id &&
+    runtime.getTeamId(fighter) === userTeamId &&
+    canProvideHerobrineSupport(runtime.battleState, user, fighter)
+  );
   const hasAlliesDispel = (skill.dispelSpecs ?? []).some((spec) => spec.target === 'allies');
   teammates.forEach((mate) => {
     if (!hasAlliesDispel) {
@@ -202,6 +210,10 @@ function applyChimeraSideDamage(
     };
     const actual = runtime.applyDamage(target, Math.max(1, Math.floor(amount)), 'skill', false, user, damageOptions);
     runtime.flushDeferredDamageEvents(target, 'mitigation');
+    if (damageOptions.targetWithdrawnDuringDamage) {
+      runtime.flushDeferredDamageEvents(target);
+      return;
+    }
     const resolvedActual = getResolvedDamageTotal(actual, damageOptions);
     const visualMetadata: BattleLogMetadata = {
       actorId: user.id,
@@ -463,18 +475,27 @@ export function handleChimeraUltimateEvolution(
   runtime.log('buff', `🧬 警告！${target.name} 已完成究极进化！全插件安装完毕！\n封印解除，全属性引发恐怖的裂变！化身为最高级别的神级灾厄！`);
 }
 
+export type SupportSkillResolution = 'not_support' | 'resolved' | 'blocked';
+
 export function executeSupportSkill(
   runtime: SupportResolutionRuntime,
   skill: SkillDefinition,
   user: Fighter,
   forcedTarget: Fighter | null,
   userTeamId: string,
-): boolean {
-  if (skill.tag !== runtime.skillTags.HEAL && skill.tag !== runtime.skillTags.BUFF) return false;
+): SupportSkillResolution {
+  if (skill.tag !== runtime.skillTags.HEAL && skill.tag !== runtime.skillTags.BUFF) return 'not_support';
 
   let targetForBuff = (forcedTarget && runtime.getTeamId(forcedTarget) === userTeamId) ? forcedTarget : user;
   if (user.job === 'MY_BABY') {
     targetForBuff = runtime.fighters.find((fighter) => fighter.isSuccubus && runtime.isActiveCombatant(fighter) && runtime.getTeamId(fighter) === userTeamId) ?? targetForBuff;
+  }
+  if (!canProvideHerobrineSupport(runtime.battleState, user, targetForBuff)) {
+    runtime.log(
+      'info',
+      `🌫️ 【单人世界】${user.name} 无法越过封闭世界向 ${targetForBuff.name} 提供治疗、增益或驱散。`,
+    );
+    return 'blocked';
   }
   const visualMetadata: BattleLogMetadata = {
     targetIds: [targetForBuff.id],
@@ -504,7 +525,7 @@ export function executeSupportSkill(
       runtime.log('heal', healMessage.replace(/{USER}/g, user.name).replace(/{TARGET}/g, targetForBuff.name).replace(/{VAL}/g, String(healing.actual)), visualMetadata);
     }
     resolveDeclarativeSkillDispel(runtime, skill, user, targetForBuff, 'after_recovery', 'after_recovery');
-    return true;
+    return 'resolved';
   }
 
   let installedChimeraPlug = false;
@@ -518,7 +539,7 @@ export function executeSupportSkill(
     const isValidChimeraPlug = isPlugStatus && isChimeraPluginInstall(runtime, targetForBuff, skill);
     if (isPlugStatus && !isValidChimeraPlug) {
       runtime.log('info', `⚠️ 【状态归属校验】${skill.name ?? '未知技能'} 试图给 ${targetForBuff.name} 安装克蕾儿插件【${getStatusIdentityDefinition(primaryIdentityId).displayName}】，已被拦截。`);
-      return true;
+      return 'blocked';
     }
 
     if (isCounterStance) {
@@ -565,9 +586,9 @@ export function executeSupportSkill(
   resolveDeclarativeSkillDispel(runtime, skill, user, targetForBuff, 'after_recovery', 'after_recovery');
   if (installedChimeraPlug && primaryIdentityId && identityHasTag(primaryIdentityId, 'chimera_plug')) {
     applyChimeraInstallSideEffect(runtime, targetForBuff, skill);
-    if (!runtime.isActiveCombatant(targetForBuff)) return true;
+    if (!runtime.isActiveCombatant(targetForBuff)) return 'resolved';
     applyChimeraMilestoneRewards(runtime, targetForBuff, chimeraPlugCountAfterInstall);
     if (shouldCheckChimeraUltimate) handleChimeraUltimateEvolution(runtime, targetForBuff);
   }
-  return true;
+  return 'resolved';
 }

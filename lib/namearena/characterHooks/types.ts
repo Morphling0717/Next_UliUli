@@ -1,4 +1,4 @@
-import type { BattleLogMetadata, DamageApplicationOptions, DefeatOptions, DispelOptions, DispelResolution, Fighter, JobDefinition, SkillPresentation, SpinalSwordRef, StatusApplication } from '../types';
+import type { BattleLogMetadata, BattleState, DamageApplicationOptions, DefeatOptions, DispelOptions, DispelResolution, Fighter, JobDefinition, SkillPresentation, SpinalSwordRef, StatusApplication } from '../types';
 
 export interface ReactionActionDescriptor {
   skillId: string;
@@ -12,6 +12,7 @@ export interface CharacterHookRuntime {
   fighters: Fighter[];
   jobs: Partial<Record<string, JobDefinition>>;
   turnCount: number;
+  battleState?: BattleState;
   getTeamId: (fighter: Fighter) => string;
   isActiveCombatant: (fighter: Fighter) => boolean;
   log: (type: string, text: string, metadata?: BattleLogMetadata) => void;
@@ -54,6 +55,7 @@ export interface CharacterDefeatContext {
   fighter: Fighter;
   runtime: CharacterHookRuntime;
   spinalSwordRef: SpinalSwordRef;
+  terminalDefeat: boolean;
 }
 
 export interface CharacterDefeatSettledContext {

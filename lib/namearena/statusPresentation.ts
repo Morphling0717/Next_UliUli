@@ -172,9 +172,21 @@ export function buildStatusPresentationMember(status: StatusInstance): StatusPre
   const originiumStacks = status.mechanicId === 'ORIGINIUM_DISEASE'
     ? Math.max(0, Math.min(80, status.potency ?? 0))
     : undefined;
-  const description = originiumStacks === undefined
-    ? identity.description
-    : `生命上限降低 ${Math.min(58, originiumStacks * 0.65).toFixed(2).replace(/\.00$/, '')}%，防御降低 ${Math.min(72, originiumStacks * 0.8).toFixed(1).replace(/\.0$/, '')}%；${originiumStacks < 60 ? `攻击与魔抗提高 ${originiumStacks}%` : '攻击与魔抗加成已清零'}，80 层时死亡`;
+  const witnessStacks = status.identityId === 'HEROBRINE_WITNESS'
+    ? Math.max(0, Math.min(5, status.potency ?? 0))
+    : undefined;
+  const witnessEffects = witnessStacks === undefined
+    ? undefined
+    : [
+        '更容易被 Herobrine 选为目标',
+        witnessStacks >= 2 ? 'Herobrine 对其直接伤害提高 20%，并忽略 30% 额外闪避' : '',
+        witnessStacks >= 3 ? '大回合末受到 1.5% 最大生命真实伤害，普通限时增益少 1 回合；同时获得【看破真相】：对 Herobrine 及其异常造物直接伤害 +20%、攻击 Herobrine 时命中率 +15 个百分点，并有更高概率识破分身' : '',
+        witnessStacks >= 4 ? 'Herobrine 命中时有 35% 概率追加一次普通攻击' : '',
+        witnessStacks >= 5 ? '成为【单人世界】首选目标；Herobrine 第一次命中可越过护盾' : '',
+      ].filter(Boolean).join('；');
+  const description = originiumStacks !== undefined
+    ? `生命上限降低 ${Math.min(58, originiumStacks * 0.65).toFixed(2).replace(/\.00$/, '')}%，防御降低 ${Math.min(72, originiumStacks * 0.8).toFixed(1).replace(/\.0$/, '')}%；${originiumStacks < 60 ? `攻击与魔抗提高 ${originiumStacks}%` : '攻击与魔抗加成已清零'}，80 层时死亡`
+    : witnessEffects ?? identity.description;
   return {
     key: status.instanceId,
     name: defenseName ?? identity.displayName,
@@ -268,6 +280,12 @@ function aggregateStatus(statuses: StatusInstance[]): StatusInstance {
         definition.potencyCap ?? Number.MAX_SAFE_INTEGER,
         statuses.reduce((sum, status) => sum + (status.potency ?? 0), 0),
       ),
+    };
+  }
+  if (latest.mechanicId === 'HEROBRINE_WITNESS') {
+    return {
+      ...latest,
+      potency: Math.min(5, statuses.reduce((sum, status) => sum + (status.potency ?? 0), 0)),
     };
   }
   return latest;
@@ -553,7 +571,8 @@ export function statusPresentationGroupKey(status: StatusInstance): string {
   if (
     isDualValueStatus(status) ||
     status.mechanicId === 'POISON' ||
-    status.mechanicId === 'ORIGINIUM_DISEASE'
+    status.mechanicId === 'ORIGINIUM_DISEASE' ||
+    status.mechanicId === 'HEROBRINE_WITNESS'
   ) return `status:${status.mechanicId}`;
   const defenseName = getDefenseStatusDisplayName(status);
   if (defenseName) return `defense:${status.attribution.effectSourceId}:${defenseName}`;
