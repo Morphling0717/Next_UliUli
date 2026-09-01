@@ -1,6 +1,6 @@
 # SEO 配置检查清单（已验证）
 
-本文档记录 uliuli.cc 部署后经过实际验证的 SEO / Open Graph 配置状态。
+本文档记录 uliuli.cn 部署后经过实际验证的 SEO / Open Graph 配置状态。
 
 ---
 
@@ -10,13 +10,13 @@
 
 ```ts
 export const metadata: Metadata = {
-  metadataBase: new URL(metadataBaseUrl),  // https://www.uliuli.cc
+  metadataBase: new URL(metadataBaseUrl),  // https://uliuli.cn
   title: "项目：丝瓜ULI",
   description: "蝴蝶梦中歌唱，彼方沉眠",
   openGraph: {
     title: "项目：丝瓜ULI",
     description: "蝴蝶梦中歌唱，彼方沉眠",
-    url: "https://www.uliuli.cc",
+    url: "https://uliuli.cn",
     siteName: "项目：丝瓜ULI",
     images: [{ url: '/og-image.jpg', width: 1200, height: 630 }],
     locale: 'zh_CN',
@@ -40,14 +40,14 @@ curl -s http://localhost:3000 | grep 'og:'
 - 尺寸：**1200 × 630 px**（标准比例 1.91:1）
 - 格式：JPEG，渐进式
 - 文件大小：约 251 KB
-- 外部可访问：`https://www.uliuli.cc/og-image.jpg` → HTTP 200
+- 外部可访问：`https://uliuli.cn/og-image.jpg` → HTTP 200
 
 **验证方式：**
 ```bash
 file /opt/1panel/www/uliuli/app/public/og-image.jpg
 # 应输出: JPEG image data, 1200x630
 
-curl -sI https://www.uliuli.cc/og-image.jpg
+curl -sI https://uliuli.cn/og-image.jpg
 # 应看到 HTTP/2 200 和 content-type: image/jpeg
 ```
 
@@ -59,7 +59,7 @@ curl -sI https://www.uliuli.cc/og-image.jpg
 
 ```yaml
 environment:
-  - NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
+  - NEXT_PUBLIC_SITE_URL=https://uliuli.cn
 ```
 
 **作用：** 让 `metadataBase` 生成正确的绝对 URL，使 `og:image` 和 `og:url` 指向正式域名。
@@ -74,7 +74,7 @@ environment:
 
 **验证方式：**
 ```bash
-curl -sI https://www.uliuli.cc
+curl -sI https://uliuli.cn
 # 应看到 HTTP/2 200 和 server: cloudflare
 ```
 
@@ -83,7 +83,7 @@ curl -sI https://www.uliuli.cc
 ## ✅ 域名安全检测
 
 - 腾讯 URL 安全检测：**暂未发现风险**
-- 检测地址：https://urlsec.qq.com/check.html?url=https://www.uliuli.cc
+- 检测地址：https://urlsec.qq.com/check.html?url=https://uliuli.cn
 
 ---
 

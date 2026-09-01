@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 import { getSiteConfigStamp } from "@/lib/site-data";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.uliuli.cc";
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://uliuli.cn";
 const metadataBaseUrl = siteUrl.startsWith("http") ? siteUrl : `https://${siteUrl}`;
 const siteOrigin = new URL(metadataBaseUrl).origin;
 

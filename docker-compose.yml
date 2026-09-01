@@ -1,6 +1,9 @@
 services:
   website:
-    build: .
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://uliuli.cn}
     container_name: uliuli-website
     restart: unless-stopped
     ports:
@@ -13,7 +16,7 @@ services:
       DATABASE_PATH: /app/data/codes.db
       DB_BACKUP_RETENTION: ${DB_BACKUP_RETENTION:-20}
       DB_BACKUP_MAX_AGE_HOURS: ${DB_BACKUP_MAX_AGE_HOURS:-48}
-      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://www.uliuli.cc}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://uliuli.cn}
       WINDCHIME_HASH_SALT: ${WINDCHIME_HASH_SALT:?set WINDCHIME_HASH_SALT in .env}
       MAIL_BLOCKED_TERMS: ${MAIL_BLOCKED_TERMS:-}
       NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}

@@ -53,7 +53,7 @@ async function fetchUpstream(): Promise<unknown> {
         signal: controller.signal,
         headers: {
           accept: 'application/json',
-          'user-agent': 'UliUliSite/1.0 (+https://www.uliuli.cc)',
+          'user-agent': 'UliUliSite/1.0 (+https://uliuli.cn)',
         },
       });
       if (!res.ok) {

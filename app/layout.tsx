@@ -33,7 +33,7 @@ const startupImages = IPHONE_SPLASHES.map(({ w, h, deviceWidth, deviceHeight, ra
   media: `(device-width: ${deviceWidth}px) and (device-height: ${deviceHeight}px) and (-webkit-device-pixel-ratio: ${ratio}) and (orientation: portrait)`,
 }));
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.uliuli.cc";
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://uliuli.cn";
 const metadataBaseUrl = siteUrl.startsWith("http") ? siteUrl : `https://${siteUrl}`;
 const siteOrigin = new URL(metadataBaseUrl).origin;
 const canonicalUrl = new URL("/", siteOrigin).toString();

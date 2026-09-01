@@ -3,7 +3,7 @@
 > **项目概述**: 虚拟主播 UliUli 的综合互动站点，集成展示、游戏、社交、管理等多功能模块
 > **技术栈**: Next.js 16 + React 18 + TypeScript 5 + SQLite + Three.js + Tailwind CSS 4
 > **部署方式**: Docker 容器化部署，支持 1Panel 面板管理
-> **线上地址**: https://www.uliuli.cc
+> **线上地址**: https://uliuli.cn
 
 ---
 
@@ -470,7 +470,7 @@ FROM node:20-bookworm-slim AS runner
 ADMIN_PASSWORD=strong_password_here
 DEV_UNLOCK_PASSWORD=unlock_password_here
 DATABASE_PATH=/app/data/codes.db
-NEXT_PUBLIC_SITE_URL=https://www.uliuli.cc
+NEXT_PUBLIC_SITE_URL=https://uliuli.cn
 WINDCHIME_HASH_SALT=random_string_here
 ```
 

@@ -76,7 +76,7 @@ npm run test:namearena
 
 截至 2026-07-27：
 
-- 公开地址：`https://www.uliuli.cc`
+- 公开地址：`https://uliuli.cn`
 - `/api/health`：`status=ok`
 - SSH 别名：`UliUli`
 - 项目目录：`/opt/1panel/www/uliuli/app`
@@ -668,7 +668,7 @@ docker compose up -d --no-deps --force-recreate --no-build website
 ```bash
 docker inspect uliuli-website
 curl -fsS http://127.0.0.1:3000/api/health
-curl -fsS https://www.uliuli.cc/api/health
+curl -fsS https://uliuli.cn/api/health
 docker logs --since 10m --tail 100 uliuli-website
 ```
 

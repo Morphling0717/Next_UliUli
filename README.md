@@ -2,7 +2,7 @@
 
 UliUli 的个人站点和互动系统。项目基于 Next.js App Router，包含主页展示、后台配置、歌单、抽卡/兑换码、匿名发信箱、B 站数据代理，以及两个站内小游戏系统。
 
-线上地址：https://www.uliuli.cc
+线上地址：https://uliuli.cn
 
 这是一个应用仓库，不是可复用 npm 包。生产环境按单个 Next.js 服务部署，SQLite 数据库和上传目录需要持久化。
 
