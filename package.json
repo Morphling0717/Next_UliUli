@@ -35,7 +35,8 @@
     "db:backup": "node scripts/backup-db.js",
     "clean": "rimraf .next out build node_modules",
     "test:mail": "node scripts/test-mail.mjs",
-    "test:mail:migrations": "node scripts/test-mail-migrations.cjs"
+    "test:mail:migrations": "node scripts/test-mail-migrations.cjs",
+    "test:bilibili": "node --test scripts/test-bilibili-payload.cjs scripts/test-bilibili-route.cjs"
   },
   "dependencies": {
     "@windchime/embed": "file:./vendor/windchime-embed-0.5.0.tgz",

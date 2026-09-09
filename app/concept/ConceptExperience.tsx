@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { LATEST_BILIBILI_VIDEO_LIMIT } from "@/lib/bilibili-payload";
 
 import styles from "./concept.module.css";
 
@@ -710,7 +711,7 @@ export default function ConceptExperience({
             </div>
 
             <div className={styles.archiveGrid}>
-              {latestVideos.slice(0, 3).map((video, index) => (
+              {latestVideos.slice(0, LATEST_BILIBILI_VIDEO_LIMIT).map((video, index) => (
                 <a
                   className={`${styles.archiveCard} ${index === 0 ? styles.archiveFeature : ""}`}
                   href={video.url}
@@ -732,7 +733,7 @@ export default function ConceptExperience({
                   <span className={styles.archiveShade} aria-hidden="true" />
                   <div className={styles.archiveTopline}>
                     <span>{video.date}</span>
-                    <span>0{index + 1}</span>
+                    <span>{String(index + 1).padStart(2, "0")}</span>
                   </div>
                   <div className={styles.archiveCopy}>
                     <small>{video.title.includes("蝶梦聆境") ? "蝶梦聆境" : video.title.includes("时光白驹") ? "时光白驹 tea time" : "最新投稿"}</small>

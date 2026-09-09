@@ -21,7 +21,7 @@ UliUli 的个人站点和互动系统。项目基于 Next.js App Router，包含
 - 后台管理站点配置、歌单、上传资源、发信箱设置和活动主题。
 - 服务端接管的抽卡系统，包含用户账号、兑换码、本地进度一次性导入和打包资格校验。
 - 匿名发信箱，支持 Turnstile、发信人拉黑、敏感词、图片代理、活动主题页和后台审核。
-- `/api/bilibili` 站内代理，带短缓存、超时处理和上一次成功数据兜底。
+- `/api/bilibili` 站内代理，接入 `api.uliuli.cn`，按发布时间显示最新 15 个投稿视频，带上游隔离缓存、超时处理与同源成功数据兜底。详见 [B 站接入说明](docs/bilibili.md)。
 - Name Arena 文字战斗系统，代码位于 `lib/namearena` 和 `components/namearena`。
 - DGP 战斗模拟器，代码位于 `lib/dgp` 和 `components/dgp`。
 - SQLite migration、数据库备份脚本和 `/api/health` 健康检查。

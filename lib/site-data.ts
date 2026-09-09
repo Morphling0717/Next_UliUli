@@ -139,6 +139,8 @@ export async function loadInitialSiteData(): Promise<InitialSiteData> {
     console.warn('[site-data] read hidden_songs failed:', err);
   }
 
+  siteConfig.api = { ...siteConfig.api, bilibili: '/api/bilibili' };
+
   return {
     siteConfig,
     configVersion,

@@ -61,6 +61,9 @@ export async function GET() {
           mail: {},
         };
 
+    // The client uses the same-origin route; upstream configuration belongs to the server.
+    siteConfig.api = { ...siteConfig.api, bilibili: '/api/bilibili' };
+
     // -------------------------------------------------------------
     // Mail 派生字段（方案 §6.3）
     //

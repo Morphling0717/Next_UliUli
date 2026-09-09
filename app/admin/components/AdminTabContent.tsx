@@ -238,7 +238,11 @@ export function AdminTabContent(props: AdminTabContentProps) {
             <div><label className="text-xs text-gray-400">标题前缀 (白字)</label><input type="text" className="input-dark" value={config.gallery?.titlePrefix || "VISUAL"} onChange={(e) => updateConfig("gallery", "titlePrefix", e.target.value)} /></div>
             <div><label className="text-xs text-gray-400">标题后缀 (蓝字)</label><input type="text" className="input-dark" value={config.gallery?.titleSuffix || "_ARCHIVE"} onChange={(e) => updateConfig("gallery", "titleSuffix", e.target.value)} /></div>
             <div className="md:col-span-2"><label className="text-xs text-gray-400">下方滚动文字</label><input type="text" className="input-dark" value={config.gallery?.scrollText || "SCROLL TO EXPLORE >>>"} onChange={(e) => updateConfig("gallery", "scrollText", e.target.value)} /></div>
-            <div className="md:col-span-2 mt-4"><label className="text-xs text-gray-400">API 地址 (需部署 Vercel 脚本)</label><input type="text" className="input-dark" value={config.api?.bilibili || ""} onChange={(e) => updateNested("api", "bilibili", "", e.target.value)} /></div>
+            <div className="md:col-span-2 mt-4">
+              <label htmlFor="bilibili-api-path" className="text-xs text-gray-400">站内 API 路径</label>
+              <input id="bilibili-api-path" type="text" className="input-dark" value="/api/bilibili" readOnly aria-describedby="bilibili-api-help" />
+              <p id="bilibili-api-help" className="mt-2 text-xs text-gray-400">上游地址由服务器 BILIBILI_API_URL 配置。</p>
+            </div>
             <div className="md:col-span-2"><label className="text-xs text-gray-400">视频日期前缀 (如: DATE //)</label><input type="text" className="input-dark" value={config.gallery?.datePrefix || ""} onChange={(e) => updateConfig("gallery", "datePrefix", e.target.value)} /></div>
           </div>
         </div>
