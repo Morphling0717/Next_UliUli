@@ -4,24 +4,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Archive, RotateCcw, Trash2, X as CloseIcon } from "lucide-react";
+import { useWindChimeTopics } from '@windchime/embed/react';
+import { mailClient } from '@/lib/windchime-client';
 import type { Topic } from "./mail-topic-types";
 import { formatBeijing } from "./mail-time";
 
 type Props = {
   open: boolean;
   onClose: () => void;
-  authHeader: Record<string, string>;
   onRestored: (topic: Topic) => void;
 };
-
-async function readError(res: Response): Promise<string> {
-  const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("application/json")) {
-    const j = (await res.json().catch(() => null)) as { error?: string } | null;
-    return j?.error ?? res.statusText;
-  }
-  return (await res.text().catch(() => "")) || res.statusText;
-}
 
 /**
  * 往期活动抽屉：打开时请求 `/api/mail/topics?include=archived` 拿全部主题，
@@ -32,50 +24,17 @@ async function readError(res: Response): Promise<string> {
 export function ArchivedTopicsDrawer({
   open,
   onClose,
-  authHeader,
   onRestored,
 }: Props) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [items, setItems] = useState<Topic[]>([]);
-  const [search, setSearch] = useState("");
-  const [busy, setBusy] = useState<{
-    id: string;
-    action: "restore" | "delete";
-  } | null>(null);
+  const resource = useWindChimeTopics(mailClient, {includeArchived:true, enabled:open});
+  const {restore, purge} = resource;
+  const loading = resource.isLoading;
+  const error = resource.error?.message || resource.mutationError?.message;
+  const items = useMemo(() => resource.items.filter(t=>t.state==='archived'), [resource.items]);
+  const [search, setSearch] = useState('');
+  const [busy, setBusy] = useState<{id:string; action:'restore'|'delete'} | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Topic | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/mail/topics?include=archived", {
-        headers: authHeader,
-        cache: "no-store",
-      });
-      if (!r.ok) throw new Error(await readError(r));
-      const j = (await r.json()) as { items: Topic[] };
-      setItems(j.items.filter((t) => t.state === "archived"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, [authHeader]);
-
-  // 打开时拉；关闭时清搜索
-  useEffect(() => {
-    queueMicrotask(() => {
-      if (open) {
-        void load();
-      } else {
-        setSearch("");
-        setDeleteTarget(null);
-        setDeleteError(null);
-      }
-    });
-  }, [open, load]);
 
   // ESC 关闭
   useEffect(() => {
@@ -108,17 +67,7 @@ export function ArchivedTopicsDrawer({
     async (topic: Topic) => {
       setBusy({ id: topic.id, action: "restore" });
       try {
-        const r = await fetch(
-          `/api/mail/topics/${encodeURIComponent(topic.id)}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json", ...authHeader },
-            body: JSON.stringify({ archivedAt: null }),
-          },
-        );
-        if (!r.ok) throw new Error(await readError(r));
-        const restored = (await r.json()) as Topic;
-        setItems((xs) => xs.filter((x) => x.id !== topic.id));
+        const restored = await restore(topic.id);
         onRestored(restored);
       } catch (e) {
         alert(e instanceof Error ? e.message : "恢复失败");
@@ -126,7 +75,7 @@ export function ArchivedTopicsDrawer({
         setBusy(null);
       }
     },
-    [authHeader, onRestored],
+    [restore, onRestored],
   );
 
   const openDeleteConfirm = useCallback((topic: Topic) => {
@@ -147,15 +96,7 @@ export function ArchivedTopicsDrawer({
       setBusy({ id: deleteTarget.id, action: "delete" });
       setDeleteError(null);
       try {
-        const r = await fetch(
-          `/api/mail/topics/${encodeURIComponent(deleteTarget.id)}/purge`,
-          {
-            method: "DELETE",
-            headers: authHeader,
-          },
-        );
-        if (!r.ok) throw new Error(await readError(r));
-        setItems((xs) => xs.filter((x) => x.id !== deleteTarget.id));
+        await purge(deleteTarget.id);
         setDeleteTarget(null);
       } catch (e) {
         setDeleteError(e instanceof Error ? e.message : "删除失败");
@@ -163,7 +104,7 @@ export function ArchivedTopicsDrawer({
         setBusy(null);
       }
     },
-    [authHeader, deleteTarget],
+    [purge, deleteTarget],
   );
 
   const deleteBusy =

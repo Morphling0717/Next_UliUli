@@ -1,5 +1,9 @@
 "use client";
 
+import { validateWindChimeTopicPatch } from '@windchime/embed/core';
+import { useWindChimeTopics } from '@windchime/embed/react';
+import type { WindChimeTopicPatchInput } from '@windchime/embed/core';
+import { mailClient } from '@/lib/windchime-client';
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
@@ -15,7 +19,6 @@ import {
 type Props = {
   open: boolean;
   topic: Topic | null;
-  authHeader: Record<string, string>;
   onClose: () => void;
   onUpdated: (topic: Topic) => void;
 };
@@ -23,7 +26,6 @@ type Props = {
 export function EditTopicModal({
   open,
   topic,
-  authHeader,
   onClose,
   onUpdated,
 }: Props) {
@@ -33,7 +35,8 @@ export function EditTopicModal({
   const [useTimeWindow, setUseTimeWindow] = useState(true);
   const [startsLocal, setStartsLocal] = useState(() => nowAsBeijingLocal());
   const [endsLocal, setEndsLocal] = useState(() => plusDaysAsBeijingLocal(7));
-  const [submitting, setSubmitting] = useState(false);
+  const topicsApi = useWindChimeTopics(mailClient, {enabled: false});
+  const submitting = topicsApi.pending;
   const [serverError, setServerError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -50,7 +53,7 @@ export function EditTopicModal({
       setEndsLocal(
         topic.endsAt ? utcIsoToBeijingLocal(topic.endsAt) : plusDaysAsBeijingLocal(7),
       );
-      setSubmitting(false);
+
       setServerError(null);
     });
   }, [open, topic]);
@@ -71,15 +74,15 @@ export function EditTopicModal({
   const titleError = useMemo(() => {
     const t = title.trim();
     if (!t) return null;
-    if (t.length > 64) return "标题超过 64 字符";
-    return null;
+    try { validateWindChimeTopicPatch({title:t}); return null; }
+    catch(error) { return error instanceof Error ? error.message : '标题无效'; }
   }, [title]);
 
   const timeRangeError = useMemo(() => {
     if (!topic || topic.isDefault || !useTimeWindow) return null;
     if (!startsLocal || !endsLocal) return null;
-    if (startsLocal >= endsLocal) return "开始时间不能晚于或等于结束时间";
-    return null;
+    try { validateWindChimeTopicPatch({startsAt:beijingLocalToUtcIso(startsLocal), endsAt:beijingLocalToUtcIso(endsLocal)}); return null; }
+    catch(error) { return error instanceof Error ? error.message : '时间范围无效'; }
   }, [topic, useTimeWindow, startsLocal, endsLocal]);
 
   const canSubmit =
@@ -92,10 +95,10 @@ export function EditTopicModal({
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!topic || !canSubmit) return;
-    setSubmitting(true);
+
     setServerError(null);
     try {
-      const body: Record<string, unknown> = {
+      const body: WindChimeTopicPatchInput = {
         title: title.trim(),
         description: description.trim() || null,
       };
@@ -111,24 +114,13 @@ export function EditTopicModal({
         }
       }
 
-      const r = await fetch(`/api/mail/topics/${encodeURIComponent(topic.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const j = (await r.json().catch(() => null)) as
-          | { error?: string }
-          | null;
-        throw new Error(j?.error ?? `保存失败（HTTP ${r.status}）`);
-      }
-      const updated = (await r.json()) as Topic;
+      const updated = await topicsApi.update(topic.id, validateWindChimeTopicPatch(body));
       onUpdated(updated);
       onClose();
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "保存失败");
     } finally {
-      setSubmitting(false);
+
     }
   };
 

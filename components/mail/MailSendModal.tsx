@@ -4,10 +4,7 @@ import React, { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Radio, X as CloseIcon } from "lucide-react";
-import { WindChimeSender } from "@windchime/embed";
-import type { WindChimeSubmitPayload } from "@windchime/embed";
-import "@windchime/embed/styles/windchime.css";
-import { mailSenderTheme } from "./mail-theme";
+import { MailComposer } from "./MailComposer";
 import { playSentSfx } from "@/lib/mail-sfx";
 
 /**
@@ -38,14 +35,7 @@ type Props = {
 /** 提交成功后，给用户看 success banner 的时长；到点自动关弹窗。 */
 const AUTO_CLOSE_MS = 1800;
 
-async function readError(res: Response): Promise<string> {
-  const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("application/json")) {
-    const j = (await res.json().catch(() => null)) as { error?: string } | null;
-    return j?.error ?? res.statusText;
-  }
-  return (await res.text().catch(() => "")) || res.statusText;
-}
+
 
 export function MailSendModal({ open, onOpenChange, texts, enabled }: Props) {
   const closeTimerRef = useRef<number | null>(null);
@@ -81,34 +71,14 @@ export function MailSendModal({ open, onOpenChange, texts, enabled }: Props) {
     };
   }, []);
 
-  const onSubmit = useCallback(
-    async (payload: WindChimeSubmitPayload) => {
-      const r = await fetch("/api/mail/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: payload.text,
-          nickname: payload.nickname,
-          linkUrl: payload.linkUrl,
-          senderFingerprint: payload.senderFingerprint,
-          turnstileToken: payload.turnstileToken,
-        }),
-      });
-      if (!r.ok && r.status !== 202) {
-        throw new Error(await readError(r));
-      }
-      // 成功：在 WindChimeSender 展示 success banner 的间隙播音效并自动关窗
-      playSentSfx();
-      if (closeTimerRef.current !== null) {
-        window.clearTimeout(closeTimerRef.current);
-      }
-      closeTimerRef.current = window.setTimeout(() => {
-        closeTimerRef.current = null;
-        onOpenChange(false);
-      }, AUTO_CLOSE_MS);
-    },
-    [onOpenChange],
-  );
+  const onSent = useCallback(() => {
+    playSentSfx();
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      onOpenChange(false);
+    }, AUTO_CLOSE_MS);
+  }, [onOpenChange]);
 
   // Cloudflare Turnstile：env 配了 NEXT_PUBLIC_TURNSTILE_SITE_KEY 就启用人机校验
   const turnstileSiteKey =
@@ -157,14 +127,14 @@ export function MailSendModal({ open, onOpenChange, texts, enabled }: Props) {
               className={isDisabled ? "pointer-events-none select-none opacity-60 grayscale" : undefined}
               aria-disabled={isDisabled}
             >
-              <WindChimeSender
+              <MailComposer
                 title={texts?.senderTitle || "MAIL_BOX"}
                 tagline={texts?.senderTagline || "把想对 Uli 说的话，匿名地投进这个信箱"}
                 statusOpenLabel={texts?.statusOpen || "ONLINE"}
                 statusPausedLabel={texts?.statusPaused || "OFFLINE"}
                 pausedMessage={texts?.pausedMessage || "OFFLINE · 发信箱暂时关闭，稍后再来投递吧 ~"}
-                collectNickname
-                collectLinkUrl
+
+
                 placeholder={texts?.placeholderText || "在这里写下你想说的话…"}
                 nicknamePlaceholder={texts?.placeholderNickname || "称呼（可选）"}
                 linkPlaceholder={texts?.placeholderLink || "B站 / X / 外站链接（可选）"}
@@ -175,9 +145,10 @@ export function MailSendModal({ open, onOpenChange, texts, enabled }: Props) {
                   storageKey: "uliuli:mail:rl",
                 }}
                 turnstileSiteKey={turnstileSiteKey}
-                enableSwayAnimation={false}
-                theme={mailSenderTheme}
-                onSubmit={onSubmit}
+
+
+                onSent={onSent}
+                enabled={!isDisabled}
               />
             </div>
           </motion.div>

@@ -3,13 +3,10 @@
 import { useCallback, useMemo } from "react";
 import Link from "next/link";
 import { ArrowLeft, CalendarClock, Sparkles } from "lucide-react";
-import { WindChimeSender } from "@windchime/embed";
-import type { WindChimeSubmitPayload } from "@windchime/embed";
-import "@windchime/embed/styles/windchime.css";
-import { mailSenderTheme } from "./mail-theme";
+import { MailComposer } from "./MailComposer";
 import { playSentSfx } from "@/lib/mail-sfx";
 import { formatBeijing } from "./mail-time";
-import type { Topic } from "./mail-topic-types";
+import type { PublicTopic as Topic } from "./mail-topic-types";
 
 type Props = {
   topic: Topic;
@@ -22,48 +19,11 @@ type Props = {
   };
 };
 
-async function readError(res: Response): Promise<string> {
-  const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("application/json")) {
-    const j = (await res.json().catch(() => null)) as { error?: string } | null;
-    return j?.error ?? res.statusText;
-  }
-  return (await res.text().catch(() => "")) || res.statusText;
-}
 
-/**
- * 访客投信页的表单主体（活动主题专属）。
- *
- * - 顶部展示 banner（title / description / 活动期限）
- * - 内嵌 `WindChimeSender`，提交时把 `topicSlug: topic.slug` 附到 payload 里
- *   走 `/api/mail/messages` POST；服务端会二次校验主题状态
- *   (isEnabled / startsAt / endsAt / archivedAt)
- * - 成功反馈复用 WindChimeSender 内置 success banner；再加 `playSentSfx()`
- *   播个提交音效。访客可以连续投（WindChimeSender 2s 后自动回到空表单）。
- */
+
+/** 活动页面与成功音效由网站设计；投稿校验、身份、限流及请求由 MailComposer 的风铃 Hook 处理。 */
 export function TopicMailForm({ topic, texts }: Props) {
-  const onSubmit = useCallback(
-    async (payload: WindChimeSubmitPayload) => {
-      const r = await fetch("/api/mail/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: payload.text,
-          nickname: payload.nickname,
-          linkUrl: payload.linkUrl,
-          senderFingerprint: payload.senderFingerprint,
-          turnstileToken: payload.turnstileToken,
-          topicSlug: topic.slug,
-        }),
-      });
-      // 注意：blocklist 命中时服务端返回 202 + { ok: true }（对外伪成功）
-      if (!r.ok && r.status !== 202) {
-        throw new Error(await readError(r));
-      }
-      playSentSfx();
-    },
-    [topic.slug],
-  );
+  const onSent = useCallback(() => playSentSfx(), []);
 
   const turnstileSiteKey =
     process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() || undefined;
@@ -130,16 +90,16 @@ export function TopicMailForm({ topic, texts }: Props) {
           )}
         </section>
 
-        {/* WindChimeSender 表单 */}
+        {/* MailComposer 表单 */}
         <section className="flex-1">
-          <WindChimeSender
+          <MailComposer
             title={`MAIL · ${topic.title}`}
             tagline="在这里匿名写下你想说的话 ~"
             statusOpenLabel="ONLINE"
             statusPausedLabel="OFFLINE"
             pausedMessage="活动暂停中，稍后再来吧 ~"
-            collectNickname
-            collectLinkUrl
+
+
             placeholder={
               texts?.placeholderText || "在这里写下你想说的话…"
             }
@@ -159,9 +119,10 @@ export function TopicMailForm({ topic, texts }: Props) {
               storageKey: `uliuli:mail:rl:${topic.slug}`,
             }}
             turnstileSiteKey={turnstileSiteKey}
-            enableSwayAnimation={false}
-            theme={mailSenderTheme}
-            onSubmit={onSubmit}
+
+
+            onSent={onSent}
+            topicSlug={topic.slug}
           />
         </section>
 

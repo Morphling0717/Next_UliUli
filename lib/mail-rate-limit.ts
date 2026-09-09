@@ -10,7 +10,6 @@ import { get, run } from './db';
  */
 
 type CountRow = { count: number };
-type HitRow = { hit_at: number };
 type LoginFailureRow = {
   count: number;
   first_fail_at: number;
@@ -28,67 +27,6 @@ async function maybeGc(now: number): Promise<void> {
     'DELETE FROM login_failures WHERE locked_until < ? AND first_fail_at < ?',
     [now, now - 60 * 60_000],
   ).catch(() => {});
-}
-
-export type RateLimitResult = {
-  allowed: boolean;
-  remaining: number;
-  /** 允许被下一次请求时的时间戳（ms）；仅在 allowed=false 时有意义 */
-  resetAt: number;
-  /** 距离可用的剩余毫秒（便于构造 Retry-After） */
-  retryAfterMs: number;
-};
-
-export type RateLimitOptions = {
-  /** 限流 key，建议 `{scope}:{identifier}`，避免不同场景互相污染 */
-  key: string;
-  /** 窗口内允许的最大命中数 */
-  max: number;
-  /** 滑动窗口长度（ms） */
-  windowMs: number;
-};
-
-export async function rateLimit(opts: RateLimitOptions): Promise<RateLimitResult> {
-  const now = Date.now();
-  await maybeGc(now);
-
-  const { key, max, windowMs } = opts;
-  const cutoff = now - windowMs;
-  await run('DELETE FROM rate_limit_hits WHERE scope_key = ? AND hit_at <= ?', [
-    key,
-    cutoff,
-  ]);
-
-  const countRow = await get<CountRow>(
-    'SELECT COUNT(*) AS count FROM rate_limit_hits WHERE scope_key = ?',
-    [key],
-  );
-  const count = Number(countRow?.count ?? 0);
-
-  if (count >= max) {
-    const earliest = await get<HitRow>(
-      'SELECT hit_at FROM rate_limit_hits WHERE scope_key = ? ORDER BY hit_at ASC LIMIT 1',
-      [key],
-    );
-    const resetAt = Number(earliest?.hit_at ?? now) + windowMs;
-    return {
-      allowed: false,
-      remaining: 0,
-      resetAt,
-      retryAfterMs: Math.max(0, resetAt - now),
-    };
-  }
-
-  await run('INSERT INTO rate_limit_hits (scope_key, hit_at) VALUES (?, ?)', [
-    key,
-    now,
-  ]);
-  return {
-    allowed: true,
-    remaining: Math.max(0, max - count - 1),
-    resetAt: now + windowMs,
-    retryAfterMs: 0,
-  };
 }
 
 export type LoginLockStatus =

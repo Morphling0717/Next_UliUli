@@ -6,7 +6,7 @@
 // 直接 import。
 
 import { all, get } from '@/lib/db';
-import { getDefaultTopic, listTopics } from '@/lib/mail-topics';
+import { windChime } from '@/lib/windchime';
 import type { ActiveTopicSummary } from '@/components/mail/mail-topic-types';
 
 export type SongRecord = {
@@ -107,7 +107,7 @@ export async function loadInitialSiteData(): Promise<InitialSiteData> {
 
   // mail 派生字段（与 /api/config 行为一致）
   try {
-    const activeTopics = await listTopics({ onlyPublicActive: true });
+    const activeTopics = await windChime.listPublicTopics();
     siteConfig.activeTopics = activeTopics.map((t) => ({
       slug: t.slug,
       title: t.title,
@@ -115,7 +115,7 @@ export async function loadInitialSiteData(): Promise<InitialSiteData> {
       startsAt: t.startsAt,
       endsAt: t.endsAt,
     }));
-    const defaultTopic = await getDefaultTopic();
+    const defaultTopic = await windChime.getPublicTopic("default");
     siteConfig.mailEnabled = defaultTopic ? defaultTopic.isEnabled : true;
   } catch (err) {
     console.warn('[site-data] derive mail fields failed:', err);

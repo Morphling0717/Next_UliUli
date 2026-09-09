@@ -63,13 +63,9 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
   const [pityCount, setPityCount] = useState<string | number>("...");
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
-  // 用 lazy initializer 在首屏就拿到正确的 isMobile，避免桌面 stagger 动画在
-  // 手机上把整个列表（数百条）挡住造成"空列表"假象。
-  // SongSystem 已是 dynamic({ ssr: false })，所以 window 一定可用。
-  const [isMobile, setIsMobile] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.innerWidth < 768;
-  });
+  // 首页会服务端渲染，首次客户端渲染必须使用相同的动画分支。
+  // 挂载后再检测屏幕宽度，让手机及时切换到无 stagger 的列表。
+  const [isMobile, setIsMobile] = useState(false);
 
   // 任一为真即跳过桌面动画
   const skipStagger = isMobile || disableAnimation;
@@ -102,8 +98,12 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
+    const frame = window.requestAnimationFrame(handleResize);
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", handleResize);
+    };
   }, []);
 
   useEffect(() => {

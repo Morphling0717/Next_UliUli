@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { get, all } from '@/lib/db';
-import { getDefaultTopic, listTopics } from '@/lib/mail-topics';
+import { windChime } from '@/lib/windchime';
 
 type SiteConfigRow = {
   value: string;
@@ -70,7 +70,7 @@ export async function GET() {
     // 兜底（空数组 + true），绝不阻塞整个 /api/config 响应。
     // -------------------------------------------------------------
     try {
-      const activeTopics = await listTopics({ onlyPublicActive: true });
+      const activeTopics = await windChime.listPublicTopics();
       siteConfig.activeTopics = activeTopics.map((t) => ({
         slug: t.slug,
         title: t.title,
@@ -78,7 +78,7 @@ export async function GET() {
         startsAt: t.startsAt,
         endsAt: t.endsAt,
       }));
-      const defaultTopic = await getDefaultTopic();
+      const defaultTopic = await windChime.getPublicTopic("default");
       siteConfig.mailEnabled = defaultTopic ? defaultTopic.isEnabled : true;
     } catch (e) {
       console.warn('[api/config] activeTopics/mailEnabled 派生失败:', e);

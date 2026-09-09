@@ -13,6 +13,7 @@ type Props = {
   onMarkReadThenArchive: () => void;
   onArchiveAnyway: () => void;
   busy?: boolean;
+  error?: string | null;
 };
 
 /**
@@ -21,7 +22,7 @@ type Props = {
  * 主播点某主题的"归档"按钮时，如果该主题还有未读 / 待审核留言，先弹这个
  * modal 让主播有机会：
  * - 取消：放弃归档
- * - 先标已读再归档：先批量 markRead 再 DELETE
+ * - 先标已读再归档：由风铃在同一事务中标记该话题普通未读信件并归档
  * - 仍然归档：直接 DELETE（未读信件会进入"往期活动"抽屉，主播日后还能恢复查看）
  *
  * counts 从 `topic.unreadCount` / `topic.flaggedCount` 读（管理端列表已带）。
@@ -33,6 +34,7 @@ export function ArchiveConfirmModal({
   onMarkReadThenArchive,
   onArchiveAnyway,
   busy,
+  error,
 }: Props) {
   // ESC 取消
   useEffect(() => {
@@ -113,7 +115,7 @@ export function ArchiveConfirmModal({
               >
                 <div className="font-bold text-cyan-200">✓ 先标为已读再归档</div>
                 <div className="mt-1 text-[11px] text-cyan-300/70">
-                  所有未读先 markRead，然后归档（推荐）
+                  先标记普通未读信件，再归档；待审核信件保留原状态
                 </div>
               </button>
               <button
@@ -140,6 +142,7 @@ export function ArchiveConfirmModal({
               </button>
             </div>
 
+            {error && <p role="alert" className="mt-3 text-center text-sm text-rose-400">{error}</p>}
             {busy && (
               <div className="mt-3 text-center font-mono text-[11px] text-cyan-300/80">
                 处理中…

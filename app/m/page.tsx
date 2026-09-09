@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft, CalendarClock, Sparkles } from "lucide-react";
-import { listTopics, type Topic } from "@/lib/mail-topics";
+import { windChime } from '@/lib/windchime';
+import type { WindChimePublicTopic as Topic } from '@windchime/embed/core';
 import { formatBeijing } from "@/components/mail/mail-time";
 
 // 必须每次请求都重新执行 listTopics，否则 Next.js 会在 build 时静态预渲染一次，
@@ -19,7 +20,7 @@ export const dynamic = "force-dynamic";
  */
 
 export async function generateMetadata(): Promise<Metadata> {
-  const topics = await listTopics({ onlyPublicActive: true });
+  const topics = await windChime.listPublicTopics();
   const count = topics.length;
   const title =
     count > 0 ? `${count} 个活动进行中 · UliUli` : "活动信箱 · UliUli";
@@ -36,7 +37,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function TopicListPage() {
-  const topics = await listTopics({ onlyPublicActive: true });
+  const topics = await windChime.listPublicTopics();
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-linear-to-br from-black via-[#0a0616] to-[#050508] text-white">

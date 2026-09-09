@@ -226,3 +226,7 @@ Name Arena 改动额外运行：
 npm run test:namearena
 npm run test:namearena:stress
 ```
+
+## 风铃信箱
+
+本站信箱通过 `@windchime/embed` 的公开接口和 React Hooks 接入，保留本站独立界面与登录。接入位置、本地联调、数据库迁移、升级和验证命令见 [风铃接入说明](docs/windchime.md)。

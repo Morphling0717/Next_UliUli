@@ -33,10 +33,12 @@
     "test:namearena:herobrine": "node scripts/namearena-herobrine-stress.js",
     "test:namearena:compare": "node scripts/namearena-compare-logs.js",
     "db:backup": "node scripts/backup-db.js",
-    "clean": "rimraf .next out build node_modules"
+    "clean": "rimraf .next out build node_modules",
+    "test:mail": "node scripts/test-mail.mjs",
+    "test:mail:migrations": "node scripts/test-mail-migrations.cjs"
   },
   "dependencies": {
-    "@windchime/embed": "file:./vendor/windchime-embed-0.3.1.tgz",
+    "@windchime/embed": "file:./vendor/windchime-embed-0.5.0.tgz",
     "framer-motion": "^11.13.1",
     "gsap": "^3.15.0",
     "lucide-react": "^0.542.0",

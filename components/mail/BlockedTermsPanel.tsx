@@ -1,114 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-type Props = {
-  authHeader: Record<string, string>;
-  onUnauthorized: () => void;
-};
+import { useWindChimeBlockedTerms } from '@windchime/embed/react';
+import { normalizeWindChimeTerms } from '@windchime/embed/core';
+import { mailClient } from '@/lib/windchime-client';
 
-async function readError(res: Response): Promise<string> {
-  const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("application/json")) {
-    const j = (await res.json().catch(() => null)) as { error?: string } | null;
-    return j?.error ?? res.statusText;
-  }
-  return (await res.text().catch(() => "")) || res.statusText;
-}
-
-/**
- * 敏感词管理：一段输入框（逗号或换行分隔）+ 保存按钮。
- * 数据来自 GET /api/mail/blocked-terms，PUT 覆盖保存。
- */
-export function BlockedTermsPanel({ authHeader, onUnauthorized }: Props) {
-  const [terms, setTerms] = useState<string[]>([]);
-  const [draft, setDraft] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function BlockedTermsPanel() {
+  const resource = useWindChimeBlockedTerms(mailClient);
+  const {terms, isLoading: loading, pending: saving} = resource;
+  const [editedDraft, setDraft] = useState<string | undefined>();
+  const draft = editedDraft ?? terms.join(', ');
   const [savedAt, setSavedAt] = useState<number | null>(null);
-
-  const handleAuthError = useCallback(
-    (res: Response): boolean => {
-      if (res.status === 401) {
-        onUnauthorized();
-        return true;
-      }
-      return false;
-    },
-    [onUnauthorized],
-  );
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/mail/blocked-terms", {
-        headers: authHeader,
-        cache: "no-store",
-      });
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      const j = (await r.json()) as { terms?: string[] };
-      const list = Array.isArray(j.terms) ? j.terms : [];
-      setTerms(list);
-      setDraft(list.join(", "));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, [authHeader, handleAuthError]);
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      void reload();
-    });
-  }, [reload]);
-
-  const parsed = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          draft
-            .split(/[,，\n]+/)
-            .map((s) => s.trim().toLowerCase())
-            .filter(Boolean),
-        ),
-      ),
-    [draft],
-  );
-
-  const dirty = useMemo(() => {
-    if (parsed.length !== terms.length) return true;
-    for (let i = 0; i < parsed.length; i++) {
-      if (parsed[i] !== terms[i]) return true;
-    }
-    return false;
-  }, [parsed, terms]);
-
-  const save = useCallback(async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/mail/blocked-terms", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify({ terms: parsed }),
-      });
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      const j = (await r.json()) as { terms?: string[] };
-      const list = Array.isArray(j.terms) ? j.terms : [];
-      setTerms(list);
-      setDraft(list.join(", "));
-      setSavedAt(Date.now());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "保存失败");
-    } finally {
-      setSaving(false);
-    }
-  }, [authHeader, handleAuthError, parsed]);
+  const error = resource.error?.message || resource.mutationError?.message;
+  const parsed = useMemo(() => normalizeWindChimeTerms(draft.split(/[,，\n]+/)), [draft]);
+  const dirty = JSON.stringify(parsed) !== JSON.stringify(terms);
+  const save = async () => {
+    try { await resource.save(parsed); setDraft(undefined); setSavedAt(Date.now()); } catch { /* Hook exposes the error. */ }
+  };
 
   return (
     <div className="rounded-2xl border border-cyan-400/40 bg-black/60 p-5 shadow-[0_0_30px_rgba(45,226,230,0.12)] backdrop-blur-xl sm:p-6">

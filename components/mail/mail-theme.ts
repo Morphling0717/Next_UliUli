@@ -1,10 +1,4 @@
-/**
- * 赛博朋克主题 —— 覆盖 @windchime/embed 默认组件样式，
- * 让 Sender / Admin / Blocklist / QR 全部融入 UliUli 的霓虹蓝氛围。
- *
- * 使用 Tailwind v4 + `--neon-blue: #2de2e6` / `--dark-bg: #050508` CSS 变量。
- */
-
+// 网站自己的 JSX 与样式；不依赖风铃默认组件的内部结构。
 export const mailSenderTheme = {
   root: "w-full",
   panel:

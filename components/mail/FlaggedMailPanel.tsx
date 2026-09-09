@@ -3,42 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import type { WindChimeMessageRecord } from "@windchime/embed";
-
-/** 我们在 API 返回里加了 `isFlagged`，WindChime 包的类型不含，这里本地扩一下 */
-export type FlaggableRecord = WindChimeMessageRecord & { isFlagged?: boolean };
-
-type Props = {
-  items: FlaggableRecord[];
-  authHeader: Record<string, string>;
-  /**
-   * 当前主题 id（给下面所有 fetch 调用带上 `?topicId=`做跨主题防呆。
-   * 不传时默认 `'default'`（安全兜底）。
-   */
-  topicId?: string;
-  onUnauthorized: () => void;
-  onAfterAction?: () => void;
-};
-
-type FullMessage = {
-  id: string;
-  createdAt: string;
-  text: string;
-  nickname: string | null;
-  linkUrl: string | null;
-  isFlagged: boolean;
-  senderLabel: string | null;
-  senderHash: string | null;
-};
-
-async function readError(res: Response): Promise<string> {
-  const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("application/json")) {
-    const j = (await res.json().catch(() => null)) as { error?: string } | null;
-    return j?.error ?? res.statusText;
-  }
-  return (await res.text().catch(() => "")) || res.statusText;
-}
+import { useWindChimeReview } from '@windchime/embed/react';
+import { mailClient } from '@/lib/windchime-client';
 
 /** 从 URL 里解析出 hostname 做警示展示；解析失败返回空字符串。 */
 function safeHost(raw: string | null | undefined): string {
@@ -56,177 +22,35 @@ function safeHost(raw: string | null | undefined): string {
  * 时间）。主播点击"查看原文"才会拉取并弹出完整内容的 modal，避免在
  * 后台列表默认页就被敏感词糊脸（比如直播时不小心拉到了后台）。
  */
-export function FlaggedMailPanel({
-  items,
-  authHeader,
-  topicId = "default",
-  onUnauthorized,
-  onAfterAction,
-}: Props) {
-  const flagged = items.filter((m) => m.isFlagged);
-  const topicQuery = `topicId=${encodeURIComponent(topicId)}`;
+export function FlaggedMailPanel({topicId = 'default'}: {topicId?: string}) {
+  const review = useWindChimeReview(mailClient, {topicId});
+  const {closeDetail} = review;
+  const flagged = review.items;
   const [openId, setOpenId] = useState<string | null>(null);
-  const [openData, setOpenData] = useState<FullMessage | null>(null);
-  const [openLoading, setOpenLoading] = useState(false);
-  const [openError, setOpenError] = useState<string | null>(null);
-  const [acting, setActing] = useState(false);
-
-  const handleAuthError = useCallback(
-    (res: Response): boolean => {
-      if (res.status === 401) {
-        onUnauthorized();
-        return true;
-      }
-      return false;
-    },
-    [onUnauthorized],
-  );
-
+  const [actionError, setActionError] = useState<string | null>(null);
+  const openData = review.detail;
+  const openLoading = review.detailLoading;
+  const openError = review.detailError?.message || actionError;
+  const acting = review.pending;
   const closeModal = useCallback(() => {
-    setOpenId(null);
-    setOpenData(null);
-    setOpenError(null);
-  }, []);
-
-  // 打开 modal 时拉原文
+    setOpenId(null); setActionError(null); closeDetail();
+  }, [closeDetail]);
   useEffect(() => {
     if (!openId) return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      setOpenLoading(true);
-      setOpenError(null);
-      setOpenData(null);
-      void (async () => {
-        try {
-          const r = await fetch(
-            `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
-            { headers: authHeader, cache: "no-store" },
-          );
-          if (handleAuthError(r)) return;
-          if (!r.ok) throw new Error(await readError(r));
-          const j = (await r.json()) as FullMessage;
-          if (!cancelled) setOpenData(j);
-        } catch (e) {
-          if (!cancelled) {
-            setOpenError(e instanceof Error ? e.message : "加载失败");
-          }
-        } finally {
-          if (!cancelled) setOpenLoading(false);
-        }
-      })();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [openId, authHeader, handleAuthError, topicQuery]);
-
-  // ESC 关闭
-  useEffect(() => {
-    if (!openId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeModal();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [openId, closeModal]);
-
-  const markRead = useCallback(async () => {
-    if (!openId) return;
-    setActing(true);
-    try {
-      const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify({ isRead: true }),
-        },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      onAfterAction?.();
-      closeModal();
-    } catch (e) {
-      setOpenError(e instanceof Error ? e.message : "操作失败");
-    } finally {
-      setActing(false);
-    }
-  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
-
-  const approveItem = useCallback(async () => {
-    if (!openId) return;
-    setActing(true);
-    try {
-      const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify({ isFlagged: false }),
-        },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      onAfterAction?.();
-      closeModal();
-    } catch (e) {
-      setOpenError(e instanceof Error ? e.message : "操作失败");
-    } finally {
-      setActing(false);
-    }
-  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
-
-  const deleteItem = useCallback(async () => {
-    if (!openId) return;
-    if (!window.confirm("确认删除这条留言？此操作会软删除，无法在当前界面恢复。")) {
-      return;
-    }
-    setActing(true);
-    try {
-      const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(openId)}?${topicQuery}`,
-        {
-          method: "DELETE",
-          headers: authHeader,
-        },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      onAfterAction?.();
-      closeModal();
-    } catch (e) {
-      setOpenError(e instanceof Error ? e.message : "删除失败");
-    } finally {
-      setActing(false);
-    }
-  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
-
-  const blockSender = useCallback(async () => {
-    if (!openId) return;
-    if (
-      !window.confirm(
-        "拉黑这名发信人？TA 以后给**常规信箱 + 所有活动主题**投信都会被静默丢弃（跨主题黑名单）。",
-      )
-    ) {
-      return;
-    }
-    setActing(true);
-    try {
-      const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(openId)}/block?${topicQuery}`,
-        { method: "POST", headers: authHeader },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      onAfterAction?.();
-      closeModal();
-    } catch (e) {
-      setOpenError(e instanceof Error ? e.message : "拉黑失败");
-    } finally {
-      setActing(false);
-    }
-  }, [openId, authHeader, handleAuthError, onAfterAction, closeModal, topicQuery]);
+  const act = async (operation: () => Promise<unknown>, confirmation?: string) => {
+    if (!openId || (confirmation && !window.confirm(confirmation))) return;
+    setActionError(null);
+    try { await operation(); closeModal(); }
+    catch (error) { setActionError(error instanceof Error ? error.message : '操作失败'); }
+  };
+  const markRead = () => act(() => review.update(openId!, {isRead: true}));
+  const approveItem = () => act(() => review.approve(openId!));
+  const deleteItem = () => act(() => review.deleteMessage(openId!), '确认删除这条留言？此操作会软删除，无法在当前界面恢复。');
+  const blockSender = () => act(() => review.blockSender(openId!), '拉黑这名发信人？其在常规信箱及所有活动主题的历史信件会被删除，之后的投稿会被静默丢弃。');
 
   return (
     <div className="rounded-2xl border border-rose-400/40 bg-black/60 p-5 shadow-[0_0_30px_rgba(244,63,94,0.12)] backdrop-blur-xl sm:p-6">
@@ -242,7 +66,9 @@ export function FlaggedMailPanel({
         </div>
       </div>
 
-      {flagged.length === 0 ? (
+      {review.error && <p role="alert">{review.error.message}</p>}
+      {review.isLoading && <p role="status">加载中…</p>}
+      {!review.isLoading && flagged.length === 0 ? (
         <div className="py-8 text-center font-mono text-sm text-gray-500">
           EMPTY · 当前无待审核留言
         </div>
@@ -266,7 +92,7 @@ export function FlaggedMailPanel({
               </div>
               <button
                 type="button"
-                onClick={() => setOpenId(m.id)}
+                onClick={() => { setOpenId(m.id); setActionError(null); review.openDetail(m.id); }}
                 className="rounded-lg border border-rose-400/60 bg-rose-500/10 px-4 py-1.5 font-mono text-xs text-rose-200 transition hover:bg-rose-500 hover:text-white"
               >
                 查看原文 →

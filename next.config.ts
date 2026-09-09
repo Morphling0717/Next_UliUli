@@ -12,6 +12,8 @@ const assetVersion = process.env.NEXT_PUBLIC_ASSET_VERSION?.trim() || Date.now()
 process.env.NEXT_PUBLIC_ASSET_VERSION = assetVersion;
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["@windchime/embed"],
+  serverExternalPackages: ["sqlite3"],
   env: {
     NEXT_PUBLIC_ASSET_VERSION: assetVersion,
   },

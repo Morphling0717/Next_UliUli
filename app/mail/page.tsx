@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -8,29 +8,14 @@ import {
   PencilLine,
   Power,
 } from "lucide-react";
-import {
-  DEFAULT_POSTER_CONFIG,
-  WindChimeAdminPanel,
-  WindChimeBlocklistPanel,
-  WindChimeQrCard,
-  WindChimeQrPosterEditor,
-} from "@windchime/embed";
-import type {
-  WindChimeBlockedSender,
-  WindChimeInboxFilter,
-  WindChimeQrPosterConfig,
-} from "@windchime/embed";
-import "@windchime/embed/styles/windchime.css";
-import {
-  mailAdminTheme,
-  mailBlocklistTheme,
-  mailPosterEditorTheme,
-  mailQrTheme,
-} from "@/components/mail/mail-theme";
+import { useWindChimeTopics, useWindChimePosterConfig } from '@windchime/embed/react';
+import { mailClient } from '@/lib/windchime-client';
+import { MailInbox } from '@/components/mail/MailInbox';
+import { MailBlocklist } from '@/components/mail/MailBlocklist';
+import { MailShare } from '@/components/mail/MailShare';
 import { BlockedTermsPanel } from "@/components/mail/BlockedTermsPanel";
 import {
   FlaggedMailPanel,
-  type FlaggableRecord,
 } from "@/components/mail/FlaggedMailPanel";
 import { MailTopicTabs } from "@/components/mail/MailTopicTabs";
 import { NewTopicModal } from "@/components/mail/NewTopicModal";
@@ -201,363 +186,52 @@ function PasswordGate({
   );
 }
 
-type ListResponse = {
-  items: FlaggableRecord[];
-  counts: Record<WindChimeInboxFilter, number>;
-};
-
 function MailContent({
   onUnauthorized,
 }: {
   onUnauthorized: () => void;
 }) {
-  // ===== 主题 state =====
-  const [topics, setTopics] = useState<Topic[]>([]);
-  const [activeTopicId, setActiveTopicId] = useState<string>("default");
-  const [topicsError, setTopicsError] = useState<string | null>(null);
-
-  // ===== 留言列表 state（跟随 activeTopicId） =====
-  const [items, setItems] = useState<FlaggableRecord[]>([]);
-  const [counts, setCounts] = useState<Record<WindChimeInboxFilter, number>>({
-    all: 0,
-    unread: 0,
-    favorited: 0,
-  });
-  const [loading, setLoading] = useState(false);
-  const [listError, setListError] = useState<string | null>(null);
-
-  // ===== 全局黑名单 state（跨主题共享） =====
-  const [blocklist, setBlocklist] = useState<WindChimeBlockedSender[]>([]);
-  const [blLoading, setBlLoading] = useState(false);
-  const [blError, setBlError] = useState<string | null>(null);
-
-  // ===== 主题开关 state（操作当前 activeTopic 的 isEnabled） =====
-  const [enabledSaving, setEnabledSaving] = useState(false);
-  const [enabledError, setEnabledError] = useState<string | null>(null);
-
-  // ===== 模态 / 抽屉 state =====
+  const topicsApi = useWindChimeTopics(mailClient, {includeArchived: false});
+  const topics = topicsApi.items;
+  const [selectedTopicId, setActiveTopicId] = useState('default');
+  const activeTopicId = topics.length && !topics.some(t=>t.id===selectedTopicId) ? 'default' : selectedTopicId;
   const [showNewTopicModal, setShowNewTopicModal] = useState(false);
   const [showArchivedDrawer, setShowArchivedDrawer] = useState(false);
-  const [archiveConfirmTopic, setArchiveConfirmTopic] = useState<Topic | null>(
-    null,
-  );
+  const [archiveConfirmTopic, setArchiveConfirmTopic] = useState<Topic | null>(null);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
-  const [archiveBusy, setArchiveBusy] = useState(false);
   const [copiedToast, setCopiedToast] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const activeTopic = topics.find(t => t.id === activeTopicId) ?? null;
+  const editingTopic = topics.find(t => t.id === editingTopicId) ?? null;
+  const topicsError = topicsApi.error?.message || actionError;
+  const enabledSaving = topicsApi.pending;
+  const enabledError = topicsApi.mutationError?.message;
+  const archiveBusy = topicsApi.pending;
 
-  const authHeader = useMemo(() => ({}), []);
-
-  const handleAuthError = useCallback(
-    (res: Response): boolean => {
-      if (res.status === 401) {
-        onUnauthorized();
-        return true;
-      }
-      return false;
-    },
-    [onUnauthorized],
-  );
-
-  const activeTopic = useMemo(
-    () => topics.find((t) => t.id === activeTopicId) ?? null,
-    [topics, activeTopicId],
-  );
-  const editingTopic = useMemo(
-    () => topics.find((t) => t.id === editingTopicId) ?? null,
-    [topics, editingTopicId],
-  );
-
-  // ===== 拉主题列表（管理端带 unreadCount / flaggedCount） =====
-  const reloadTopics = useCallback(async () => {
-    setTopicsError(null);
-    try {
-      const r = await fetch("/api/mail/topics", {
-        headers: authHeader,
-        cache: "no-store",
-      });
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      const j = (await r.json()) as { items: Topic[] };
-      setTopics(j.items);
-      // 如果当前选中的 tab 已经被归档或被删，退回 default
-      if (!j.items.some((t) => t.id === activeTopicId)) {
-        setActiveTopicId("default");
-      }
-    } catch (e) {
-      setTopicsError(e instanceof Error ? e.message : "主题列表加载失败");
-    }
-  }, [authHeader, handleAuthError, activeTopicId]);
-
-  // ===== 拉当前主题的留言列表 =====
-  const reload = useCallback(async () => {
-    setLoading(true);
-    setListError(null);
-    try {
-      const r = await fetch(
-        `/api/mail/messages?topicId=${encodeURIComponent(activeTopicId)}`,
-        { headers: authHeader, cache: "no-store" },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      const j = (await r.json()) as ListResponse;
-      setItems(j.items);
-      setCounts(j.counts);
-    } catch (e) {
-      setListError(e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, [authHeader, activeTopicId, handleAuthError]);
-
-  const reloadBlocklist = useCallback(async () => {
-    setBlLoading(true);
-    setBlError(null);
-    try {
-      const r = await fetch("/api/mail/blocklist", {
-        headers: authHeader,
-        cache: "no-store",
-      });
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      const j = (await r.json()) as WindChimeBlockedSender[];
-      setBlocklist(j);
-    } catch (e) {
-      setBlError(e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setBlLoading(false);
-    }
-  }, [authHeader, handleAuthError]);
-
-  // ===== 切换当前主题的开关 =====
-  const toggleCurrentTopicEnabled = useCallback(
-    async (next: boolean) => {
-      if (!activeTopic) return;
-      setEnabledSaving(true);
-      setEnabledError(null);
-      // 乐观更新（失败时回滚）
-      setTopics((xs) =>
-        xs.map((t) => (t.id === activeTopic.id ? { ...t, isEnabled: next } : t)),
-      );
-      try {
-        const r = await fetch(
-          `/api/mail/topics/${encodeURIComponent(activeTopic.id)}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json", ...authHeader },
-            body: JSON.stringify({ isEnabled: next }),
-          },
-        );
-        if (handleAuthError(r)) return;
-        if (!r.ok) throw new Error(await readError(r));
-        const updated = (await r.json()) as Topic;
-        setTopics((xs) =>
-          xs.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)),
-        );
-      } catch (e) {
-        // 回滚
-        setTopics((xs) =>
-          xs.map((t) =>
-            t.id === activeTopic.id ? { ...t, isEnabled: !next } : t,
-          ),
-        );
-        setEnabledError(e instanceof Error ? e.message : "保存失败");
-      } finally {
-        setEnabledSaving(false);
-      }
-    },
-    [authHeader, activeTopic, handleAuthError],
-  );
-
-  // 挂载：拉主题 + 黑名单
   useEffect(() => {
-    queueMicrotask(() => {
-      void reloadTopics();
-      void reloadBlocklist();
-    });
-  }, [reloadTopics, reloadBlocklist]);
+    window.addEventListener('mail:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('mail:unauthorized', onUnauthorized);
+  }, [onUnauthorized]);
 
-  // activeTopicId 变化时重新拉留言列表（也适用于首次挂载）
-  useEffect(() => {
-    queueMicrotask(() => {
-      void reload();
-    });
-  }, [reload]);
-
-  // ===== 留言级操作：全部带 ?topicId= 做跨主题防呆 =====
-  const patch = useCallback(
-    async (id: string, body: { isRead?: boolean; isFavorited?: boolean }) => {
-      const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(id)}?topicId=${encodeURIComponent(activeTopicId)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify(body),
-        },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      await Promise.all([reload(), reloadTopics()]);
-    },
-    [authHeader, activeTopicId, handleAuthError, reload, reloadTopics],
-  );
-
-  const onDelete = useCallback(
-    async (id: string) => {
-      const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(id)}?topicId=${encodeURIComponent(activeTopicId)}`,
-        { method: "DELETE", headers: authHeader },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      await Promise.all([reload(), reloadTopics()]);
-    },
-    [authHeader, activeTopicId, handleAuthError, reload, reloadTopics],
-  );
-
-  const onToggleRead = useCallback(
-    (id: string, isRead: boolean) => patch(id, { isRead }),
-    [patch],
-  );
-  const onToggleFavorite = useCallback(
-    (id: string, isFavorited: boolean) => patch(id, { isFavorited }),
-    [patch],
-  );
-
-  const onBlockSender = useCallback(
-    async (id: string) => {
-      const r = await fetch(
-        `/api/mail/messages/${encodeURIComponent(id)}/block?topicId=${encodeURIComponent(activeTopicId)}`,
-        { method: "POST", headers: authHeader },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      // 拉黑会跨主题软删该 sender 所有留言 → 刷新所有相关列表
-      await Promise.all([reload(), reloadBlocklist(), reloadTopics()]);
-    },
-    [
-      authHeader,
-      activeTopicId,
-      handleAuthError,
-      reload,
-      reloadBlocklist,
-      reloadTopics,
-    ],
-  );
-
-  const batchOp = useCallback(
-    async (op: "delete" | "markRead", ids: string[]) => {
-      const r = await fetch(
-        `/api/mail/messages/batch?topicId=${encodeURIComponent(activeTopicId)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify({ action: op, ids }),
-        },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      await Promise.all([reload(), reloadTopics()]);
-    },
-    [authHeader, activeTopicId, handleAuthError, reload, reloadTopics],
-  );
-
-  const onBatchDelete = useCallback(
-    (ids: string[]) => batchOp("delete", ids),
-    [batchOp],
-  );
-  const onBatchMarkRead = useCallback(
-    (ids: string[]) => batchOp("markRead", ids),
-    [batchOp],
-  );
-
-  const onUnblock = useCallback(
-    async (hash: string) => {
-      const r = await fetch(
-        `/api/mail/blocklist/${encodeURIComponent(hash)}`,
-        { method: "DELETE", headers: authHeader },
-      );
-      if (handleAuthError(r)) return;
-      if (!r.ok) throw new Error(await readError(r));
-      await reloadBlocklist();
-    },
-    [authHeader, handleAuthError, reloadBlocklist],
-  );
-
-  // ===== 主题管理：新建 / 编辑 / 归档 / 恢复 / 复制分享链接 =====
-  const onCreatedTopic = useCallback((topic: Topic) => {
-    setTopics((xs) => [...xs, topic]);
-    setActiveTopicId(topic.id);
-  }, []);
-
-  const onUpdatedTopic = useCallback((topic: Topic) => {
-    setTopics((xs) =>
-      xs.map((x) => (x.id === topic.id ? { ...x, ...topic } : x)),
-    );
-  }, []);
-
-  const onRestoredTopic = useCallback((topic: Topic) => {
-    setTopics((xs) => {
-      const without = xs.filter((x) => x.id !== topic.id);
-      return [...without, topic];
-    });
-    setActiveTopicId(topic.id);
-    setShowArchivedDrawer(false);
-  }, []);
-
-  // 真正归档（DELETE），不问二次确认
-  const performArchive = useCallback(
-    async (topic: Topic, markReadFirst: boolean) => {
-      setArchiveBusy(true);
-      try {
-        if (markReadFirst) {
-          // 先把未读批量 markRead
-          const unreadIds = items
-            .filter((m) => !m.isRead && !m.isFlagged)
-            .map((m) => m.id);
-          if (unreadIds.length > 0) {
-            await fetch(
-              `/api/mail/messages/batch?topicId=${encodeURIComponent(topic.id)}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json", ...authHeader },
-                body: JSON.stringify({ action: "markRead", ids: unreadIds }),
-              },
-            );
-          }
-        }
-        const r = await fetch(
-          `/api/mail/topics/${encodeURIComponent(topic.id)}`,
-          { method: "DELETE", headers: authHeader },
-        );
-        if (handleAuthError(r)) return;
-        if (!r.ok) throw new Error(await readError(r));
-        // 归档成功：切回 default，刷新
-        setActiveTopicId("default");
-        await reloadTopics();
-      } catch (e) {
-        alert(e instanceof Error ? e.message : "归档失败");
-      } finally {
-        setArchiveBusy(false);
-        setArchiveConfirmTopic(null);
-      }
-    },
-    [authHeader, handleAuthError, items, reloadTopics],
-  );
-
-  // 点"归档"按钮（主内容区 或 tab 上的小图标）
-  const handleArchiveIntent = useCallback(
-    (topic: Topic) => {
-      if (topic.isDefault) return; // 默认主题不可归档（按钮本来就会隐藏）
-      const hasBlockers =
-        (topic.unreadCount ?? 0) + (topic.flaggedCount ?? 0) > 0;
-      if (hasBlockers) {
-        setArchiveConfirmTopic(topic);
-      } else {
-        void performArchive(topic, false);
-      }
-    },
-    [performArchive],
-  );
+  const toggleCurrentTopicEnabled = async (enabled: boolean) => {
+    if (activeTopic) await topicsApi.update(activeTopic.id, {isEnabled: enabled}).catch(()=>{});
+  };
+  const onCreatedTopic = (topic: Topic) => setActiveTopicId(topic.id);
+  const onUpdatedTopic = () => setEditingTopicId(null);
+  const onRestoredTopic = (topic: Topic) => { setActiveTopicId(topic.id); setShowArchivedDrawer(false); };
+  const performArchive = async (topic: Topic, markReadFirst: boolean) => {
+    setActionError(null);
+    try {
+      await topicsApi.archive(topic.id, {markReadFirst});
+      if (activeTopicId === topic.id) setActiveTopicId('default');
+      setArchiveConfirmTopic(null);
+    } catch (error) { setActionError(error instanceof Error ? error.message : '归档失败'); }
+  };
+  const handleArchiveIntent = (topic: Topic) => {
+    if (topic.isDefault) return;
+    if ((topic.unreadCount ?? 0) + (topic.flaggedCount ?? 0) > 0) setArchiveConfirmTopic(topic);
+    else void performArchive(topic, false);
+  };
 
   const onCopyShareLink = useCallback(async () => {
     if (!activeTopic) return;
@@ -581,13 +255,13 @@ function MailContent({
         : `${window.location.origin}/m/${activeTopic.slug}`
       : "";
 
-  const [poster, setPoster] = useState<WindChimeQrPosterConfig>(() => ({
-    ...DEFAULT_POSTER_CONFIG,
+  const {value: poster, setValue: setPoster} = useWindChimePosterConfig({
     heading: "给 Uli 匿名投一封信",
     body: "扫码发信，你的留言可能会在直播里被读到哦 ~",
-  }));
+    footer: "", avatarSrc: "",
+  }, {storageKey: "uliuli:mail:poster"});
 
-  // 首次挂载时从 B 站 API 拉头像作为默认值（PosterEditor 已有 storageKey，
+  // 首次挂载时从 B 站 API 拉头像作为默认值（海报 Hook 已有 storageKey，
   // 会优先读 localStorage，所以这里仅在用户还没自定义头像时才填充）
   useEffect(() => {
     let cancelled = false;
@@ -610,7 +284,7 @@ function MailContent({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setPoster]);
 
   const inboxTitle = activeTopic
     ? `INBOX · ${activeTopic.title}`
@@ -767,79 +441,30 @@ function MailContent({
 
       {/* 收件箱（跟随当前主题） */}
       <section>
-        <WindChimeAdminPanel
-          title={inboxTitle}
-          emptyText={
-            activeTopic?.isDefault
-              ? "暂无来信。"
-              : "该主题暂无来信。"
-          }
-          items={items}
-          counts={counts}
-          autoClientFilter
-          isLoading={loading}
-          error={listError}
-          onReload={() => void reload()}
-          onDelete={onDelete}
-          onToggleRead={onToggleRead}
-          onToggleFavorite={onToggleFavorite}
-          onBlockSender={onBlockSender}
-          onBatchDelete={onBatchDelete}
-          onBatchMarkRead={onBatchMarkRead}
-          theme={mailAdminTheme}
-        />
+        <MailInbox topicId={activeTopicId} title={inboxTitle} emptyText={activeTopic?.isDefault ? '暂无来信。' : '该主题暂无来信。'} />
       </section>
 
       {/* 待审核（命中敏感词的留言，默认折叠，点击查看原文） */}
       <section>
-        <FlaggedMailPanel
-          items={items}
-          authHeader={authHeader}
-          topicId={activeTopicId}
-          onUnauthorized={onUnauthorized}
-          onAfterAction={() => {
-            void reload();
-            void reloadTopics();
-          }}
-        />
+        <FlaggedMailPanel key={activeTopicId} topicId={activeTopicId} />
       </section>
 
       {/* 黑名单（全局，跨主题共享） */}
       <section>
-        <WindChimeBlocklistPanel
-          title="BLOCKLIST · 黑名单（全局）"
-          emptyText="尚未拉黑任何发送者。"
-          items={blocklist}
-          isLoading={blLoading}
-          error={blError}
-          onReload={() => void reloadBlocklist()}
-          onUnblock={onUnblock}
-          theme={mailBlocklistTheme}
-        />
+        <MailBlocklist />
       </section>
 
       {/* 分享二维码 + 海报编辑（URL 跟随当前主题） */}
       {shareUrl && (
         <section className="flex flex-col gap-6">
-          <WindChimeQrCard
-            url={shareUrl}
-            title={
-              activeTopic?.isDefault
-                ? "SHARE · MAIL_BOX"
-                : `SHARE · ${activeTopic?.title ?? "TOPIC"}`
-            }
+          <MailShare url={shareUrl} title={activeTopic?.isDefault ? "SHARE · MAIL_BOX" : `SHARE · ${activeTopic?.title ?? "TOPIC"}`}
             subtitle={`扫码前往 ${shareUrl.replace(/^https?:\/\//, "")} 给 Uli 投信`}
-            size={260}
-            foreground="#2de2e6"
-            background="#050508"
-            downloadName={
-              activeTopic?.isDefault
-                ? "uliuli-mail-qr"
-                : `uliuli-topic-${activeTopic?.slug ?? "topic"}-qr`
-            }
-            theme={mailQrTheme}
-            poster={{
+            downloadName={activeTopic?.isDefault ? "uliuli-mail-qr" : `uliuli-topic-${activeTopic?.slug ?? "topic"}-qr`}
+            foreground="#2de2e6" background="#050508" value={poster} onChange={setPoster}
+            posterOptions={{
               enabled: true,
+              brandingText: "🎐 WindChime 匿名提问箱",
+              textColor: "#ffffff",
               heading: poster.heading,
               body: poster.body,
               footer: poster.footer || shareUrl.replace(/^https?:\/\//, ""),
@@ -849,53 +474,40 @@ function MailContent({
               avatarSrc: avatarSrcForCanvas(poster.avatarSrc) || undefined,
             }}
           />
-
-          <WindChimeQrPosterEditor
-            value={poster}
-            onChange={setPoster}
-            storageKey="uliuli:mail:poster"
-            theme={mailPosterEditorTheme}
-            placeholders={{
-              heading: "给 Uli 匿名投一封信",
-              body: "扫码后匿名留言，Uli 直播时会念出来 ~",
-              footer: "—— UliUli",
-            }}
-          />
         </section>
       )}
 
       {/* 全局设置：敏感词（跨主题共享，低频配置） */}
       <section id="global-settings">
-        <BlockedTermsPanel
-          authHeader={authHeader}
-          onUnauthorized={onUnauthorized}
-        />
+        <BlockedTermsPanel />
       </section>
 
       {/* ===== 模态 / 抽屉 ===== */}
       <NewTopicModal
         open={showNewTopicModal}
         onClose={() => setShowNewTopicModal(false)}
-        authHeader={authHeader}
+
         onCreated={onCreatedTopic}
       />
       <EditTopicModal
         open={!!editingTopicId && !!editingTopic}
         topic={editingTopic}
-        authHeader={authHeader}
+
         onClose={() => setEditingTopicId(null)}
         onUpdated={onUpdatedTopic}
       />
       <ArchivedTopicsDrawer
+        key={String(showArchivedDrawer)}
         open={showArchivedDrawer}
         onClose={() => setShowArchivedDrawer(false)}
-        authHeader={authHeader}
+
         onRestored={onRestoredTopic}
       />
       <ArchiveConfirmModal
         open={!!archiveConfirmTopic}
         topic={archiveConfirmTopic}
         busy={archiveBusy}
+        error={actionError}
         onCancel={() => !archiveBusy && setArchiveConfirmTopic(null)}
         onMarkReadThenArchive={() =>
           archiveConfirmTopic && performArchive(archiveConfirmTopic, true)
@@ -910,7 +522,7 @@ function MailContent({
 
 /**
  * 把 B 站 hdslb.com 域名的头像 URL 自动改写为同源代理，避免
- * `<WindChimeQrCard>` 用 `crossOrigin='anonymous'` 跨域加载失败。
+ * `<MailShare>` 用 `crossOrigin='anonymous'` 跨域加载失败。
  * 非 B 站域名直接原样返回，便于用户手动填其它图床。
  */
 function avatarSrcForCanvas(src: string | undefined | null): string {

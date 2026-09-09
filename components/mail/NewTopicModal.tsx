@@ -1,5 +1,9 @@
 "use client";
 
+import { validateWindChimeTopicCreate, validateWindChimeTopicPatch } from '@windchime/embed/core';
+import { useWindChimeTopics } from '@windchime/embed/react';
+import type { WindChimeTopicCreateInput } from '@windchime/embed/core';
+import { mailClient } from '@/lib/windchime-client';
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
@@ -14,23 +18,12 @@ import {
 type Props = {
   open: boolean;
   onClose: () => void;
-  authHeader: Record<string, string>;
   onCreated: (topic: Topic) => void;
 };
 
-const SLUG_REGEX = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/;
-const RESERVED_SLUGS = new Set(["default", "new", "admin", "api", "m"]);
-
-/** 前端实时 slug 校验：返回 null = 合法，否则返回错误文案 */
 function validateSlugClient(slug: string): string | null {
-  if (!slug) return "slug 不能为空";
-  if (!SLUG_REGEX.test(slug)) {
-    return "只能包含 a-z、0-9、短横；1~64 字符；首尾必须是字母/数字";
-  }
-  if (RESERVED_SLUGS.has(slug)) {
-    return `"${slug}" 是系统保留字`;
-  }
-  return null;
+  try { validateWindChimeTopicCreate({slug, title:'preview'}); return null; }
+  catch (error) { return error instanceof Error ? error.message : 'slug 无效'; }
 }
 
 /**
@@ -44,7 +37,7 @@ function validateSlugClient(slug: string): string | null {
  * 2. 时间窗勾选时转 UTC ISO 后提交
  * 3. 服务端报 409 SLUG_DUPLICATE / 400 SLUG_RESERVED 等错误码时，展示服务端的 error 文案
  */
-export function NewTopicModal({ open, onClose, authHeader, onCreated }: Props) {
+export function NewTopicModal({ open, onClose, onCreated }: Props) {
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
@@ -53,7 +46,8 @@ export function NewTopicModal({ open, onClose, authHeader, onCreated }: Props) {
   const [startsLocal, setStartsLocal] = useState(() => nowAsBeijingLocal());
   const [endsLocal, setEndsLocal] = useState(() => plusDaysAsBeijingLocal(7));
   const [showPermanentWarn, setShowPermanentWarn] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const topicsApi = useWindChimeTopics(mailClient, {enabled: false});
+  const submitting = topicsApi.pending;
   const [serverError, setServerError] = useState<string | null>(null);
 
   // 打开时重置（避免上次的 state 残留）
@@ -90,17 +84,16 @@ export function NewTopicModal({ open, onClose, authHeader, onCreated }: Props) {
   const titleError = useMemo(() => {
     const t = title.trim();
     if (!t) return null; // 先不报，submit 时才拦
-    if (t.length > 64) return "标题超过 64 字符";
-    return null;
+    try { validateWindChimeTopicPatch({title:t}); return null; }
+    catch(error) { return error instanceof Error ? error.message : '标题无效'; }
   }, [title]);
 
   // 时间窗范围提示
   const timeRangeError = useMemo(() => {
     if (!useTimeWindow) return null;
     if (!startsLocal || !endsLocal) return null;
-    // 同一本地串比较即可（都按北京时间理解）
-    if (startsLocal >= endsLocal) return "开始时间不能晚于或等于结束时间";
-    return null;
+    try { validateWindChimeTopicPatch({startsAt:beijingLocalToUtcIso(startsLocal), endsAt:beijingLocalToUtcIso(endsLocal)}); return null; }
+    catch(error) { return error instanceof Error ? error.message : '时间范围无效'; }
   }, [useTimeWindow, startsLocal, endsLocal]);
 
   const canSubmit =
@@ -132,10 +125,10 @@ export function NewTopicModal({ open, onClose, authHeader, onCreated }: Props) {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    setSubmitting(true);
+
     setServerError(null);
     try {
-      const body: Record<string, unknown> = {
+      const body: WindChimeTopicCreateInput = {
         title: title.trim(),
         slug,
         description: description.trim() || null,
@@ -149,24 +142,13 @@ export function NewTopicModal({ open, onClose, authHeader, onCreated }: Props) {
         body.endsAt = null;
       }
 
-      const r = await fetch("/api/mail/topics", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const j = (await r.json().catch(() => null)) as
-          | { error?: string; code?: string }
-          | null;
-        throw new Error(j?.error ?? `创建失败（HTTP ${r.status}）`);
-      }
-      const topic = (await r.json()) as Topic;
+      const topic = await topicsApi.create(validateWindChimeTopicCreate(body));
       onCreated(topic);
       onClose();
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "创建失败");
     } finally {
-      setSubmitting(false);
+
     }
   };
 

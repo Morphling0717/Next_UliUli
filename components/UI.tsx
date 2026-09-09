@@ -122,6 +122,7 @@ export const GlassCard: React.FC<GlassCardProps> = ({ children, className = "", 
   return (
     <motion.div
       initial={disableAnimation ? false : undefined}
+      animate={disableAnimation ? { opacity: 1, y: 0 } : undefined}
       whileInView={disableAnimation ? undefined : { opacity: [0, 1], y: [20, 0] }}
       viewport={disableAnimation ? undefined : { once: true }}
       transition={disableAnimation ? { duration: 0 } : { duration: 0.5 }}

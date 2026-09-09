@@ -16,7 +16,9 @@ RUN npm ci && npm rebuild sqlite3 --build-from-source
 
 FROM base AS builder
 ARG NEXT_PUBLIC_SITE_URL
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
 ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

@@ -59,8 +59,6 @@ async function runLegacyColumnBackfill(migrationId) {
   if (migrationId === '202606160001_core_schema') {
     await ensureColumn('site_config', 'version', 'version INTEGER NOT NULL DEFAULT 1');
     await ensureColumn('site_config', 'updated_by', 'updated_by TEXT');
-    await ensureColumn('mail_messages', 'is_flagged', 'is_flagged INTEGER NOT NULL DEFAULT 0');
-    await ensureColumn('mail_messages', 'topic_id', "topic_id TEXT NOT NULL DEFAULT 'default'");
   }
   if (migrationId === '202606180001_gacha_server_state') {
     await ensureColumn('gift_codes', 'owner_user_id', 'owner_user_id INTEGER');
@@ -80,30 +78,11 @@ async function runLegacyColumnBackfill(migrationId) {
   }
 }
 
-async function bootstrapDefaultTopic() {
-  const existing = await all(`SELECT id FROM mail_topics WHERE id = 'default' LIMIT 1`);
-  if (existing.length > 0) return;
-
-  const rows = await all(`SELECT value FROM mail_settings WHERE key = ? LIMIT 1`, [
-    'mail.enabled',
-  ]);
-  const value = rows[0]?.value;
-  const initialEnabled =
-    value === '1' || value === 'true' ? 1 :
-    value === '0' || value === 'false' ? 0 :
-    1;
-  const now = new Date().toISOString();
-  await run(
-    `INSERT OR IGNORE INTO mail_topics
-       (id, slug, title, description, note, is_default, is_enabled,
-        starts_at, ends_at, archived_at, sort_order, created_at, updated_at)
-     VALUES ('default', 'default', '常规信箱', NULL, NULL, 1, ?,
-             NULL, NULL, NULL, 0, ?, ?)`,
-    [initialEnabled, now, now],
-  );
-}
-
 async function main() {
+  const { createWindChimeSqlite } = await import('@windchime/embed/sqlite');
+  const mailStorage = createWindChimeSqlite({filename: dbPath});
+  try { await mailStorage.ready; } finally { await mailStorage.close(); }
+
   if (!fs.existsSync(migrationsDir)) {
     throw new Error(`Migrations directory not found: ${migrationsDir}`);
   }
@@ -150,7 +129,6 @@ async function main() {
     }
   }
 
-  await bootstrapDefaultTopic();
   console.log(`\nDatabase migrated: ${dbPath}`);
   console.log(`Applied this run: ${appliedCount}`);
 }

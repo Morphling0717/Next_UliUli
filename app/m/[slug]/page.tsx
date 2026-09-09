@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import { getTopicBySlug, type Topic } from "@/lib/mail-topics";
+import { windChime } from '@/lib/windchime';
+import type { WindChimePublicTopic as Topic } from '@windchime/embed/core';
 import { TopicMailForm } from "@/components/mail/TopicMailForm";
 import { TopicStatePage } from "@/components/mail/TopicStatePage";
 
@@ -31,20 +32,20 @@ type RouteProps = {
 /** 派生访客视角的呈现变体（对应 TopicStatePage 的 variant / 或 active 投信页） */
 type Variant = "redirect-home" | "active" | "ended" | "disabled" | "scheduled";
 
-function resolveVariant(topic: Topic, nowMs: number = Date.now()): Variant {
-  if (topic.isDefault) return "redirect-home";
-  if (topic.archivedAt) return "ended";
-  if (!topic.isEnabled) return "disabled";
-  if (topic.startsAt && nowMs < Date.parse(topic.startsAt)) return "scheduled";
-  if (topic.endsAt && nowMs > Date.parse(topic.endsAt)) return "ended";
-  return "active";
+function resolveVariant(topic: Topic): Variant {
+  if (topic.isDefault) return 'redirect-home';
+  if (topic.state === 'archived') return 'ended';
+  if (!topic.isEnabled) return 'disabled';
+  if (topic.state === 'ended') return 'ended';
+  if (topic.state === 'scheduled') return 'scheduled';
+  return 'active';
 }
 
 export async function generateMetadata(
   { params }: RouteProps,
 ): Promise<Metadata> {
   const { slug } = await params;
-  const topic = await getTopicBySlug(slug);
+  const topic = await windChime.getPublicTopic(slug);
   if (!topic) {
     // 未知 slug：Next 会走 not-found；这里的 meta 不会最终渲染，简单给个保险
     return {
@@ -86,7 +87,7 @@ export async function generateMetadata(
 
 export default async function TopicPage({ params }: RouteProps) {
   const { slug } = await params;
-  const topic = await getTopicBySlug(slug);
+  const topic = await windChime.getPublicTopic(slug);
   if (!topic) notFound();
 
   const variant = resolveVariant(topic);
