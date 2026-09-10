@@ -3,7 +3,9 @@ import { useEffect, useRef } from "react";
 import {
   useWindChimeSubmission,
   useWindChimeTurnstile,
+  useWindChimeAttachments,
 } from "@windchime/embed/react";
+import { WindChimeAttachmentInput } from "@windchime/embed";
 import type { WindChimeRateLimit } from "@windchime/embed/core";
 import { mailClient } from "@/lib/windchime-client";
 import { mailSenderTheme as t } from "./mail-theme";
@@ -27,8 +29,13 @@ type Props = {
 };
 export function MailComposer(props: Props) {
   const { turnstileSiteKey, enabled = true, onSent } = props;
+  const attachments = useWindChimeAttachments(props.topicSlug);
   const submission = useWindChimeSubmission({
     client: mailClient,
+    onSubmit: async (payload) => {
+      await mailClient.messages.submit(await attachments.attach(payload));
+      attachments.clear();
+    },
     topicSlug: props.topicSlug,
     enabled,
     requireTurnstile: !!turnstileSiteKey,
@@ -112,6 +119,7 @@ export function MailComposer(props: Props) {
             />
           </label>
           <div className={t.counter}>{submission.text.length} / 1000</div>
+          <WindChimeAttachmentInput files={attachments.files} onChange={attachments.setFiles} disabled={!enabled || submission.sending} />
           {turnstileSiteKey && (
             <div ref={challengeRef} className={t.turnstileWrap} />
           )}

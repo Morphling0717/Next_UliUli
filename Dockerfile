@@ -15,6 +15,8 @@ ENV npm_config_build_from_source=true
 RUN npm ci && npm rebuild sqlite3 --build-from-source
 
 FROM base AS builder
+ARG NEXT_PUBLIC_WINDCHIME_DISPLAY_URL
+ENV NEXT_PUBLIC_WINDCHIME_DISPLAY_URL=${NEXT_PUBLIC_WINDCHIME_DISPLAY_URL}
 ARG NEXT_PUBLIC_SITE_URL
 ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
 ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
@@ -22,7 +24,7 @@ ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN npm run build -- --webpack && npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner
 
@@ -33,6 +35,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV DATABASE_PATH=/app/data/codes.db
+ENV WINDCHIME_MEDIA_DIRECTORY=/app/data/mail-media
 
 RUN apt-get update && apt-get install -y --no-install-recommends tini && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/data /app/public/memes /app/public/pic

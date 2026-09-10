@@ -439,6 +439,8 @@ function MailContent({
         </div>
       </section>
 
+      {/* 独立私人控制台，直播软件只采集其生成的展示链接。 */}
+      <p><a href="/mail/live" className="underline">打开风铃直播控制台 · 审核 / 待播 / 一键隐藏</a></p>
       {/* 收件箱（跟随当前主题） */}
       <section>
         <MailInbox topicId={activeTopicId} title={inboxTitle} emptyText={activeTopic?.isDefault ? '暂无来信。' : '该主题暂无来信。'} />

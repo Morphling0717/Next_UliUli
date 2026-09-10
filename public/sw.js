@@ -133,7 +133,7 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   // /api/* 永不缓存，让后端始终是真相源
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/mail") || url.pathname.startsWith("/live")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(navigationStrategy(request));
