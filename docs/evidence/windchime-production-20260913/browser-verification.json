@@ -1,0 +1,77 @@
+{
+  "checkedAt": "2026-09-12T20:38:14.591Z",
+  "pages": [
+    {
+      "url": "https://uliuli.cn/",
+      "title": "丝瓜Uli | UliUli 主站",
+      "status": 200,
+      "cache": "private, no-cache, no-store, max-age=0, must-revalidate"
+    },
+    {
+      "url": "https://uliuli.cn/mail",
+      "title": "丝瓜Uli | UliUli 主站",
+      "status": 200,
+      "cache": "s-maxage=31536000"
+    },
+    {
+      "url": "https://uliuli.cn/mail/live",
+      "title": "丝瓜Uli | UliUli 主站",
+      "status": 200,
+      "cache": "s-maxage=31536000"
+    },
+    {
+      "url": "https://uliuli.cn/app",
+      "title": "UliUli App Hub",
+      "status": 200,
+      "cache": "s-maxage=31536000"
+    }
+  ],
+  "homeHero": true,
+  "mailPasswordType": "password",
+  "mailLiveLoginHref": "/mail",
+  "publicKeyGenerationButtons": 0,
+  "images": {
+    "total": 20,
+    "broken": []
+  },
+  "capabilities": {
+    "status": 200,
+    "cache": "no-store",
+    "protocolVersion": 1,
+    "features": {
+      "images": true,
+      "pairing": true,
+      "broadcast": true,
+      "connectionKeys": true
+    },
+    "leaseMs": 3000,
+    "pollIntervalMs": 1000
+  },
+  "unauthorizedIdentity": {
+    "status": 401,
+    "code": "CONNECTION_KEY_INVALID"
+  },
+  "events": [
+    {
+      "page": 2,
+      "type": "http",
+      "status": 401,
+      "url": "https://uliuli.cn/api/mail/topics"
+    },
+    {
+      "page": 2,
+      "type": "console",
+      "message": "Failed to load resource: the server responded with a status of 401 ()"
+    }
+  ],
+  "screenshots": {
+    "liveLogin": {
+      "file": "production-login.png",
+      "sha256": "50ae7619ed9e714d1f27838d15e6f974a4dab848ea74790ddd2830eb8b193fa3"
+    },
+    "home": {
+      "file": "production-home.png",
+      "sha256": "12f654cac72db55b8317aa8bd772227f454865b5a686659663ae2b17e2c367c6"
+    }
+  }
+}
