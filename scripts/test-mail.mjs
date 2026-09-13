@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createWindChimeClient } from "@windchime/embed/client";
+import { createWindChimeClient, createWindChimeLiveClient } from "@windchime/embed/client";
 
 // Run only against a disposable local database, after starting the website.
 const base = process.env.MAIL_SMOKE_BASE_URL || "http://localhost:3011";
@@ -48,9 +48,14 @@ assert(
 const suffix = `${Date.now()}`;
 const secretNote = `PRIVATE-NOTE-${suffix}`;
 const termsBefore = (await admin.blockedTerms.get()).terms;
+const keywordBefore = (await admin.settings.get()).blockedTermsEnabled === true;
+const liveAdmin = createWindChimeLiveClient({ baseUrl: `${base}/api/mail/live`, getHeaders: () => ({ cookie: cookies }) });
+const grant = await liveAdmin.createSiteGrant(`isolated-mail-regression-${suffix}`);
+const desktop = createWindChimeLiveClient({ baseUrl: `${base}/api/mail/live`, getHeaders: () => ({ authorization: `Bearer ${grant.token}` }) });
 const created = [];
 const blocked = [];
 try {
+  await desktop.settings.setBlockedTermsEnabled(true);
   const topicA = await admin.topics.create({
     slug: `smoke-a-${suffix}`,
     title: "Smoke A",
@@ -179,6 +184,8 @@ try {
     "Next_UliUli: original session + legacy auth, public DTO/SSR privacy, submission, inbox filters, topic isolation, favorite, archive/restore, review, batches, block/unblock and settings passed.",
   );
 } finally {
+  await desktop.settings.setBlockedTermsEnabled(keywordBefore);
+  await liveAdmin.revokeGrant(undefined, grant.id);
   await admin.blockedTerms.set(termsBefore);
   for (const hash of blocked) await admin.blocklist.unblock(hash);
   for (const id of created) {

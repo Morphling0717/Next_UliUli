@@ -7,7 +7,7 @@ import { normalizeWindChimeTerms } from '@windchime/embed/core';
 import { mailClient } from '@/lib/windchime-client';
 
 export function BlockedTermsPanel() {
-  const resource = useWindChimeBlockedTerms(mailClient);
+  const resource = useWindChimeBlockedTerms(mailClient, {pollIntervalMs: 3000});
   const {terms, isLoading: loading, pending: saving} = resource;
   const [editedDraft, setDraft] = useState<string | undefined>();
   const draft = editedDraft ?? terms.join(', ');

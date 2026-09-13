@@ -26,7 +26,7 @@ export function ArchivedTopicsDrawer({
   onClose,
   onRestored,
 }: Props) {
-  const resource = useWindChimeTopics(mailClient, {includeArchived:true, enabled:open});
+  const resource = useWindChimeTopics(mailClient, {includeArchived:true, enabled:open, pollIntervalMs:3000});
   const {restore, purge} = resource;
   const loading = resource.isLoading;
   const error = resource.error?.message || resource.mutationError?.message;

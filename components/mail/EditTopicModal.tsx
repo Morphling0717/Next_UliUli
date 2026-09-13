@@ -4,7 +4,7 @@ import { validateWindChimeTopicPatch } from '@windchime/embed/core';
 import { useWindChimeTopics } from '@windchime/embed/react';
 import type { WindChimeTopicPatchInput } from '@windchime/embed/core';
 import { mailClient } from '@/lib/windchime-client';
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { X as CloseIcon } from "lucide-react";
@@ -39,24 +39,29 @@ export function EditTopicModal({
   const submitting = topicsApi.pending;
   const [serverError, setServerError] = useState<string | null>(null);
 
+  const latestTopic = useRef(topic);
+  useEffect(() => { latestTopic.current = topic; }, [topic]);
+  const editorScope = `${open}:${topic?.id ?? ""}`;
+
   useEffect(() => {
-    if (!open || !topic) return;
+    const initialTopic = latestTopic.current;
+    if (!editorScope.startsWith("true:") || !initialTopic) return;
     queueMicrotask(() => {
-      setTitle(topic.title);
-      setDescription(topic.description ?? "");
-      setNote(topic.note ?? "");
-      const hasWindow = !topic.isDefault && (!!topic.startsAt || !!topic.endsAt);
+      setTitle(initialTopic.title);
+      setDescription(initialTopic.description ?? "");
+      setNote(initialTopic.note ?? "");
+      const hasWindow = !initialTopic.isDefault && (!!initialTopic.startsAt || !!initialTopic.endsAt);
       setUseTimeWindow(hasWindow);
       setStartsLocal(
-        topic.startsAt ? utcIsoToBeijingLocal(topic.startsAt) : nowAsBeijingLocal(),
+        initialTopic.startsAt ? utcIsoToBeijingLocal(initialTopic.startsAt) : nowAsBeijingLocal(),
       );
       setEndsLocal(
-        topic.endsAt ? utcIsoToBeijingLocal(topic.endsAt) : plusDaysAsBeijingLocal(7),
+        initialTopic.endsAt ? utcIsoToBeijingLocal(initialTopic.endsAt) : plusDaysAsBeijingLocal(7),
       );
 
       setServerError(null);
     });
-  }, [open, topic]);
+  }, [editorScope]);
 
   useEffect(() => {
     if (!open) return;

@@ -25,7 +25,7 @@ export function MailInbox({
   title: string;
   emptyText: string;
 }) {
-  const inbox = useWindChimeInbox(mailClient, { topicId });
+  const inbox = useWindChimeInbox(mailClient, { topicId, pollIntervalMs: 3000 });
   const [error, setError] = useState<string | null>(null);
   const act = async (
     operation: () => Promise<unknown>,

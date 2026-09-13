@@ -10,6 +10,7 @@ type Props = {
   onOpenNewTopic: () => void;
   onOpenArchivedDrawer: () => void;
   onScrollToGlobalSettings: () => void;
+  showGlobalSettings?: boolean;
   /** 归档按钮处理（针对已结束状态的 tab 上的小图标） */
   onQuickArchive?: (topicId: string) => void;
 };
@@ -30,6 +31,7 @@ export function MailTopicTabs({
   onOpenNewTopic,
   onOpenArchivedDrawer,
   onScrollToGlobalSettings,
+  showGlobalSettings = true,
   onQuickArchive,
 }: Props) {
   // 排序：default 最左；然后 active → scheduled → ended；组内按 sort_order、
@@ -74,11 +76,11 @@ export function MailTopicTabs({
         icon={<Plus className="h-3.5 w-3.5" />}
         label="新建主题"
       />
-      <ActionButton
+      {showGlobalSettings ? <ActionButton
         onClick={onScrollToGlobalSettings}
         icon={<Settings2 className="h-3.5 w-3.5" />}
         label="全局设置"
-      />
+      /> : null}
 
       {/* 一键归档提示（≥ 3 个已结束） */}
       {endedCount >= 3 && (
