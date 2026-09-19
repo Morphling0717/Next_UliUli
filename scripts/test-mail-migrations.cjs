@@ -55,6 +55,9 @@ const close=db=>new Promise((resolve,reject)=>db.close(error=>error?reject(error
   const db=open(filename);
   const topic=await get(db,"SELECT * FROM mail_topics WHERE id='default'"); assert(topic);
   assert.equal((await get(db,'PRAGMA integrity_check')).integrity_check,'ok');
+  assert.equal((await get(db,"SELECT COUNT(*) n FROM windchime_migrations WHERE id='0.8.2-live-queue-invalidation'")).n,1,'queue invalidation upgrade runs once');
+  assert((await get(db,"SELECT sql FROM sqlite_master WHERE type='trigger' AND name='live_message_changed'")).sql.includes('current_snapshot IN'),'legacy topic-wide clearing trigger is replaced');
+  assert(await get(db,"SELECT name FROM sqlite_master WHERE type='trigger' AND name='live_queue_cursor_removed'"),'queue removal preserves its cursor');
   for(const expected of expectedGrants) assert.deepEqual(await get(db,`SELECT * FROM mail_live_grants WHERE id='${expected.id}'`),expected,'existing authority is preserved without widening permissions');
   if(scenario!=='fresh'){
    const row=await get(db,"SELECT * FROM mail_messages WHERE id='old-letter'");

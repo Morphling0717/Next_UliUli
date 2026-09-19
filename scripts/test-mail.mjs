@@ -157,6 +157,35 @@ try {
   await liveAction("draft", { draft: { ...beforeEdit.draft, nickname: "Reviewed nickname changed" } });
   assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "editing approved content withdraws it");
   await assert.rejects(liveAction("show"), error => error.code === "NOT_APPROVED");
+  for (const text of ["Queue B", "Queue C"]) await publicClient.messages.submit({
+    topicSlug: topicA.slug, text, senderFingerprint: `${text}-${suffix}`,
+  });
+  const queueMessages = (await admin.messages.list({ topicId: topicA.id })).items;
+  const queueB = queueMessages.find(item => item.text === "Queue B"), queueC = queueMessages.find(item => item.text === "Queue C");
+  assert(queueB && queueC);
+  const queueAction = async (action, messageId, extra = {}) => {
+    const current = await desktop.state(topicA.id), selected = current.messages.find(item => item.id === messageId);
+    return desktop.action({ topicId: topicA.id, action, messageId, expectedRevision: current.revision,
+      expectedDraftRevision: selected?.draftRevision, operationId: randomUUID(), ...extra });
+  };
+  for (const id of [normal.id, queueB.id, queueC.id]) await queueAction("approve", id);
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "reapproval only queues");
+  await queueAction("show", normal.id);
+  const beforeUnrelatedDelete = await display.frame(reopened.receiverId);
+  await admin.messages.delete(queueC.id, { topicId: topicA.id });
+  const afterUnrelatedDelete = await display.frame(reopened.receiverId);
+  assert.deepEqual(afterUnrelatedDelete.snapshot, beforeUnrelatedDelete.snapshot, "deleting another letter preserves current output");
+  assert.equal(afterUnrelatedDelete.activation, beforeUnrelatedDelete.activation);
+  await queueAction("show", queueB.id); await queueAction("revoke", queueB.id);
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await queueAction("next"); assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "removing the last shown letter must not replay the first");
+  await queueAction("approve", queueB.id); assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await queueAction("reorder", undefined, { order: [queueB.id, normal.id] });
+  await queueAction("show", normal.id); await admin.messages.delete(queueB.id, { topicId: topicA.id });
+  assert.equal((await display.frame(reopened.receiverId)).snapshot.messageId, normal.id);
+  await queueAction("next"); assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await queueAction("show", normal.id);
+  console.log("0.8.2 HTTP: unrelated deletion preserves output; removed tail, reordered cursor and reapproval never wrap or autoplay.");
   assert.equal((await admin.messages.detail(normal.id, { topicId: topicA.id })).isRead, false, "broadcast does not change original read state");
   const displayAsControl = createWindChimeLiveClient({
     baseUrl: `${base}/api/mail/live`, getHeaders: () => ({ authorization: `Bearer ${displayGrant.token}` }),
