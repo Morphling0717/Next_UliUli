@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "at": 1789843264.5694592,
+  "targetHead": "b858739f42a53daea7313a7b4b4dc4393b179479",
+  "onlyWebsiteProcessesCanWriteData": true,
+  "proxyIdentityAndMountsUnchanged": true,
+  "productionModified": false,
+  "redactedFields": [],
+  "evidenceCopy": "Public result summary; omitted operational counts and synthetic identifiers are retained only in the original local evidence."
+}

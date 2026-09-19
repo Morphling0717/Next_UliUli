@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "targetHead": "b858739f42a53daea7313a7b4b4dc4393b179479",
+  "imageId": "sha256:4fd822740c7b96de23996f4fe0f0c1da342d5b1a474ab114fe92f14a9ce04150",
+  "release": "/root/windchime-deploy-backups/uliuli-080-20260919T180554Z/release-b858739f42a5",
+  "publicFiles": 200,
+  "publicChanges": [],
+  "buildArgs": [
+    "NEXT_PUBLIC_SITE_URL",
+    "NEXT_PUBLIC_TURNSTILE_SITE_KEY"
+  ],
+  "elapsedSeconds": 46.53,
+  "resumed": true,
+  "retryLog": "build-retry-1.private.log",
+  "packageSha256": "d754cb191a07107ffa81a0b50ae6322b690481f3f720f1f131844a5f5da2d3e3",
+  "minimumFreeBytes": 1610612736,
+  "completedLayerEvidence": {
+    "log": "build.private.log",
+    "sha256": "1f34019f8dee09f3dd256c78543cc46794d022f82b8937d3bfd44557ee7bbc4c",
+    "nextBuildStep": "16",
+    "completedRunnerCopies": {
+      "package*.json": "17",
+      "node_modules": "18",
+      ".next": "19",
+      "public": "20",
+      "migrations": "21",
+      "scripts": "22"
+    },
+    "cancelledExportStep": "23"
+  },
+  "redactedFields": [],
+  "evidenceCopy": "Public result summary; omitted operational counts and synthetic identifiers are retained only in the original local evidence."
+}
