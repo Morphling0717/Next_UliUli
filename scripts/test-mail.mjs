@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createWindChimeClient, createWindChimeLiveClient } from "@windchime/embed/client";
+import { createWindChimeClient, createWindChimeLiveClient, createWindChimeDisplayClient } from "@windchime/embed/client";
 
 // Run only against a disposable local database, after starting the website.
 const base = process.env.MAIL_SMOKE_BASE_URL || "http://localhost:3011";
@@ -73,11 +73,13 @@ try {
   for (const layout of ["stack", "split", "banner", "sidebar", "portrait", "focus"]) {
     liveState = await desktop.action({
       action: "appearance", topicId: topicA.id, expectedRevision: liveState.revision,
-      operationId: randomUUID(), appearance: { layout, theme: "mia", imageHeightPercent: 55 },
+      operationId: randomUUID(), appearance: { layout, theme: "mia", imageHeightPercent: 55, maxWidth: 280, viewportHeight: 1080 },
     });
     assert.equal(liveState.appearance.layout, layout);
     assert.equal(liveState.appearance.theme, "mia");
     assert.equal(liveState.appearance.imageHeightPercent, 55);
+    assert.equal(liveState.appearance.maxWidth, 280, "narrow layouts keep the exact saved width");
+    assert.equal(liveState.appearance.viewportHeight, 1080, "portrait layouts keep the exact saved height");
     assert.equal(liveState.current, null, "appearance updates never start output");
   }
   assert.deepEqual((await liveAdmin.state(topicA.id)).appearance, liveState.appearance, "website and desktop read the same saved appearance");
@@ -113,6 +115,57 @@ try {
   });
   const normal = (await admin.messages.list({ topicId: topicA.id })).items[0];
   assert(normal);
+  // Validate the actual website handler, not only an in-process mock service.
+  const displayGrant = await desktop.createGrant(topicA.id, "display", "isolated-output");
+  const display = createWindChimeDisplayClient({ baseUrl: `${base}/api/mail/live`, token: displayGrant.token });
+  const firstReceiver = await display.open();
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot, null);
+  const liveAction = async (action, extra = {}) => {
+    const current = await desktop.state(topicA.id);
+    const selected = current.messages.find(item => item.id === normal.id);
+    return desktop.action({
+      topicId: topicA.id, action, messageId: normal.id, expectedRevision: current.revision,
+      expectedDraftRevision: selected.draftRevision, operationId: randomUUID(), ...extra,
+    });
+  };
+  await assert.rejects(liveAction("show"), error => error.code === "NOT_APPROVED");
+  const approved = await liveAction("approve");
+  assert(approved.queue.includes(normal.id));
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot, null, "approval alone never plays");
+  await liveAction("show");
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot.messageId, normal.id);
+  const prepared = await desktop.state(topicA.id);
+  const delayedShow = {
+    topicId: topicA.id, action: "show", messageId: normal.id,
+    expectedRevision: prepared.revision, operationId: randomUUID(),
+  };
+  const reopened = await display.open();
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "reopening starts blank");
+  await assert.rejects(desktop.action(delayedShow), error => error.code === "REVISION_CONFLICT", "pre-handshake show request is stale");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "late request cannot activate a new window");
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot.messageId, normal.id, "an existing healthy viewer continues");
+  await liveAction("show");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot.messageId, normal.id, "fresh manual show activates the new window");
+  await liveAction("hide");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await liveAction("show");
+  await liveAction("revoke");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "revoking withdraws current output");
+  await liveAction("approve");
+  await liveAction("show");
+  const beforeEdit = (await desktop.state(topicA.id)).messages.find(item => item.id === normal.id);
+  await liveAction("draft", { draft: { ...beforeEdit.draft, nickname: "Reviewed nickname changed" } });
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "editing approved content withdraws it");
+  await assert.rejects(liveAction("show"), error => error.code === "NOT_APPROVED");
+  assert.equal((await admin.messages.detail(normal.id, { topicId: topicA.id })).isRead, false, "broadcast does not change original read state");
+  const displayAsControl = createWindChimeLiveClient({
+    baseUrl: `${base}/api/mail/live`, getHeaders: () => ({ authorization: `Bearer ${displayGrant.token}` }),
+  });
+  await assert.rejects(displayAsControl.state(topicA.id), error => error.status === 401);
+  await assert.rejects(desktop.messages.get(topicB.id, normal.id), error => error.status === 404);
+  await desktop.revokeGrant(topicA.id, displayGrant.id);
+  await assert.rejects(display.frame(reopened.receiverId), error => error.status === 401 || error.status === 403);
+  console.log("0.8.1 HTTP: approval/manual output, handshake conflicts, hide/revoke/edit withdrawal and read-only/topic isolation passed.");
   const flagged = (
     await admin.messages.list({ topicId: topicB.id, filter: "flagged" })
   ).items[0];
