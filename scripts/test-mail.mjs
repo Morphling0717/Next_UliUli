@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { createWindChimeClient, createWindChimeLiveClient } from "@windchime/embed/client";
 
 // Run only against a disposable local database, after starting the website.
@@ -67,6 +68,25 @@ try {
     title: "Smoke B",
   });
   created.push(topicB.id);
+  let liveState = await desktop.state(topicA.id);
+  assert.equal(liveState.appearance.imageHeightPercent, 45, "0.8 fixed-media support is supplied by the site");
+  for (const layout of ["stack", "split", "banner", "sidebar", "portrait", "focus"]) {
+    liveState = await desktop.action({
+      action: "appearance", topicId: topicA.id, expectedRevision: liveState.revision,
+      operationId: randomUUID(), appearance: { layout, theme: "mia", imageHeightPercent: 55 },
+    });
+    assert.equal(liveState.appearance.layout, layout);
+    assert.equal(liveState.appearance.theme, "mia");
+    assert.equal(liveState.appearance.imageHeightPercent, 55);
+    assert.equal(liveState.current, null, "appearance updates never start output");
+  }
+  assert.deepEqual((await liveAdmin.state(topicA.id)).appearance, liveState.appearance, "website and desktop read the same saved appearance");
+  await assert.rejects(desktop.action({
+    action: "appearance", topicId: topicA.id, expectedRevision: liveState.revision,
+    operationId: randomUUID(), appearance: { imageHeightPercent: 71 },
+  }), error => error.code === "INVALID_APPEARANCE");
+  assert.equal((await desktop.state(topicA.id)).revision, liveState.revision, "invalid media settings are rejected atomically");
+  console.log("Next_UliUli: 0.8 six layouts, fixed image allocation, shared state and no automatic output passed.");
   const publicTopics = await publicClient.topics.list();
   for (const topic of publicTopics.items)
     for (const field of ["note", "unreadCount", "flaggedCount"])
