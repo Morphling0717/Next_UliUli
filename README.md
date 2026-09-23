@@ -231,4 +231,4 @@ npm run test:namearena:stress
 
 本站信箱通过 `@windchime/embed` 的公开接口和 React Hooks 接入，保留本站独立界面与登录。接入位置、本地联调、数据库迁移、升级和验证命令见 [风铃接入说明](docs/windchime.md)。
 
-本分支已接入风铃 0.8.2，并完成本地构建和接口验证；[0.8.2 桌面与共享包](https://github.com/Morphling0717/WindChime/releases/tag/v0.8.2) 已公开预发行。截至 2026-09-23，服务器释放已归档旧镜像与缓存后剩约 7.74 GiB，未达 8 GiB 构建门槛，线上仍为 0.8.1，未开始本版新备份、构建或切换。Mia 本轮不部署，详细证据见 [0.8.2 升级记录](docs/WINDCHIME-082-UPGRADE.md)。
+本分支固定使用风铃共享库 0.8.3，与 Mia 使用同一压缩包；已重新完成隔离生产构建、重复迁移和真实 HTTP 回归，见 [0.8.3 升级记录](docs/WINDCHIME-083-UPGRADE.md)。本轮只更新开发分支和草稿 PR，尚未部署或合并主分支。旧包和 [0.8.2 升级记录](docs/WINDCHIME-082-UPGRADE.md) 保留原日期与范围；依赖、桌面发行和线上部署是分别验证的进度。
