@@ -45,4 +45,14 @@ UliUli 固定使用 `vendor/windchime-embed-0.8.2.tgz`，与 Mia 使用完全相
 
 ## 交付边界
 
-本文件记录 `codex/windchime-desktop-v0.6.0` 的依赖更新与本地隔离验证，不表示 0.8.2 已部署生产；没有合并或改动主分支，也未接触生产数据库。正式部署结果应另附部署证据。Mia 本轮不部署。
+依赖与本地验证提交 `2ef32347a938e6f6839ea1f918ec810b5f6fe91b` 已推送到 `codex/windchime-desktop-v0.6.0`，没有合并或改动 main。风铃 [v0.8.2 预发行版](https://github.com/Morphling0717/WindChime/releases/tag/v0.8.2) 已于 2026-09-23 公开；共享包与本站 vendor 包保持上述相同摘要。发布包含 Windows 安装包、便携 ZIP、共享 tgz 和统一校验清单，四项大小与 GitHub SHA-256 digest 均已核对。正式最新版仍为 v0.8.1；桌面实际安装、升级、卸载及直播姬采集尚未验收，详见[风铃交付记录](https://github.com/Morphling0717/WindChime/blob/codex/live-broadcast/docs/RELEASE-082.md)。
+
+同日补测发现 0.8.2 安装 EXE 在全新隔离目录首次安装失败，暂请使用已验证的便携 ZIP。修复将另发版本，不替换本版标签或资产；此安装器问题不改变上述共享包校验和网站本地验证结果。
+
+## 生产容量复核（2026-09-23）
+
+**本站线上仍运行风铃 0.8.1，0.8.2 未部署。** 五个不被容器使用的旧镜像先离机归档并校验，随后释放相应七个标签及十七条构建缓存。保留生产与回退镜像、其他缓存、数据库、私有图片、环境配置、卷及非 GitHub 资源。
+
+释放后可用空间为 `8311451648` bytes（约 7.74 GiB），未达到 `8589934592` bytes（8 GiB）构建门槛，仍差 `278482944` bytes。流程因此停止在容量预检，未执行本版新备份、准备、构建或切换；后续部署仍须先达到容量门槛，再按上述备份和副本验证流程执行，不能将已有旧备份当作本版新备份。
+
+只读复核确认运行镜像为 `sha256:c724c75195eb9fd4e944954cb73bb1fea3e03183b88eeaa9447cb13b15133a60`，源提交为 `e1dba96ea040a17b7b53bda0cb1c9b24e66eaa38`，首页、capabilities 和健康接口均返回 200；未读取生产数据库。证据见[容量释放与现网状态](evidence/windchime-0.8.2/production-capacity.json)。Mia 本轮不部署。

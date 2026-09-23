@@ -1,8 +1,8 @@
 # 风铃接入与升级
 
-本分支固定接入 `@windchime/embed@0.8.0`。投稿、查询、已读、收藏、审核、屏蔽、词库、话题和归档由风铃维护，网站保留原有页面、HTML、图标、样式、动画和登录。
+本分支固定接入 `@windchime/embed@0.8.2`。投稿、查询、已读、收藏、审核、屏蔽、词库、话题和归档由风铃维护，网站保留原有页面、HTML、图标、样式、动画和登录。
 
-当前 `/mail` 提供全站桌面连接密钥；旧话题密钥权限不变，`/mail/live` 仅重定向到 `/mail`。敏感词默认关闭，开关只在桌面端。完整使用和安全升级步骤见 [风铃 0.8.0 网站与桌面连接](WINDCHIME-LIVE.md)。六种展示排版、图片固定、长信文字滚动、磁贴和热键需搭配新版桌面；本轮验证见 [0.8.0 升级记录](WINDCHIME-080-UPGRADE.md)。仓库依赖更新不代表生产环境已经部署。
+当前 `/mail` 提供全站桌面连接密钥；旧话题密钥权限不变，`/mail/live` 仅重定向到 `/mail`。敏感词默认关闭，开关只在桌面端。完整使用和安全升级步骤见 [风铃网站与桌面连接](WINDCHIME-LIVE.md)。六种展示排版、图片固定、长信文字滚动、磁贴和热键需搭配新版桌面；本轮验证见 [0.8.2 升级记录](WINDCHIME-082-UPGRADE.md)。截至 2026-09-23，0.8.2 已公开预发行，线上因剩余空间约 7.74 GiB 未达 8 GiB 构建门槛仍运行 0.8.1，未开始本版新备份、构建或切换。Mia 本轮不部署。
 
 历史共享服务和桌面的 [0.7.0 总验收报告](https://github.com/Morphling0717/WindChime/blob/codex/live-broadcast/docs/V070-VALIDATION.md) 保留原日期和范围，不代替本轮验收。
 
@@ -21,7 +21,7 @@
 
 ## 更新到本次版本
 
-当前依赖使用仓库中固定的 `vendor/windchime-embed-0.8.0.tgz`，应与 Mia 的压缩包逐字节一致并提交对应 lockfile。在备份和副本验证完成后运行：
+当前依赖使用仓库中固定的 `vendor/windchime-embed-0.8.2.tgz`，应与 Mia 的压缩包逐字节一致并提交对应 lockfile。在容量门槛、备份和副本验证完成后运行：
 
 ```bash
 npm ci
@@ -36,7 +36,7 @@ npm run build
 未来风铃正式发布 npm 后，可以改用固定版本安装：
 
 ```bash
-npm install --save-exact @windchime/embed@0.8.0
+npm install --save-exact @windchime/embed@0.8.2
 npm run db:migrate
 npm run build
 ```
@@ -93,7 +93,7 @@ docker compose --env-file .env build website
 
 ## 历史固定包复核：0.5.0（2026-09-09）
 
-以下记录保留原日期、版本和结果，仅描述当时 0.5.0 的验证，不是当前 0.8.0 验收或部署证明。当时曾在外接 SSD 构建并运行 `linux/amd64` 镜像。
+以下记录保留原日期、版本和结果，仅描述当时 0.5.0 的验证，不是当前 0.8.2 验收或部署证明。当时曾在外接 SSD 构建并运行 `linux/amd64` 镜像。
 
 最终 `vendor/windchime-embed-0.5.0.tgz` SHA-256：
 
