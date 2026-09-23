@@ -1,6 +1,6 @@
 # 风铃 0.8.3：网站信箱与桌面连接
 
-本分支固定安装 `vendor/windchime-embed-0.8.3.tgz`，与 Mia 使用同一压缩包及对应 lockfile。共享库维护信件、话题、审核、授权和数据库规则；网站保留原有 `/mail` 界面，Windows 桌面提供完整信箱管理和独立直播展示窗口。
+本分支固定安装 `vendor/windchime-embed-0.8.3-c4efb3dd2d7dab7fa432bc29350f0b3ed74b6a58.tgz`，与 Mia 使用同一压缩包及对应 lockfile。共享库维护信件、话题、审核、授权和数据库规则；网站保留原有 `/mail` 界面，Windows 桌面提供完整信箱管理和独立直播展示窗口。
 
 新 0.8.3 包已完成两站隔离构建、重复迁移和 HTTP 回归，详见 [0.8.3 升级记录](WINDCHIME-083-UPGRADE.md)。本轮没有部署生产网站或合并 main；旧包及 [0.8.2 历史记录](WINDCHIME-082-UPGRADE.md) 保留。仅更新桌面不会自动升级网站服务。
 
