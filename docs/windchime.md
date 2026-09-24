@@ -1,6 +1,10 @@
 # 风铃接入与升级
 
-本站从 `@windchime/embed@0.5.0` 的公开入口使用全部信箱业务。投稿、查询、已读、收藏、审核、屏蔽、词库、话题和归档由风铃维护。网站保留自己的页面、HTML、图标、样式、动画和登录。
+本分支固定接入 `@windchime/embed@0.8.2`。投稿、查询、已读、收藏、审核、屏蔽、词库、话题和归档由风铃维护，网站保留原有页面、HTML、图标、样式、动画和登录。
+
+当前 `/mail` 提供全站桌面连接密钥；旧话题密钥权限不变，`/mail/live` 仅重定向到 `/mail`。敏感词默认关闭，开关只在桌面端。完整使用和安全升级步骤见 [风铃网站与桌面连接](WINDCHIME-LIVE.md)。六种展示排版、图片固定、长信文字滚动、磁贴和热键需搭配新版桌面；本轮验证见 [0.8.2 升级记录](WINDCHIME-082-UPGRADE.md)。截至 2026-09-23，0.8.2 已公开预发行，线上因剩余空间约 7.74 GiB 未达 8 GiB 构建门槛仍运行 0.8.1，未开始本版新备份、构建或切换。Mia 本轮不部署。
+
+历史共享服务和桌面的 [0.7.0 总验收报告](https://github.com/Morphling0717/WindChime/blob/codex/live-broadcast/docs/V070-VALIDATION.md) 保留原日期和范围，不代替本轮验收。
 
 ## 接入位置
 
@@ -9,14 +13,15 @@
 - `lib/windchime.ts`：创建共享服务与 Next.js 处理器；传入原盐、敏感词环境默认值、Turnstile 密钥、管理员权限回调，并等待宿主数据库初始化。
 - `app/api/mail/**/route.ts`：保留原 URL，业务处理转交风铃。原登录使用 `/api/mail/session` 与数据库中的管理员会话；B 站头像代理保留本站实现。
 - `lib/windchime-client.ts`：一个同源客户端实例，使用 HttpOnly 会话；401 通知本网站切回登录界面。原 `x-mail-password` 兼容接口仍有效。
-- `components/mail`：网站独立 JSX 调用 `/react` Hooks、`/core` 校验和 `/media` 工具，不使用默认 UI，不覆盖风铃内部 CSS。
+- `components/mail`：网站独立 JSX 调用 `/react` Hooks、`/core` 校验和 `/media` 工具，连接密钥区复用 `/broadcast` 的私密管理组件；保留网站原有视觉样式。
+- `lib/windchime-live.ts` 与 `app/api/mail/live/[...path]/route.ts`：桌面控制、站点授权和独立只读展示使用共享服务；网页重定向不影响这些 API。
 - 首页、`/m` 和 `/m/[slug]` 的服务端数据只调用 `listPublicTopics` / `getPublicTopic`，内部备注不会作为页面属性发送给访客。
 
 `/mail`、`/m`、`/m/[slug]` 的访问方式保持不变。可编辑站点文案仍来自现有网站后台的 `siteConfig.mail`。浏览器指纹键继续使用 `windchime:fp`；投稿限流、海报和横幅的 `uliuli:mail:*` 本地设置键保持原值。
 
 ## 更新到本次版本
 
-当前依赖使用仓库中固定的 `vendor/windchime-embed-0.5.0.tgz`。在本仓库运行：
+当前依赖使用仓库中固定的 `vendor/windchime-embed-0.8.2.tgz`，应与 Mia 的压缩包逐字节一致并提交对应 lockfile。在容量门槛、备份和副本验证完成后运行：
 
 ```bash
 npm ci
@@ -31,12 +36,12 @@ npm run build
 未来风铃正式发布 npm 后，可以改用固定版本安装：
 
 ```bash
-npm install --save-exact @windchime/embed@0.5.0
+npm install --save-exact @windchime/embed@0.8.2
 npm run db:migrate
 npm run build
 ```
 
-下一次升级只更改包版本并运行迁移/验证；两站不再分别修改同一业务修复。提交更新的 `package.json` 与 `package-lock.json`。本次未执行 npm 公开发布或线上数据库迁移。回滚时先停止服务，回到原代码和 lock；如需回滚数据库，应恢复升级前完整备份，而不是手工删列。
+上述 npm 安装命令仅用于版本将来已公开发布的情形，目前应使用仓库内固定压缩包。下一次升级更新包、压缩包与 lockfile 并运行迁移和验证；两站不再分别修改同一业务修复。0.7.0 的站点授权采用加法迁移，旧话题授权不会自动扩权，现有信件和播出批准保持原义。回退前在副本上确认兼容性；不要覆盖运行中的数据库或丢弃升级后真实写入，详细步骤见 [升级说明](WINDCHIME-LIVE.md#配置和升级)。
 
 ## 本地联调
 
@@ -64,7 +69,7 @@ npm run dev:sync -- --targets ../Next_UliUli ../Next_Mia
 npm run test:mail:migrations
 ```
 
-覆盖新库、缺少话题/审核字段的旧库、当前结构；每个样本重复执行两次本站 CLI 迁移，并检查旧信件、屏蔽身份、默认开关及宿主数据保留。
+覆盖新库、缺少话题/审核字段的旧库、当前结构；每个样本重复执行两次本站 CLI 迁移，并检查旧信件、屏蔽身份、默认开关及宿主数据保留。旧话题授权、既有站点授权的哈希、范围、期限和撤销关联也逐项核对；旧话题授权不得自动扩权。
 
 启动一个使用一次性测试库的本地网站后执行 HTTP 接入回归：
 
@@ -72,7 +77,7 @@ npm run test:mail:migrations
 MAIL_SMOKE_BASE_URL=http://localhost:3011 MAIL_SMOKE_PASSWORD=你的本地测试密码 MAIL_SMOKE_ALLOW_WRITES=1 npm run test:mail
 ```
 
-测试实际调用本站原登录、风铃业务 API 与话题 SSR，创建专用测试话题，验证投稿、已读、收藏、审核、批量、归档、恢复、屏蔽、公开数据边界，最后删除测试话题并恢复词库。只有 localhost 可运行；启用 Turnstile 的服务器需要有效挑战令牌，因此此自动化测试应使用未配置挑战密钥的隔离环境。
+测试实际调用本站原登录、风铃业务 API 与话题 SSR，创建专用测试话题，验证投稿、已读、收藏、审核、批量、归档、恢复、屏蔽和公开数据边界。0.7.0 脚本会用管理员会话创建临时站点授权并启用关键词以测试旧分类，最后恢复原开关和词库、撤销临时授权并清理测试话题。只有 localhost 可运行；启用 Turnstile 的服务器需要有效挑战令牌，因此此自动化测试应使用未配置挑战密钥的隔离环境。
 
 风铃通用 API、从零接入示例、打包和版本升级说明见 [WindChime 仓库文档](https://github.com/Morphling0717/WindChime)。新站开发者应以风铃独立示例开始，无需复制本站业务文件。
 
@@ -84,9 +89,11 @@ MAIL_SMOKE_BASE_URL=http://localhost:3011 MAIL_SMOKE_PASSWORD=你的本地测试
 docker compose --env-file .env build website
 ```
 
-改变 `NEXT_PUBLIC_TURNSTILE_SITE_KEY` 后必须重新构建；只更改容器环境不会改变已编译客户端。本次已在外接 SSD 实际构建并运行 `linux/amd64` 镜像，Linux SQLite、API、旧库迁移及重启持久化通过。独立构建命令：`docker build --platform linux/amd64 -t windchime-test/uliuli:0.5.0 .`。
+改变 `NEXT_PUBLIC_TURNSTILE_SITE_KEY` 后必须重新构建；只更改容器环境不会改变已编译客户端。独立构建命令：`docker build --platform linux/amd64 -t windchime-test/uliuli:0.8.0 .`。Docker 构建内含首页动态路由保护检查；镜像构建成功后仍需在隔离数据副本验证，不能直接把历史 Docker 测试当作本次结果。
 
-## 本次固定包复核（2026-09-09）
+## 历史固定包复核：0.5.0（2026-09-09）
+
+以下记录保留原日期、版本和结果，仅描述当时 0.5.0 的验证，不是当前 0.8.2 验收或部署证明。当时曾在外接 SSD 构建并运行 `linux/amd64` 镜像。
 
 最终 `vendor/windchime-embed-0.5.0.tgz` SHA-256：
 

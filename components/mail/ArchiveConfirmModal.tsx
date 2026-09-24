@@ -13,6 +13,7 @@ type Props = {
   onMarkReadThenArchive: () => void;
   onArchiveAnyway: () => void;
   busy?: boolean;
+  blockedTermsEnabled?: boolean;
   error?: string | null;
 };
 
@@ -34,6 +35,7 @@ export function ArchiveConfirmModal({
   onMarkReadThenArchive,
   onArchiveAnyway,
   busy,
+  blockedTermsEnabled = false,
   error,
 }: Props) {
   // ESC 取消
@@ -49,7 +51,7 @@ export function ArchiveConfirmModal({
   if (typeof document === "undefined") return null;
 
   const unread = topic?.unreadCount ?? 0;
-  const flagged = topic?.flaggedCount ?? 0;
+  const flagged = blockedTermsEnabled ? (topic?.flaggedCount ?? 0) : 0;
 
   return createPortal(
     <AnimatePresence>
@@ -115,7 +117,7 @@ export function ArchiveConfirmModal({
               >
                 <div className="font-bold text-cyan-200">✓ 先标为已读再归档</div>
                 <div className="mt-1 text-[11px] text-cyan-300/70">
-                  先标记普通未读信件，再归档；待审核信件保留原状态
+                  {blockedTermsEnabled ? "先标记普通未读信件，再归档；待审核信件保留原状态" : "先标记当前话题的未读信件，再归档"}
                 </div>
               </button>
               <button

@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "targetHead": "b858739f42a53daea7313a7b4b4dc4393b179479",
+  "imageId": "sha256:4fd822740c7b96de23996f4fe0f0c1da342d5b1a474ab114fe92f14a9ce04150",
+  "oldImage": "sha256:038d370fcb95f75b6493a429bfdae89a575719f0e18d1a173140410c27a3df65",
+  "newLayoutsSavedByHttp": [
+    "stack",
+    "split",
+    "banner",
+    "sidebar",
+    "portrait",
+    "focus"
+  ],
+  "projection": {
+    "channels": 6,
+    "onlyFieldsChanged": [
+      "appearance",
+      "current_snapshot",
+      "revision",
+      "activation"
+    ],
+    "originalAppearancePreserved": true,
+    "currentOutputCleared": true,
+    "allOtherDataPreserved": true
+  },
+  "oldControlAndDisplayHttpPassed": true,
+  "initialOutputBlank": true,
+  "approvalRetained": true,
+  "httpRequests": 36,
+  "productionDatabaseUntouched": true,
+  "redactedFields": [],
+  "evidenceCopy": "Public result summary; omitted operational counts and synthetic identifiers are retained only in the original local evidence."
+}

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { createWindChimeClient } from "@windchime/embed/client";
+import { randomUUID } from "node:crypto";
+import { createWindChimeClient, createWindChimeLiveClient, createWindChimeDisplayClient } from "@windchime/embed/client";
 
 // Run only against a disposable local database, after starting the website.
 const base = process.env.MAIL_SMOKE_BASE_URL || "http://localhost:3011";
@@ -48,9 +49,14 @@ assert(
 const suffix = `${Date.now()}`;
 const secretNote = `PRIVATE-NOTE-${suffix}`;
 const termsBefore = (await admin.blockedTerms.get()).terms;
+const keywordBefore = (await admin.settings.get()).blockedTermsEnabled === true;
+const liveAdmin = createWindChimeLiveClient({ baseUrl: `${base}/api/mail/live`, getHeaders: () => ({ cookie: cookies }) });
+const grant = await liveAdmin.createSiteGrant(`isolated-mail-regression-${suffix}`);
+const desktop = createWindChimeLiveClient({ baseUrl: `${base}/api/mail/live`, getHeaders: () => ({ authorization: `Bearer ${grant.token}` }) });
 const created = [];
 const blocked = [];
 try {
+  await desktop.settings.setBlockedTermsEnabled(true);
   const topicA = await admin.topics.create({
     slug: `smoke-a-${suffix}`,
     title: "Smoke A",
@@ -62,6 +68,27 @@ try {
     title: "Smoke B",
   });
   created.push(topicB.id);
+  let liveState = await desktop.state(topicA.id);
+  assert.equal(liveState.appearance.imageHeightPercent, 45, "0.8 fixed-media support is supplied by the site");
+  for (const layout of ["stack", "split", "banner", "sidebar", "portrait", "focus"]) {
+    liveState = await desktop.action({
+      action: "appearance", topicId: topicA.id, expectedRevision: liveState.revision,
+      operationId: randomUUID(), appearance: { layout, theme: "mia", imageHeightPercent: 55, maxWidth: 280, viewportHeight: 1080 },
+    });
+    assert.equal(liveState.appearance.layout, layout);
+    assert.equal(liveState.appearance.theme, "mia");
+    assert.equal(liveState.appearance.imageHeightPercent, 55);
+    assert.equal(liveState.appearance.maxWidth, 280, "narrow layouts keep the exact saved width");
+    assert.equal(liveState.appearance.viewportHeight, 1080, "portrait layouts keep the exact saved height");
+    assert.equal(liveState.current, null, "appearance updates never start output");
+  }
+  assert.deepEqual((await liveAdmin.state(topicA.id)).appearance, liveState.appearance, "website and desktop read the same saved appearance");
+  await assert.rejects(desktop.action({
+    action: "appearance", topicId: topicA.id, expectedRevision: liveState.revision,
+    operationId: randomUUID(), appearance: { imageHeightPercent: 71 },
+  }), error => error.code === "INVALID_APPEARANCE");
+  assert.equal((await desktop.state(topicA.id)).revision, liveState.revision, "invalid media settings are rejected atomically");
+  console.log("Next_UliUli: 0.8 six layouts, fixed image allocation, shared state and no automatic output passed.");
   const publicTopics = await publicClient.topics.list();
   for (const topic of publicTopics.items)
     for (const field of ["note", "unreadCount", "flaggedCount"])
@@ -88,6 +115,86 @@ try {
   });
   const normal = (await admin.messages.list({ topicId: topicA.id })).items[0];
   assert(normal);
+  // Validate the actual website handler, not only an in-process mock service.
+  const displayGrant = await desktop.createGrant(topicA.id, "display", "isolated-output");
+  const display = createWindChimeDisplayClient({ baseUrl: `${base}/api/mail/live`, token: displayGrant.token });
+  const firstReceiver = await display.open();
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot, null);
+  const liveAction = async (action, extra = {}) => {
+    const current = await desktop.state(topicA.id);
+    const selected = current.messages.find(item => item.id === normal.id);
+    return desktop.action({
+      topicId: topicA.id, action, messageId: normal.id, expectedRevision: current.revision,
+      expectedDraftRevision: selected.draftRevision, operationId: randomUUID(), ...extra,
+    });
+  };
+  await assert.rejects(liveAction("show"), error => error.code === "NOT_APPROVED");
+  const approved = await liveAction("approve");
+  assert(approved.queue.includes(normal.id));
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot, null, "approval alone never plays");
+  await liveAction("show");
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot.messageId, normal.id);
+  const prepared = await desktop.state(topicA.id);
+  const delayedShow = {
+    topicId: topicA.id, action: "show", messageId: normal.id,
+    expectedRevision: prepared.revision, operationId: randomUUID(),
+  };
+  const reopened = await display.open();
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "reopening starts blank");
+  await assert.rejects(desktop.action(delayedShow), error => error.code === "REVISION_CONFLICT", "pre-handshake show request is stale");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "late request cannot activate a new window");
+  assert.equal((await display.frame(firstReceiver.receiverId)).snapshot.messageId, normal.id, "an existing healthy viewer continues");
+  await liveAction("show");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot.messageId, normal.id, "fresh manual show activates the new window");
+  await liveAction("hide");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await liveAction("show");
+  await liveAction("revoke");
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "revoking withdraws current output");
+  await liveAction("approve");
+  await liveAction("show");
+  const beforeEdit = (await desktop.state(topicA.id)).messages.find(item => item.id === normal.id);
+  await liveAction("draft", { draft: { ...beforeEdit.draft, nickname: "Reviewed nickname changed" } });
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "editing approved content withdraws it");
+  await assert.rejects(liveAction("show"), error => error.code === "NOT_APPROVED");
+  for (const text of ["Queue B", "Queue C"]) await publicClient.messages.submit({
+    topicSlug: topicA.slug, text, senderFingerprint: `${text}-${suffix}`,
+  });
+  const queueMessages = (await admin.messages.list({ topicId: topicA.id })).items;
+  const queueB = queueMessages.find(item => item.text === "Queue B"), queueC = queueMessages.find(item => item.text === "Queue C");
+  assert(queueB && queueC);
+  const queueAction = async (action, messageId, extra = {}) => {
+    const current = await desktop.state(topicA.id), selected = current.messages.find(item => item.id === messageId);
+    return desktop.action({ topicId: topicA.id, action, messageId, expectedRevision: current.revision,
+      expectedDraftRevision: selected?.draftRevision, operationId: randomUUID(), ...extra });
+  };
+  for (const id of [normal.id, queueB.id, queueC.id]) await queueAction("approve", id);
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "reapproval only queues");
+  await queueAction("show", normal.id);
+  const beforeUnrelatedDelete = await display.frame(reopened.receiverId);
+  await admin.messages.delete(queueC.id, { topicId: topicA.id });
+  const afterUnrelatedDelete = await display.frame(reopened.receiverId);
+  assert.deepEqual(afterUnrelatedDelete.snapshot, beforeUnrelatedDelete.snapshot, "deleting another letter preserves current output");
+  assert.equal(afterUnrelatedDelete.activation, beforeUnrelatedDelete.activation);
+  await queueAction("show", queueB.id); await queueAction("revoke", queueB.id);
+  assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await queueAction("next"); assert.equal((await display.frame(reopened.receiverId)).snapshot, null, "removing the last shown letter must not replay the first");
+  await queueAction("approve", queueB.id); assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await queueAction("reorder", undefined, { order: [queueB.id, normal.id] });
+  await queueAction("show", normal.id); await admin.messages.delete(queueB.id, { topicId: topicA.id });
+  assert.equal((await display.frame(reopened.receiverId)).snapshot.messageId, normal.id);
+  await queueAction("next"); assert.equal((await display.frame(reopened.receiverId)).snapshot, null);
+  await queueAction("show", normal.id);
+  console.log("0.8.2 HTTP: unrelated deletion preserves output; removed tail, reordered cursor and reapproval never wrap or autoplay.");
+  assert.equal((await admin.messages.detail(normal.id, { topicId: topicA.id })).isRead, false, "broadcast does not change original read state");
+  const displayAsControl = createWindChimeLiveClient({
+    baseUrl: `${base}/api/mail/live`, getHeaders: () => ({ authorization: `Bearer ${displayGrant.token}` }),
+  });
+  await assert.rejects(displayAsControl.state(topicA.id), error => error.status === 401);
+  await assert.rejects(desktop.messages.get(topicB.id, normal.id), error => error.status === 404);
+  await desktop.revokeGrant(topicA.id, displayGrant.id);
+  await assert.rejects(display.frame(reopened.receiverId), error => error.status === 401 || error.status === 403);
+  console.log("0.8.1 HTTP: approval/manual output, handshake conflicts, hide/revoke/edit withdrawal and read-only/topic isolation passed.");
   const flagged = (
     await admin.messages.list({ topicId: topicB.id, filter: "flagged" })
   ).items[0];
@@ -179,6 +286,8 @@ try {
     "Next_UliUli: original session + legacy auth, public DTO/SSR privacy, submission, inbox filters, topic isolation, favorite, archive/restore, review, batches, block/unblock and settings passed.",
   );
 } finally {
+  await desktop.settings.setBlockedTermsEnabled(keywordBefore);
+  await liveAdmin.revokeGrant(undefined, grant.id);
   await admin.blockedTerms.set(termsBefore);
   for (const hash of blocked) await admin.blocklist.unblock(hash);
   for (const id of created) {

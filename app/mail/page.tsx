@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -8,11 +8,12 @@ import {
   PencilLine,
   Power,
 } from "lucide-react";
-import { useWindChimeTopics, useWindChimePosterConfig } from '@windchime/embed/react';
+import { useWindChimeTopics, useWindChimePosterConfig, useWindChimeSettings } from '@windchime/embed/react';
 import { mailClient } from '@/lib/windchime-client';
 import { MailInbox } from '@/components/mail/MailInbox';
 import { MailBlocklist } from '@/components/mail/MailBlocklist';
 import { MailShare } from '@/components/mail/MailShare';
+import { MailConnectionKeys } from '@/components/mail/MailConnectionKeys';
 import { BlockedTermsPanel } from "@/components/mail/BlockedTermsPanel";
 import {
   FlaggedMailPanel,
@@ -73,9 +74,9 @@ export default function MailPage() {
   };
 
   const onLogout = async () => {
-    await fetch("/api/mail/session", { method: "DELETE" }).catch(() => {});
     setAuthenticated(false);
     setPwdInput("");
+    await fetch("/api/mail/session", { method: "DELETE" }).catch(() => {});
   };
 
   return (
@@ -191,8 +192,10 @@ function MailContent({
 }: {
   onUnauthorized: () => void;
 }) {
-  const topicsApi = useWindChimeTopics(mailClient, {includeArchived: false});
-  const topics = topicsApi.items;
+  const settings = useWindChimeSettings(mailClient, {pollIntervalMs: 3000});
+  const blockedTermsEnabled = settings.data?.blockedTermsEnabled === true;
+  const topicsApi = useWindChimeTopics(mailClient, {includeArchived: false, pollIntervalMs: 3000});
+  const topics = topicsApi.items.map(topic => blockedTermsEnabled ? topic : {...topic, flaggedCount: 0});
   const [selectedTopicId, setActiveTopicId] = useState('default');
   const activeTopicId = topics.length && !topics.some(t=>t.id===selectedTopicId) ? 'default' : selectedTopicId;
   const [showNewTopicModal, setShowNewTopicModal] = useState(false);
@@ -207,6 +210,11 @@ function MailContent({
   const enabledSaving = topicsApi.pending;
   const enabledError = topicsApi.mutationError?.message;
   const archiveBusy = topicsApi.pending;
+
+  useEffect(() => {
+    const topic = new URLSearchParams(window.location.search).get('topicId');
+    if (topic && topic.length <= 200) queueMicrotask(() => setActiveTopicId(topic));
+  }, []);
 
   useEffect(() => {
     window.addEventListener('mail:unauthorized', onUnauthorized);
@@ -233,7 +241,7 @@ function MailContent({
     else void performArchive(topic, false);
   };
 
-  const onCopyShareLink = useCallback(async () => {
+  const onCopyShareLink = async () => {
     if (!activeTopic) return;
     const origin = window.location.origin;
     const url = activeTopic.isDefault
@@ -246,7 +254,7 @@ function MailContent({
     } catch {
       alert(`请手动复制：${url}`);
     }
-  }, [activeTopic]);
+  };
 
   const shareUrl =
     activeTopic && typeof window !== "undefined"
@@ -304,6 +312,7 @@ function MailContent({
       {/* 主题 Tab 栏（方案 §6.1） */}
       <section>
         <MailTopicTabs
+        showGlobalSettings={blockedTermsEnabled}
           topics={topics}
           activeTopicId={activeTopicId}
           onSwitch={setActiveTopicId}
@@ -439,15 +448,17 @@ function MailContent({
         </div>
       </section>
 
+      <MailConnectionKeys topicId={activeTopicId} topicTitle={activeTopic?.title} />
+      {settings.error ? <p role="alert">设置同步失败：{settings.error.message}</p> : null}
       {/* 收件箱（跟随当前主题） */}
       <section>
         <MailInbox topicId={activeTopicId} title={inboxTitle} emptyText={activeTopic?.isDefault ? '暂无来信。' : '该主题暂无来信。'} />
       </section>
 
       {/* 待审核（命中敏感词的留言，默认折叠，点击查看原文） */}
-      <section>
+      {blockedTermsEnabled ? <section>
         <FlaggedMailPanel key={activeTopicId} topicId={activeTopicId} />
-      </section>
+      </section> : null}
 
       {/* 黑名单（全局，跨主题共享） */}
       <section>
@@ -478,9 +489,9 @@ function MailContent({
       )}
 
       {/* 全局设置：敏感词（跨主题共享，低频配置） */}
-      <section id="global-settings">
+      {blockedTermsEnabled ? <section id="global-settings">
         <BlockedTermsPanel />
-      </section>
+      </section> : null}
 
       {/* ===== 模态 / 抽屉 ===== */}
       <NewTopicModal
@@ -504,6 +515,7 @@ function MailContent({
         onRestored={onRestoredTopic}
       />
       <ArchiveConfirmModal
+        blockedTermsEnabled={blockedTermsEnabled}
         open={!!archiveConfirmTopic}
         topic={archiveConfirmTopic}
         busy={archiveBusy}

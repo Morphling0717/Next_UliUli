@@ -4,7 +4,7 @@ import { mailClient } from "@/lib/windchime-client";
 import { mailBlocklistTheme as t } from "./mail-theme";
 import { formatBeijing } from "./mail-time";
 export function MailBlocklist() {
-  const list = useWindChimeBlocklist(mailClient);
+  const list = useWindChimeBlocklist(mailClient, { pollIntervalMs: 3000 });
   return (
     <div className={t.root}>
       <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

@@ -1,0 +1,2 @@
+Next_UliUli: 0.8 six layouts, fixed image allocation, shared state and no automatic output passed.
+Next_UliUli: original session + legacy auth, public DTO/SSR privacy, submission, inbox filters, topic isolation, favorite, archive/restore, review, batches, block/unblock and settings passed.

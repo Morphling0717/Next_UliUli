@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 // 锁定项目根目录，避免 Turbopack 在带非 ASCII 字符的路径（例如 "网页开发"）下
 // 错误地把父目录当作 workspace 根，从而导致 `tailwindcss` 等依赖解析失败。
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const buildDirectory = process.env.WINDCHIME_BUILD_DIRECTORY?.trim() || ".next";
+if (buildDirectory !== ".next" && !/^\.windchime-[A-Za-z0-9_-]+$/.test(buildDirectory)) {
+  throw new Error("WINDCHIME_BUILD_DIRECTORY must be .next or one relative .windchime-* directory");
+}
 
 // Public files do not receive content hashes from Next.js. Give every build a
 // fresh asset version so changed images cannot be hidden by a browser or PWA cache.
@@ -12,8 +16,9 @@ const assetVersion = process.env.NEXT_PUBLIC_ASSET_VERSION?.trim() || Date.now()
 process.env.NEXT_PUBLIC_ASSET_VERSION = assetVersion;
 
 const nextConfig: NextConfig = {
+  distDir: buildDirectory,
   transpilePackages: ["@windchime/embed"],
-  serverExternalPackages: ["sqlite3"],
+  serverExternalPackages: ["sqlite3", "sharp"],
   env: {
     NEXT_PUBLIC_ASSET_VERSION: assetVersion,
   },

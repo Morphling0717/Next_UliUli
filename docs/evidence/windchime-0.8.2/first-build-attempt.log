@@ -1,0 +1,33 @@
+▲ Next.js 16.2.12 (Turbopack)
+- Experiments (use with caution):
+  · turbopackPluginRuntimeStrategy: "workerThreads"
+
+  Creating an optimized production build ...
+Turbopack build encountered 1 warnings:
+./next.config.ts
+Encountered unexpected file in NFT list
+A file was traced that indicates that the whole project was traced unintentionally. Somewhere in the import trace below, there are:
+- filesystem operations (like path.join, path.resolve or fs.readFile), or
+- very dynamic requires (like require('./' + foo)).
+To resolve this, you can
+- remove them if possible, or
+- only use them in development, or
+- make sure they are statically scoped to some subfolder: path.join(process.cwd(), 'data', bar), or
+- add ignore comments: path.join(/*turbopackIgnore: true*/ process.cwd(), bar)
+
+Import trace:
+  App Route:
+    ./next.config.ts
+    ./lib/windchime-live.ts
+    ./app/api/mail/live/[...path]/route.ts
+
+
+✓ Compiled successfully in 4.7s
+  Running TypeScript ...
+
+  We detected TypeScript in your project and reconfigured your tsconfig.json file for you.
+  The following suggested values were added to your tsconfig.json. These values can be changed to fit your project's needs:
+
+  	- include was updated to add '.windchime-v082-validation/types/**/*.ts'
+  	- include was updated to add '.windchime-v082-validation/dev/types/**/*.ts'
+

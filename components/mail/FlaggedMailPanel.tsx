@@ -23,7 +23,7 @@ function safeHost(raw: string | null | undefined): string {
  * 后台列表默认页就被敏感词糊脸（比如直播时不小心拉到了后台）。
  */
 export function FlaggedMailPanel({topicId = 'default'}: {topicId?: string}) {
-  const review = useWindChimeReview(mailClient, {topicId});
+  const review = useWindChimeReview(mailClient, {topicId, pollIntervalMs: 3000});
   const {closeDetail} = review;
   const flagged = review.items;
   const [openId, setOpenId] = useState<string | null>(null);

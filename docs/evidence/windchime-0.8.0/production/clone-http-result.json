@@ -1,0 +1,80 @@
+{
+  "passed": true,
+  "targetHead": "b858739f42a53daea7313a7b4b4dc4393b179479",
+  "imageId": "sha256:4fd822740c7b96de23996f4fe0f0c1da342d5b1a474ab114fe92f14a9ce04150",
+  "checks": [
+    {
+      "path": "/api/health",
+      "status": 200
+    },
+    {
+      "path": "/api/mail/live/capabilities",
+      "status": 200
+    },
+    {
+      "path": "/mail",
+      "status": 200
+    },
+    {
+      "path": "/",
+      "status": 200
+    },
+    {
+      "path": "/app",
+      "status": 200
+    },
+    {
+      "path": "/api/mail/live/control/identity",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/topics",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/messages",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/settings",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/blocklist",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/blocked-terms",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/grants",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/share",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/control/state?topicId=default",
+      "status": 401
+    },
+    {
+      "path": "/api/mail/live/display/frame?receiverId=probe",
+      "status": 401
+    },
+    {
+      "path": "/mail/live",
+      "status": 307
+    }
+  ],
+  "titles": {
+    "/": "丝瓜Uli | UliUli 主站",
+    "/app": "UliUli App Hub"
+  },
+  "resourcesVerified": 200,
+  "redactedFields": [
+    "cloneName"
+  ],
+  "evidenceCopy": "Public result summary; omitted operational counts and synthetic identifiers are retained only in the original local evidence."
+}

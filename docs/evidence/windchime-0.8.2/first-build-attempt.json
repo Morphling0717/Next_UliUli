@@ -1,0 +1,25 @@
+{
+  "site": "Next_UliUli",
+  "node": "v20.20.2",
+  "startedAt": "2026-09-19T22:23:51.514Z",
+  "buildDirectory": ".windchime-v082-validation",
+  "steps": [
+    {
+      "name": "migrations",
+      "exitCode": 0
+    },
+    {
+      "name": "build",
+      "exitCode": 3221225477
+    }
+  ],
+  "passed": false,
+  "error": "Next_UliUli build failed: 3221225477",
+  "finishedAt": "2026-09-19T22:24:00.811Z",
+  "package": {
+    "version": "0.8.2",
+    "sha256": "53ecc86171136ec4c4881f5db5841f5c87c284d3f600939852588e5b81bd846d",
+    "integrity": "sha512-VhIplPmw+VadMdRYPasjN5LdEyzEl1nW6piCu1EnZkiUFZfz0TzE3KzQr4vgPgCHzF1j6tFGGqtIeE3L7g91gQ=="
+  },
+  "classification": "Windows process exited 0xC0000005 after compile, during TypeScript; no TypeScript diagnostic was printed. Same-source sequential retry passed."
+}

@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "site": "Next_UliUli",
+  "baseCommit": "c0956f7f58ca40246dda5d7853120ed55e6ab917",
+  "dependencyChangesTested": true,
+  "reviewBaseMain": "1288e3d508407699a10605bef1ccfe6dea78d26a",
+  "sharedVersion": "0.8.3",
+  "packageSha256": "a79abe42607b314f932f32618722528079842b59588e01cabf883936f8ae28f3",
+  "isolatedGitWorktree": true,
+  "isolatedDependencies": true,
+  "isolatedDatabase": true,
+  "environmentFilesCopied": false,
+  "steps": [
+    {
+      "name": "migrations",
+      "exitCode": 0
+    },
+    {
+      "name": "build",
+      "exitCode": 0
+    },
+    {
+      "name": "routes",
+      "exitCode": 0
+    },
+    {
+      "name": "mail",
+      "exitCode": 0
+    }
+  ],
+  "extraChecks": [
+    {
+      "label": "Original HTTP login issues authenticated HttpOnly session",
+      "passed": true
+    },
+    {
+      "label": "Legacy route redirects only allowed pairing/topic parameters",
+      "passed": true
+    },
+    {
+      "label": "Locally served service worker bypasses private mail, live and API requests (VM)",
+      "passed": true
+    },
+    {
+      "label": "Site key identity comes from server; derived display opens blank",
+      "passed": true
+    },
+    {
+      "label": "Admin Cookie cannot expand a supplied display Bearer into management access",
+      "passed": true
+    },
+    {
+      "label": "Cross-origin Cookie cannot issue management credentials",
+      "passed": true
+    },
+    {
+      "label": "Desktop control key cannot issue new management credentials",
+      "passed": true
+    },
+    {
+      "label": "Live management response is no-store",
+      "passed": true
+    },
+    {
+      "label": "Revoking site key invalidates control and derived display credentials",
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "sourceFiles": {
+    "package.json": "d711da874781ca1d03c0eaffd94cf99fff3614886c749d735ceb58aa9ce92d52",
+    "package-lock.json": "da4e21438ab93f768da396caeafa69f51e4f7d46ec486a350b362f91475fb4d5",
+    "vendor/windchime-embed-0.8.3-c4efb3dd2d7dab7fa432bc29350f0b3ed74b6a58.tgz": "a79abe42607b314f932f32618722528079842b59588e01cabf883936f8ae28f3"
+  },
+  "isolatedServerStopped": true,
+  "sharedSourceCommit": "c4efb3dd2d7dab7fa432bc29350f0b3ed74b6a58",
+  "artifact": {
+    "name": "windchime-embed-0.8.3-c4efb3dd2d7dab7fa432bc29350f0b3ed74b6a58.tgz",
+    "bytes": 54912376,
+    "sha256": "a79abe42607b314f932f32618722528079842b59588e01cabf883936f8ae28f3"
+  },
+  "startedAt": "2026-09-23T17:50:50.735Z",
+  "finishedAt": "2026-09-23T17:52:43.925Z",
+  "node": "v20.20.2",
+  "npm": "10.9.8",
+  "platform": "win32",
+  "arch": "x64",
+  "commands": [
+    "npm ci --no-audit --no-fund",
+    "node scripts/test-mail-migrations.cjs (fresh/legacy/current, each twice)",
+    "node node_modules/next/dist/bin/next build",
+    "node scripts/verify-build-routes.cjs",
+    "node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3181|3182",
+    "node scripts/test-mail.mjs",
+    "Authenticated cross-site HTTP checks; service-worker exclusion checks in VM"
+  ],
+  "crossSiteChecks": [
+    {
+      "from": "Next_UliUli",
+      "to": "Next_Mia",
+      "managementBearerDenied": true,
+      "displayBearerDenied": true,
+      "otherSiteCookieDenied": true
+    },
+    {
+      "from": "Next_Mia",
+      "to": "Next_UliUli",
+      "managementBearerDenied": true,
+      "displayBearerDenied": true,
+      "otherSiteCookieDenied": true
+    }
+  ],
+  "dependencyInstall": {
+    "site": "Next_UliUli",
+    "baseCommit": "c0956f7f58ca40246dda5d7853120ed55e6ab917",
+    "isolatedWorktree": true,
+    "environmentFilesCopied": false,
+    "oldTarballPreserved": true,
+    "checksumEntriesAdded": [
+      "windchime-embed-0.8.1.tgz",
+      "windchime-embed-0.8.2.tgz",
+      "windchime-embed-0.8.3-c4efb3dd2d7dab7fa432bc29350f0b3ed74b6a58.tgz",
+      "windchime-embed-0.8.3.tgz"
+    ],
+    "steps": [
+      {
+        "name": "scoped-lock",
+        "passed": true
+      },
+      {
+        "name": "npm-ci",
+        "passed": true
+      }
+    ],
+    "unrelatedLockEntriesUnchanged": true,
+    "lockfileChangeRestrictedToTarball": true
+  },
+  "originalTsconfigSha256": "dd75b2ef28fc05eba3dc1cb6feb2eebfb249e976a891fe9255bdb8dd73492d67",
+  "environmentPolicy": {
+    "freshTemporarySQLiteAndMedia": true,
+    "syntheticCredentialsOnly": true,
+    "noProductionEnvironmentCopied": true,
+    "originalNodeModulesUnused": true,
+    "originalWorktreesUnmodified": true,
+    "loopbackServersStopped": true
+  },
+  "priorResultsReused": false,
+  "productionDeploymentPerformed": false,
+  "limitations": [
+    "Production servers and real databases were not accessed",
+    "HTTP login checks are not a graphical browser interaction test",
+    "Service-worker fetch guard tested in a VM; no browser offline-cache claim"
+  ],
+  "warnings": [
+    "Next build retains broad NFT tracing and Edge static-generation warnings.",
+    "Build rewrote only the isolated tsconfig includes; the exact original isolated file was restored.",
+    "Initial npm lock generation rewrote unrelated optional dependency metadata in UliUli. Those changes were rejected and restored from baseline; the scoped lock and both clean npm ci runs then passed."
+  ],
+  "fileHashes": {
+    "package.json": "d711da874781ca1d03c0eaffd94cf99fff3614886c749d735ceb58aa9ce92d52",
+    "package-lock.json": "da4e21438ab93f768da396caeafa69f51e4f7d46ec486a350b362f91475fb4d5",
+    "vendor/windchime-embed-0.8.3-c4efb3dd2d7dab7fa432bc29350f0b3ed74b6a58.tgz": "a79abe42607b314f932f32618722528079842b59588e01cabf883936f8ae28f3",
+    "vendor/SHA256SUMS": "af1f8af15f9ad6dcbfbf4fb8449c8a07e41303a5b0ac9cec467fc4b8811340c4"
+  },
+  "publishedLogsSanitized": "Local paths and fixture credential patterns redacted; ANSI escapes removed; line endings and whitespace normalized. Original logs remain in ignored local evidence."
+}
