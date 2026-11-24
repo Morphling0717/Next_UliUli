@@ -2,6 +2,7 @@
 
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import type { SiteConfig } from '@/app/admin/types';
+import { DEFAULT_SITE_CONFIG } from '@/lib/site-config';
 
 type WindowWithSiteConfig = Window & typeof globalThis & {
   SITE_CONFIG?: SiteConfig;
@@ -9,6 +10,7 @@ type WindowWithSiteConfig = Window & typeof globalThis & {
 
 interface ErrorBoundaryProps {
   children: ReactNode;
+  config?: SiteConfig;
 }
 
 interface ErrorBoundaryState {
@@ -35,17 +37,18 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   }
 
   render() {
-    const errorCfg =
-      typeof window !== "undefined" ? (window as WindowWithSiteConfig).SITE_CONFIG?.errors || {} : {};
+    const windowErrors =
+      typeof window !== "undefined" ? (window as WindowWithSiteConfig).SITE_CONFIG?.errors : undefined;
+    const errorCfg = this.props.config?.errors || windowErrors || DEFAULT_SITE_CONFIG.errors;
     if (this.state.hasError) {
       return (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-slate-900/90 backdrop-blur p-10 text-white">
           <div className="max-w-2xl w-full bg-red-900/30 border border-red-500/50 rounded-xl p-8 shadow-2xl">
             <h2 className="text-2xl font-bold text-red-400 mb-4 flex items-center gap-2">
-              {errorCfg.title || "⚠ 页面遇到了一点小故障 (Page Crashed)"}
+              {errorCfg.title || DEFAULT_SITE_CONFIG.errors.title}
             </h2>
             <p className="mb-4 text-gray-300">
-              {errorCfg.message || "请不用担心，这是一个程序错误，不是你的问题。"}
+              {errorCfg.message || DEFAULT_SITE_CONFIG.errors.message}
             </p>
             <div className="bg-black/50 p-4 rounded text-sm font-mono text-red-200 overflow-auto max-h-64 mb-6">
               {this.state.error && this.state.error.toString()}
@@ -56,7 +59,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
               onClick={() => window.location.reload()} 
               className="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-lg font-bold transition-colors cursor-pointer"
             >
-              {errorCfg.retryText || "刷新页面重试"}
+              {errorCfg.retryText || DEFAULT_SITE_CONFIG.errors.retryText}
             </button>
           </div>
         </div>

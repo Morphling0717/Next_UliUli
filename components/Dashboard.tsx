@@ -282,17 +282,23 @@ const ModelBreakdown: React.FC<{ avatarSrc: string; onAvatarClick: () => void; c
                   {"/// "} {info.label}
                 </div>
                 <h3 className="text-sm md:text-2xl font-bold font-serif text-white italic text-center lg:text-left leading-tight">
-                  {info.val.map((item: CreditItem, i: number) => (
-                    <a
-                      key={i}
-                      href={item.link}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block hover:text-(--neon-blue) transition-colors cursor-pointer"
-                    >
-                      {item.name}
-                    </a>
-                  ))}
+                  {info.val.map((item: CreditItem, i: number) =>
+                    item.link?.trim() ? (
+                      <a
+                        key={i}
+                        href={item.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block hover:text-(--neon-blue) transition-colors cursor-pointer"
+                      >
+                        {item.name}
+                      </a>
+                    ) : (
+                      <span key={i} className="block">
+                        {item.name}
+                      </span>
+                    ),
+                  )}
                 </h3>
               </div>
             ))}

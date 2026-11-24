@@ -3,11 +3,16 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { RefreshCw, Sparkles } from "lucide-react";
+import { DEFAULT_SITE_CONFIG, type EditableSiteConfig } from "@/lib/site-config";
 
 const ASSET_VERSION = process.env.NEXT_PUBLIC_ASSET_VERSION || "dev";
 const SERVICE_WORKER_URL = `/sw.js?v=${encodeURIComponent(ASSET_VERSION)}`;
 
-export function PwaUpdateBanner() {
+type PwaUpdateBannerProps = {
+  texts?: EditableSiteConfig["pwa"];
+};
+
+export function PwaUpdateBanner({ texts = DEFAULT_SITE_CONFIG.pwa }: PwaUpdateBannerProps) {
   const [updateReady, setUpdateReady] = useState(false);
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -111,9 +116,9 @@ export function PwaUpdateBanner() {
               <Sparkles className="h-4 w-4" />
             </div>
             <div className="pwa-update-copy flex-1 min-w-0">
-              <div className="text-sm font-semibold text-white">发现新版本</div>
+              <div className="text-sm font-semibold text-white">{texts.updateTitle}</div>
               <div className="pwa-update-description mt-0.5 hidden text-[11px] leading-snug text-gray-400 sm:block">
-                点击立即应用，无需重装
+                {texts.updateDescription}
               </div>
             </div>
             <button
@@ -124,7 +129,7 @@ export function PwaUpdateBanner() {
               className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-full bg-cyan-400 px-3 py-2 text-xs font-semibold text-black transition hover:bg-white active:scale-[0.96]"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              <span className="pwa-update-button-label">更新</span>
+              <span className="pwa-update-button-label">{texts.updateButton}</span>
             </button>
           </div>
         </div>

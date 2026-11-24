@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { Download, Share2, X, PlusSquare } from "lucide-react";
+import { DEFAULT_SITE_CONFIG, type EditableSiteConfig } from "@/lib/site-config";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -57,7 +58,11 @@ function detectIosDevice(): boolean {
   return /iPad|iPhone|iPod/.test(ua) || (platform === "MacIntel" && window.navigator.maxTouchPoints > 1);
 }
 
-export function PwaInstallGate() {
+type PwaInstallGateProps = {
+  texts?: EditableSiteConfig["pwa"];
+};
+
+export function PwaInstallGate({ texts = DEFAULT_SITE_CONFIG.pwa }: PwaInstallGateProps) {
   const pathname = usePathname();
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
@@ -177,12 +182,12 @@ export function PwaInstallGate() {
             {/* 文字信息 */}
             <div className="flex-1 pt-1">
               <h3 className="text-[15px] font-semibold leading-tight text-white tracking-wide">
-                获取 UliUli App
+                {texts.installTitle}
               </h3>
               <p className="mt-1 text-[12px] leading-relaxed text-gray-400">
                 {deferredPrompt
-                  ? "丝滑沉浸体验，直接添加至桌面"
-                  : "在 Safari 点击分享并添加到主屏幕"}
+                  ? texts.installDescription
+                  : texts.installIosDescription}
               </p>
             </div>
 
@@ -203,14 +208,14 @@ export function PwaInstallGate() {
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 py-3 text-[14px] font-semibold text-black transition-transform hover:bg-cyan-400 active:scale-[0.98]"
               >
                 <Download className="h-4 w-4" />
-                立即安装
+                {texts.installButton}
               </button>
             ) : (
               <div className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 py-3 text-[13px] font-medium text-gray-300">
-                <span>1. 底部点击</span>
+                <span>{texts.iosStepOne}</span>
                 <Share2 className="h-4 w-4 text-cyan-400" />
                 <span className="mx-1 opacity-50">|</span>
-                <span>2. 选择</span>
+                <span>{texts.iosStepTwo}</span>
                 <PlusSquare className="h-4 w-4 text-cyan-400" />
               </div>
             )}

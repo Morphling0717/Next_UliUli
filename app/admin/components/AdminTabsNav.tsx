@@ -16,6 +16,7 @@ const TABS: Array<{ id: AdminTabId; label: string; icon?: "lock" | "folder" }> =
   { id: "games", label: "游戏弹窗 (Games)" },
   { id: "footer", label: "底部 (Footer)" },
   { id: "notifications", label: "通知 (Notifications)" },
+  { id: "system", label: "系统文案 (System)" },
   { id: "videos", label: "视频标题 (Titles)" },
   { id: "songs", label: "歌单 (Songs)" },
   { id: "mail", label: "发信箱 (Mail)" },

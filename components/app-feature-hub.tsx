@@ -100,7 +100,11 @@ export default function AppFeatureHub() {
         if (typeof window !== "undefined") {
           (window as Window & { SITE_CONFIG?: AppSiteConfig }).SITE_CONFIG = data.site_config || {};
         }
-        if (hasUpdated) addNotification("站点数据已更新，页面已刷新");
+        if (hasUpdated) {
+          addNotification(
+            data.site_config?.system?.configUpdatedToast || "站点数据已更新，内容已自动刷新",
+          );
+        }
       } catch (error) {
         console.error("Failed to load app hub config:", error);
       }
@@ -142,7 +146,7 @@ export default function AppFeatureHub() {
   }, [activeTopics, mailOnline, mailTexts]);
 
   return (
-    <ErrorBoundary>
+    <ErrorBoundary config={siteConfig}>
       <div className="relative min-h-screen bg-black text-white font-sans selection:bg-cyan-500/30 overflow-hidden">
         {/* Sleek Deep Space Background Effects */}
         <div className="pointer-events-none fixed inset-0 z-0">

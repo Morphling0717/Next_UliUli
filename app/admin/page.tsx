@@ -6,7 +6,15 @@ import { AdminHeader } from "./components/AdminHeader";
 import { AdminTabContent } from "./components/AdminTabContent";
 import { AdminTabsNav } from "./components/AdminTabsNav";
 import { LoadingOverlay } from "./components/LoadingOverlay";
-import { AdminTabId, AssetFile, HiddenSongItem, SiteConfig, SongItem } from "./types";
+import {
+  AdminTabId,
+  AssetFile,
+  EditableSiteConfig,
+  HiddenSongItem,
+  SiteConfig,
+  SongItem,
+} from "./types";
+import { sanitizeEditableSiteConfig } from "@/lib/site-config";
 
 const EDITOR_NAME_STORAGE_KEY = "uliuli:admin:editor-name";
 
@@ -24,7 +32,6 @@ type ConfigLoadResponse = {
   hidden_songs?: HiddenSongItem[];
 };
 
-type MutableConfig = SiteConfig & Record<string, unknown>;
 type UnknownRecord = Record<string, unknown>;
 
 function formatAuditTime(value: string | null | undefined): string {
@@ -32,14 +39,12 @@ function formatAuditTime(value: string | null | undefined): string {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
-function getConfigSection(config: MutableConfig, section: string): UnknownRecord {
-  const existing = config[section];
+function getSectionCopy(config: EditableSiteConfig, section: string): UnknownRecord {
+  const existing = (config as unknown as UnknownRecord)[section];
   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-    return existing as UnknownRecord;
+    return { ...(existing as UnknownRecord) };
   }
-  const nextSection: UnknownRecord = {};
-  config[section] = nextSection;
-  return nextSection;
+  return {};
 }
 
 // ========== MAIN COMPONENT ==========
@@ -47,14 +52,16 @@ export default function AdminDashboard() {
   // ===== STATE MANAGEMENT =====
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<AdminTabId>("hero");
-  const [config, setConfig] = useState<SiteConfig>({});
+  const [config, setConfig] = useState<EditableSiteConfig>(() =>
+    sanitizeEditableSiteConfig({}),
+  );
   const [songData, setSongData] = useState<SongItem[]>([]);
   const [hiddenSongs, setHiddenSongs] = useState<HiddenSongItem[]>([]);
   const [isDevUnlocked, setIsDevUnlocked] = useState(false);
 
   // Assets state
   const [currentAssetFolder, setCurrentAssetFolder] = useState<"memes" | "pic">(
-    "memes"
+    "memes",
   );
   const [assetsCache, setAssetsCache] = useState<{
     memes: AssetFile[];
@@ -143,9 +150,9 @@ export default function AdminDashboard() {
     try {
       const res = await fetch("/api/config", { cache: "no-store" });
       const data = (await res.json()) as ConfigLoadResponse;
-      
+
       if (data.success) {
-        setConfig(data.site_config || {});
+        setConfig(sanitizeEditableSiteConfig(data.site_config || {}));
         setSongData(data.songs || []);
         setHiddenSongs(data.hidden_songs || []);
         setConfigVersion(Number(data.config_version || 0));
@@ -190,13 +197,15 @@ export default function AdminDashboard() {
     window.localStorage.setItem(EDITOR_NAME_STORAGE_KEY, value);
   };
 
-  // ===== CONFIG UPDATERS =====
+  // ===== IMMUTABLE CONFIG UPDATERS =====
   const updateConfig = (section: string, key: string, val: unknown) => {
     setConfig((prev) => {
-      const nextConfig = { ...prev } as MutableConfig;
-      const sectionData = getConfigSection(nextConfig, section);
-      sectionData[key] = val;
-      return nextConfig;
+      const nextSection = getSectionCopy(prev, section);
+      nextSection[key] = val;
+      return {
+        ...prev,
+        [section]: nextSection,
+      } as EditableSiteConfig;
     });
   };
 
@@ -204,27 +213,27 @@ export default function AdminDashboard() {
     section: string,
     obj: string,
     prop: string,
-    val: unknown
+    val: unknown,
   ) => {
     setConfig((prev) => {
-      const newConfig = { ...prev } as MutableConfig;
-      const sectionData = getConfigSection(newConfig, section);
+      const nextSection = getSectionCopy(prev, section);
       if (obj === "") {
-        sectionData[prop] = val;
+        nextSection[prop] = val;
+      } else if (prop === "") {
+        nextSection[obj] = val;
       } else {
-        const existingNested = sectionData[obj];
-        if (
-          !existingNested ||
-          typeof existingNested !== "object" ||
-          Array.isArray(existingNested)
-        ) {
-          sectionData[obj] = {};
-        }
-        if (prop !== "") {
-          (sectionData[obj] as UnknownRecord)[prop] = val;
-        }
+        const existingNested = nextSection[obj];
+        const nextNested: UnknownRecord =
+          existingNested && typeof existingNested === "object" && !Array.isArray(existingNested)
+            ? { ...(existingNested as UnknownRecord) }
+            : {};
+        nextNested[prop] = val;
+        nextSection[obj] = nextNested;
       }
-      return newConfig;
+      return {
+        ...prev,
+        [section]: nextSection,
+      } as EditableSiteConfig;
     });
   };
 
@@ -233,21 +242,22 @@ export default function AdminDashboard() {
     arrayKey: string,
     index: number,
     key: string,
-    val: unknown
+    val: unknown,
   ) => {
     setConfig((prev) => {
-      const newConfig = { ...prev } as MutableConfig;
-      const sectionData = getConfigSection(newConfig, section);
-      const arr = sectionData[arrayKey];
-      if (
-        Array.isArray(arr) &&
-        arr[index] &&
-        typeof arr[index] === "object" &&
-        !Array.isArray(arr[index])
-      ) {
-        (arr[index] as UnknownRecord)[key] = val;
-      }
-      return newConfig;
+      const nextSection = getSectionCopy(prev, section);
+      const rawArr = nextSection[arrayKey];
+      if (!Array.isArray(rawArr)) return prev;
+      nextSection[arrayKey] = rawArr.map((item, i) => {
+        if (i !== index || !item || typeof item !== "object" || Array.isArray(item)) {
+          return item;
+        }
+        return { ...(item as UnknownRecord), [key]: val };
+      });
+      return {
+        ...prev,
+        [section]: nextSection,
+      } as EditableSiteConfig;
     });
   };
 
@@ -255,61 +265,121 @@ export default function AdminDashboard() {
     section: string,
     arrayKey: string,
     index: number,
-    val: unknown
+    val: unknown,
   ) => {
     setConfig((prev) => {
-      const newConfig = { ...prev } as MutableConfig;
-      const sectionData = getConfigSection(newConfig, section);
-      const arr = sectionData[arrayKey];
-      if (Array.isArray(arr)) {
-        arr[index] = val;
-      }
-      return newConfig;
+      const nextSection = getSectionCopy(prev, section);
+      const rawArr = nextSection[arrayKey];
+      if (!Array.isArray(rawArr)) return prev;
+      nextSection[arrayKey] = rawArr.map((item, i) => (i === index ? val : item));
+      return {
+        ...prev,
+        [section]: nextSection,
+      } as EditableSiteConfig;
     });
   };
 
   const addArrayItem = (section: string, arrayKey: string, defaultValue: unknown) => {
     setConfig((prev) => {
-      const newConfig = { ...prev } as MutableConfig;
-      const sectionData = getConfigSection(newConfig, section);
-      if (!Array.isArray(sectionData[arrayKey])) {
-        sectionData[arrayKey] = [];
-      }
-      (sectionData[arrayKey] as unknown[]).push(defaultValue);
-      return newConfig;
+      const nextSection = getSectionCopy(prev, section);
+      const rawArr = Array.isArray(nextSection[arrayKey])
+        ? [...(nextSection[arrayKey] as unknown[])]
+        : [];
+      rawArr.push(defaultValue);
+      nextSection[arrayKey] = rawArr;
+      return {
+        ...prev,
+        [section]: nextSection,
+      } as EditableSiteConfig;
     });
   };
 
   const removeArrayItem = (section: string, arrayKey: string, index: number) => {
     setConfig((prev) => {
-      const newConfig = { ...prev } as MutableConfig;
-      const sectionData = getConfigSection(newConfig, section);
-      const arr = sectionData[arrayKey];
-      if (Array.isArray(arr)) {
-        arr.splice(index, 1);
-      }
-      return newConfig;
+      const nextSection = getSectionCopy(prev, section);
+      const rawArr = nextSection[arrayKey];
+      if (!Array.isArray(rawArr)) return prev;
+      nextSection[arrayKey] = rawArr.filter((_, i) => i !== index);
+      return {
+        ...prev,
+        [section]: nextSection,
+      } as EditableSiteConfig;
     });
   };
 
   const updateCreditPerson = (
     creditIndex: number,
     personIndex: number,
-    key: string,
-    val: string
+    key: "name" | "link",
+    val: string,
   ) => {
-    setConfig((prev) => {
-      const newConfig = { ...prev };
-      const person =
-        newConfig.model?.credits?.[creditIndex]?.val?.[personIndex];
-      if (person) {
-        newConfig.model?.credits?.[creditIndex]?.val?.splice(personIndex, 1, {
-          ...person,
-          [key]: val,
-        });
-      }
-      return newConfig;
-    });
+    setConfig((prev) => ({
+      ...prev,
+      model: {
+        ...prev.model,
+        credits: prev.model.credits.map((group, gi) =>
+          gi !== creditIndex
+            ? group
+            : {
+                ...group,
+                val: group.val.map((person, pi) =>
+                  pi !== personIndex ? person : { ...person, [key]: val },
+                ),
+              },
+        ),
+      },
+    }));
+  };
+
+  const addCreditGroup = () => {
+    setConfig((prev) => ({
+      ...prev,
+      model: {
+        ...prev.model,
+        credits: [
+          ...prev.model.credits,
+          { label: "", val: [{ name: "", link: "" }] },
+        ],
+      },
+    }));
+  };
+
+  const removeCreditGroup = (creditIndex: number) => {
+    setConfig((prev) => ({
+      ...prev,
+      model: {
+        ...prev.model,
+        credits: prev.model.credits.filter((_, gi) => gi !== creditIndex),
+      },
+    }));
+  };
+
+  const addCreditPerson = (creditIndex: number) => {
+    setConfig((prev) => ({
+      ...prev,
+      model: {
+        ...prev.model,
+        credits: prev.model.credits.map((group, gi) =>
+          gi !== creditIndex
+            ? group
+            : { ...group, val: [...group.val, { name: "", link: "" }] },
+        ),
+      },
+    }));
+  };
+
+  const removeCreditPerson = (creditIndex: number, personIndex: number) => {
+    setConfig((prev) => ({
+      ...prev,
+      model: {
+        ...prev.model,
+        credits: prev.model.credits.map((group, gi) =>
+          gi !== creditIndex
+            ? group
+            : { ...group, val: group.val.filter((_, pi) => pi !== personIndex) },
+        ),
+      },
+    }));
   };
 
   // ===== TAB SWITCHING =====
@@ -411,6 +481,7 @@ export default function AdminDashboard() {
         }));
         setCurrentAssetFolder(folder);
       } else {
+        if (res.status === 401) setAdminAuthenticated(false);
         await Swal.fire({
           icon: "error",
           title: "加载失败",
@@ -483,6 +554,8 @@ export default function AdminDashboard() {
         background: "#1e293b",
         color: "#ff4444",
       });
+    } finally {
+      input.value = "";
     }
   };
 
@@ -550,26 +623,49 @@ export default function AdminDashboard() {
   };
 
   const deleteFile = async (filename: string) => {
-    if (!window.confirm(`确定要永久删除 ${filename} 吗？`)) return;
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: "确认删除文件",
+      text: `确定要永久删除 ${filename} 吗？`,
+      background: "#1e293b",
+      color: "#fff",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#475569",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+    if (!confirm.isConfirmed) return;
 
     try {
       const res = await fetch("/api/admin/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "delete",
-            folder: currentAssetFolder,
-            filename: filename,
-          }),
+        body: JSON.stringify({
+          action: "delete",
+          folder: currentAssetFolder,
+          filename: filename,
+        }),
       });
       const data = await res.json();
       if (data.success) {
         await fetchAssets(currentAssetFolder);
       } else {
-        alert("删除失败: " + data.message);
+        await Swal.fire({
+          icon: "error",
+          title: "删除失败",
+          text: data.message,
+          background: "#1e293b",
+          color: "#ff4444",
+        });
       }
     } catch {
-      alert("网络错误");
+      await Swal.fire({
+        icon: "error",
+        title: "网络错误",
+        background: "#1e293b",
+        color: "#ff4444",
+      });
     }
   };
 
@@ -591,55 +687,79 @@ export default function AdminDashboard() {
   // ===== SONG FUNCTIONS =====
   const addSongRow = () => {
     const defaultCat =
-      config.song_ui?.categories?.find((c) => c.id !== "all")?.id ||
-      "gufeng";
-    setSongData((prev) => [
-      { category: defaultCat, name: "", artist: "" },
-      ...prev,
-    ]);
+      config.song_ui.categories.find((c) => c.id !== "all")?.id || "gufeng";
+    setSongData((prev) => [{ category: defaultCat, name: "", artist: "" }, ...prev]);
   };
 
-  const removeSong = (i: number) => {
-    if (window.confirm("删除这首歌？")) {
-      setSongData((prev) => {
-        const newData = [...prev];
-        newData.splice(i, 1);
-        return newData;
-      });
-    }
-  };
-
-  const updateSong = (i: number, key: string, val: string) => {
-    setSongData((prev) => {
-      const newData = [...prev];
-      const song = newData[i];
-      if (song) {
-        newData[i] = { ...song, [key]: val } as SongItem;
-      }
-      return newData;
+  const removeSong = async (i: number) => {
+    const target = songData[i];
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: "删除歌曲",
+      text: target?.name ? `确定删除《${target.name}》吗？` : "确定删除这首歌吗？",
+      background: "#1e293b",
+      color: "#fff",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#475569",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
     });
+    if (!confirm.isConfirmed) return;
+    setSongData((prev) => prev.filter((_, idx) => idx !== i));
+  };
+
+  const updateSong = (i: number, key: "category" | "name" | "artist", val: string) => {
+    setSongData((prev) =>
+      prev.map((song, idx) => (idx === i ? { ...song, [key]: val } : song)),
+    );
   };
 
   const parseBulkSongs = () => {
-    const textarea = document.getElementById("bulk-songs") as HTMLTextAreaElement;
+    const textarea = document.getElementById("bulk-songs") as HTMLTextAreaElement | null;
     if (!textarea) return;
     const raw = textarea.value;
-    const lines = raw.split("\n");
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      void Swal.fire({
+        icon: "info",
+        title: "没有可导入的内容",
+        text: "请先按“歌名 歌手”格式输入至少一行。",
+        toast: true,
+        position: "top",
+        timer: 2000,
+        showConfirmButton: false,
+        background: "#1e293b",
+        color: "#fff",
+      });
+      return;
+    }
+
     const defaultCat =
-      config.song_ui?.categories?.find((c) => c.id !== "all")?.id ||
-      "gufeng";
-    
-    const newSongs: SongItem[] = [];
-    lines.forEach((line) => {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 1) {
-        const name = parts[0];
-        const artist = parts.slice(1).join(" ") || "未知歌手";
-        newSongs.push({ category: defaultCat, name, artist });
-      }
+      config.song_ui.categories.find((c) => c.id !== "all")?.id || "gufeng";
+
+    const newSongs: SongItem[] = lines.map((line) => {
+      const parts = line.split(/\s+/);
+      const name = parts[0];
+      const artist = parts.slice(1).join(" ") || "未知歌手";
+      return { category: defaultCat, name, artist };
     });
+
     setSongData((prev) => [...prev, ...newSongs]);
     textarea.value = "";
+    void Swal.fire({
+      icon: "success",
+      title: `已导入 ${newSongs.length} 首歌曲`,
+      toast: true,
+      position: "top",
+      timer: 1800,
+      showConfirmButton: false,
+      background: "#1e293b",
+      color: "#2de2e6",
+    });
   };
 
   // ===== CATEGORY FUNCTIONS =====
@@ -650,55 +770,56 @@ export default function AdminDashboard() {
     });
   };
 
-  const removeCategory = (index: number) => {
-    if (
-      window.confirm(
-        "删除这个分类？\n注意：这不会删除该分类下的歌曲，但前台将无法通过分类筛选到它们。"
-      )
-    ) {
+  const removeCategory = async (index: number) => {
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: "删除分类",
+      text: "注意：这不会删除该分类下的歌曲，但前台将无法通过分类筛选到它们。",
+      background: "#1e293b",
+      color: "#fff",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#475569",
+      confirmButtonText: "确认删除",
+      cancelButtonText: "取消",
+    });
+    if (confirm.isConfirmed) {
       removeArrayItem("song_ui", "categories", index);
     }
   };
 
   const moveCategory = (index: number, direction: number) => {
     setConfig((prev) => {
-      const newConfig = { ...prev };
-      const categories = newConfig.song_ui?.categories || [];
-      if (direction === -1 && index > 0) {
-        const temp = categories[index];
-        categories[index] = categories[index - 1];
-        categories[index - 1] = temp;
-      } else if (direction === 1 && index < categories.length - 1) {
-        const temp = categories[index];
-        categories[index] = categories[index + 1];
-        categories[index + 1] = temp;
-      }
-      return newConfig;
+      const categories = [...prev.song_ui.categories];
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= categories.length) return prev;
+      [categories[index], categories[targetIndex]] = [
+        categories[targetIndex],
+        categories[index],
+      ];
+      return {
+        ...prev,
+        song_ui: {
+          ...prev.song_ui,
+          categories,
+        },
+      };
     });
   };
 
   // ===== HIDDEN SONG FUNCTIONS =====
   const addHiddenRow = () => {
-    setHiddenSongs((prev) => [
-      ...prev,
-      { name: "新隐藏曲目" },
-    ]);
+    setHiddenSongs((prev) => [...prev, { name: "" }]);
   };
 
   const removeHidden = (i: number) => {
-    setHiddenSongs((prev) => {
-      const newData = [...prev];
-      newData.splice(i, 1);
-      return newData;
-    });
+    setHiddenSongs((prev) => prev.filter((_, idx) => idx !== i));
   };
 
   const updateHidden = (i: number, val: string) => {
-    setHiddenSongs((prev) => {
-      const newData = [...prev];
-      newData[i].name = val;
-      return newData;
-    });
+    setHiddenSongs((prev) =>
+      prev.map((item, idx) => (idx === i ? { ...item, name: val } : item)),
+    );
   };
 
   // ===== SAVE FUNCTION =====
@@ -836,6 +957,10 @@ export default function AdminDashboard() {
           addArrayItem={addArrayItem}
           removeArrayItem={removeArrayItem}
           updateCreditPerson={updateCreditPerson}
+          addCreditGroup={addCreditGroup}
+          removeCreditGroup={removeCreditGroup}
+          addCreditPerson={addCreditPerson}
+          removeCreditPerson={removeCreditPerson}
           addSongRow={addSongRow}
           removeSong={removeSong}
           updateSong={updateSong}

@@ -39,13 +39,17 @@ function toSongSystemItem(s: SongRecord): SongSystemSongItem {
 }
 
 // 把数据库里的常规歌单导出成 schema.org MusicPlaylist
-function buildMusicPlaylistSchema(songs: SongRecord[]) {
+function buildMusicPlaylistSchema(
+  songs: SongRecord[],
+  playlistName: string,
+  playlistDescription: string,
+) {
   if (!songs.length) return null;
   return {
     '@context': 'https://schema.org',
     '@type': 'MusicPlaylist',
-    name: '丝瓜Uli 点歌单',
-    description: '丝瓜Uli（UliUli）的点歌歌单，包含古风、流行、英文、日文等多类目曲目。',
+    name: playlistName,
+    description: playlistDescription,
     url: new URL('/#song-system', siteOrigin).toString(),
     numTracks: songs.length,
     inLanguage: 'zh-CN',
@@ -64,7 +68,11 @@ function buildMusicPlaylistSchema(songs: SongRecord[]) {
 export default async function HomePage() {
   const initial = await loadInitialSiteData();
 
-  const playlistSchema = buildMusicPlaylistSchema(initial.songs);
+  const playlistSchema = buildMusicPlaylistSchema(
+    initial.songs,
+    initial.siteConfig.seo.playlistName,
+    initial.siteConfig.seo.playlistDescription,
+  );
 
   return (
     <>

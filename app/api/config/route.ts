@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { get, all } from '@/lib/db';
 import { windChime } from '@/lib/windchime';
+import { sanitizeEditableSiteConfig, withRuntimeSiteConfig } from '@/lib/site-config';
 
 type SiteConfigRow = {
   value: string;
@@ -28,41 +29,16 @@ export const revalidate = 0;
 
 export async function GET() {
   try {
-    // 从数据库获取 site_config
+    // 从数据库获取 site_config 并用 DEFAULT_SITE_CONFIG 补齐缺失/空字段
     const configRow = await get<SiteConfigRow>(
       'SELECT value, updated_at, updated_by, version FROM site_config WHERE key = ?',
-      ['site_config']
+      ['site_config'],
     );
 
-    const siteConfig = configRow 
-      ? JSON.parse(configRow.value) 
-      : {
-          hero: {},
-          model: {},
-          live: {},
-          gallery: {},
-          api: {},
-          song_ui: {
-            categories: [
-              { id: "all", label: "ALL" },
-              { id: "gufeng", label: "ANCIENT" },
-              { id: "liuxing", label: "POP" },
-              { id: "yingyu", label: "ENGLISH" },
-              { id: "riyu", label: "JAPANESE" },
-            ]
-          },
-          footer: {},
-          gacha: {
-            pityThreshold: 8000,
-            softPityStart: 5000,
-            baseRate: 1 / 10000,
-            maxRate: 0.6,
-          },
-          mail: {},
-        };
-
-    // The client uses the same-origin route; upstream configuration belongs to the server.
-    siteConfig.api = { ...siteConfig.api, bilibili: '/api/bilibili' };
+    const editableConfig = configRow
+      ? sanitizeEditableSiteConfig(JSON.parse(configRow.value))
+      : sanitizeEditableSiteConfig({});
+    let siteConfig = withRuntimeSiteConfig(editableConfig);
 
     // -------------------------------------------------------------
     // Mail 派生字段（方案 §6.3）
@@ -74,19 +50,21 @@ export async function GET() {
     // -------------------------------------------------------------
     try {
       const activeTopics = await windChime.listPublicTopics();
-      siteConfig.activeTopics = activeTopics.map((t) => ({
+      const runtimeActiveTopics = activeTopics.map((t) => ({
         slug: t.slug,
         title: t.title,
         description: t.description,
         startsAt: t.startsAt,
         endsAt: t.endsAt,
       }));
-      const defaultTopic = await windChime.getPublicTopic("default");
-      siteConfig.mailEnabled = defaultTopic ? defaultTopic.isEnabled : true;
+      const defaultTopic = await windChime.getPublicTopic('default');
+      siteConfig = withRuntimeSiteConfig(editableConfig, {
+        activeTopics: runtimeActiveTopics,
+        mailEnabled: defaultTopic ? defaultTopic.isEnabled : true,
+      });
     } catch (e) {
       console.warn('[api/config] activeTopics/mailEnabled 派生失败:', e);
-      siteConfig.activeTopics = [];
-      siteConfig.mailEnabled = true;
+      siteConfig = withRuntimeSiteConfig(editableConfig);
     }
 
     // 从数据库获取所有歌曲
@@ -95,11 +73,9 @@ export async function GET() {
     // 从数据库获取所有隐藏歌曲
     const hiddenSongs = await all<HiddenSongRow>('SELECT name FROM hidden_songs ORDER BY id ASC');
 
-    const configVersion = configRow
-      ? Number(configRow.version ?? 1)
-      : 0;
+    const configVersion = configRow ? Number(configRow.version ?? 1) : 0;
     const historyCountRow = await get<CountRow>(
-      'SELECT COUNT(*) AS count FROM site_config_history'
+      'SELECT COUNT(*) AS count FROM site_config_history',
     );
 
     return NextResponse.json(
@@ -110,26 +86,28 @@ export async function GET() {
         config_updated_by: configRow?.updated_by ?? null,
         config_history_count: Number(historyCountRow?.count ?? 0),
         site_config: siteConfig,
-        songs: songs.map(s => ({
+        songs: songs.map((s) => ({
           category: s.category,
           name: s.name,
-          artist: s.artist
+          artist: s.artist,
         })),
-        hidden_songs: hiddenSongs.map(h => ({ name: h.name }))
+        hidden_songs: hiddenSongs.map((h) => ({ name: h.name })),
       },
       {
         headers: {
           'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         },
-      }
+      },
     );
-
   } catch (error: unknown) {
-    console.error("Config API Error:", error);
+    console.error('Config API Error:', error);
     const message = error instanceof Error ? error.message : '未知错误';
-    return NextResponse.json({
-      success: false,
-      message: '服务器错误: ' + message
-    }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: false,
+        message: '服务器错误: ' + message,
+      },
+      { status: 500 },
+    );
   }
 }

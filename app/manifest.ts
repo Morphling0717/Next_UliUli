@@ -1,11 +1,16 @@
 import type { MetadataRoute } from "next";
+import { loadEditableSiteConfig } from "@/lib/site-data";
 
-export default function manifest(): MetadataRoute.Manifest {
+export const dynamic = "force-dynamic";
+
+export default async function manifest(): Promise<MetadataRoute.Manifest> {
+  const config = await loadEditableSiteConfig();
+
   return {
     id: "/app",
-    name: "项目：丝瓜ULI",
-    short_name: "UliUli",
-    description: "丝瓜ULI 的可安装网页应用，启动后直接进入专用 App 模式。",
+    name: config.pwa.manifestName,
+    short_name: config.pwa.manifestShortName,
+    description: config.pwa.manifestDescription,
     start_url: "/app",
     scope: "/",
     display: "standalone",

@@ -1,14 +1,20 @@
 import type { Metadata, Viewport } from "next";
 import { OfflineRetryButton } from "@/components/offline-retry-button";
+import { loadEditableSiteConfig } from "@/lib/site-data";
 
-export const metadata: Metadata = {
-  title: "离线模式 · UliUli",
-  description: "暂时连不上网络，已在离线模式下显示。",
-  robots: {
-    index: false,
-    follow: false,
-  },
-};
+export const dynamic = "force-dynamic";
+
+export async function generateMetadata(): Promise<Metadata> {
+  const config = await loadEditableSiteConfig();
+  return {
+    title: config.offline.metadataTitle,
+    description: config.offline.metadataDescription,
+    robots: {
+      index: false,
+      follow: false,
+    },
+  };
+}
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -17,7 +23,10 @@ export const viewport: Viewport = {
   themeColor: "#050508",
 };
 
-export default function OfflinePage() {
+export default async function OfflinePage() {
+  const config = await loadEditableSiteConfig();
+  const lines = config.offline.body.split(/\r?\n/);
+
   return (
     <main
       className="relative min-h-[100dvh] bg-black text-white flex items-center justify-center px-6"
@@ -35,14 +44,20 @@ export default function OfflinePage() {
         <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 text-cyan-300 text-2xl">
           ◌
         </div>
-        <h1 className="text-base font-semibold tracking-wide text-white">网络信号丢失</h1>
+        <h1 className="text-base font-semibold tracking-wide text-white">
+          {config.offline.title}
+        </h1>
         <p className="mt-2 text-xs leading-relaxed text-gray-400">
-          App 暂时连不上 Uli 的服务器。<br />
-          稍后会自动恢复，或者你也可以手动重试。
+          {lines.map((line, index) => (
+            <span key={`${line}-${index}`}>
+              {line}
+              {index < lines.length - 1 ? <br /> : null}
+            </span>
+          ))}
         </p>
-        <OfflineRetryButton />
+        <OfflineRetryButton text={config.offline.retryButton} />
         <p className="mt-4 text-[10px] font-mono tracking-[0.3em] text-gray-600">
-          OFFLINE · CACHED SHELL
+          {config.offline.statusText}
         </p>
       </div>
     </main>

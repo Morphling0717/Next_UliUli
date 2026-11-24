@@ -17,39 +17,16 @@ import { Dashboard, HorizontalVideoGallery } from './Dashboard';
 import { SongSystem, type SongItem as SongSystemSongItem } from './SongSystem';
 import { GameModal } from './GameModal';
 import { ToastContainer, GoldenLuckModal } from './UI';
-import { MailSpeedDial, type MailEntryTexts } from './mail/MailSpeedDial';
+import { MailSpeedDial } from './mail/MailSpeedDial';
 import { GlobalMailBanner } from './mail/GlobalMailBanner';
-import type { MailTexts } from './mail/MailSendModal';
-import type { ActiveTopicSummary } from './mail/mail-topic-types';
+import type { SiteConfig } from '@/app/admin/types';
+import { DEFAULT_SITE_CONFIG } from '@/lib/site-config';
 
 // --- Types ---
 interface NotificationItem {
   id: number;
   message: string;
 }
-
-type SiteConfig = {
-  notifications?: {
-    unlocked?: string;
-    alreadyUnlocked?: string;
-    clickWarning?: string;
-    modelClicked?: string;
-    systemInitializing?: string;
-  };
-  footer?: {
-    text?: string;
-  };
-  api?: {
-    bilibili?: string;
-  };
-  videos?: {
-    hiddenTitle?: string;
-    unlockedTitle?: string;
-  };
-  mail?: MailEntryTexts & MailTexts;
-  activeTopics?: ActiveTopicSummary[];
-  mailEnabled?: boolean;
-};
 
 interface VideoItem {
   url: string;
@@ -126,7 +103,9 @@ export default function HomeClient({
   initialHiddenSongs,
 }: HomeClientProps) {
   // 全局状态管理
-  const [stats, setStats] = useState<string | number>("SYNCING...");
+  const [stats, setStats] = useState<string | number>(
+    initialSiteConfig?.hero?.statsLoadingText || DEFAULT_SITE_CONFIG.hero.statsLoadingText,
+  );
   const [liveStatus, setLiveStatus] = useState(false);
   const [videos, setVideos] = useState<VideoItem[]>([]);
 
@@ -144,7 +123,13 @@ export default function HomeClient({
 
   const notifs = siteConfig?.notifications || {};
   // 安全获取 siteConfig
-  const footerText = siteConfig?.footer?.text || "© 2024 BLUE MORPHO TERMINAL. ALL RIGHTS RESERVED.";
+  const footerText = siteConfig?.footer?.text || DEFAULT_SITE_CONFIG.footer.text;
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      (window as Window & { SITE_CONFIG?: SiteConfig }).SITE_CONFIG = siteConfig;
+    }
+  }, [siteConfig]);
 
   // 0. 周期性轮询 /api/config，把 SSR 初始值替换为最新内容
   useEffect(() => {
@@ -177,9 +162,12 @@ export default function HomeClient({
 
           if (hasUpdated) {
             const id = Date.now();
+            const toastText =
+              data.site_config?.system?.configUpdatedToast ||
+              DEFAULT_SITE_CONFIG.system.configUpdatedToast;
             setNotifications((prev) => [
               ...prev,
-              { id, message: "站点数据已更新，内容已自动刷新" },
+              { id, message: toastText },
             ]);
             setTimeout(() => {
               setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -238,19 +226,20 @@ export default function HomeClient({
             }
           } else {
             console.error("API 业务错误:", data.error);
-            setStats("ERROR");
+            setStats(siteConfig?.hero?.statsErrorText || DEFAULT_SITE_CONFIG.hero.statsErrorText);
           }
         } else {
             console.error("Failed to fetch Bilibili data");
-            setStats("ERROR");
+            setStats(siteConfig?.hero?.statsErrorText || DEFAULT_SITE_CONFIG.hero.statsErrorText);
         }
       } catch (error) {
         console.error("API Fetch Error:", error);
-        setStats("OFFLINE");
+        setStats(siteConfig?.hero?.statsOfflineText || DEFAULT_SITE_CONFIG.hero.statsOfflineText);
       }
     };
 
     fetchData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 3. 通用功能函数
@@ -323,7 +312,7 @@ export default function HomeClient({
   }, [isUnlocked]);
 
   return (
-    <ErrorBoundary>
+    <ErrorBoundary config={siteConfig}>
       <div className="relative min-h-screen">
         <CustomCursor />
         <ThreeBackground />

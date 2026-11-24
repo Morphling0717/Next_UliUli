@@ -124,9 +124,10 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
     setIsLoading(true);
 
     const s = pickRandomSong(songData);
+    const cmdPrefix = uiConfig.copyCommandPrefix || "点歌";
     const copyText = s.isHidden && s.artist === "UNKNOWN_ENTITY" 
-      ? `点歌 ${s.name}` 
-      : `点歌 ${s.name} ${s.artist}`;
+      ? `${cmdPrefix} ${s.name}` 
+      : `${cmdPrefix} ${s.name} ${s.artist}`;
     
     handleCopy(copyText, s.name);
 
@@ -260,9 +261,10 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
                         s.isHidden ? 'hover:bg-purple-900/20' : 'hover:bg-(--neon-blue)/10'
                     }`}
                     onClick={() => {
+                      const cmdPrefix = uiConfig.copyCommandPrefix || "点歌";
                       const copyText = s.isHidden && s.artist === "UNKNOWN_ENTITY"
-                        ? `点歌 ${s.name}`
-                        : `点歌 ${s.name} ${s.artist}`;
+                        ? `${cmdPrefix} ${s.name}`
+                        : `${cmdPrefix} ${s.name} ${s.artist}`;
                       handleCopy(copyText, s.name);
                     }}
                   >
@@ -321,9 +323,10 @@ export const SongSystem: React.FC<SongSystemProps> = ({ onUnlockHidden, addNotif
                         s.isHidden ? 'hover:bg-purple-900/20' : 'hover:bg-(--neon-blue)/10'
                     }`}
                     onClick={() => {
+                      const cmdPrefix = uiConfig.copyCommandPrefix || "点歌";
                       const copyText = s.isHidden && s.artist === "UNKNOWN_ENTITY" 
-                        ? `点歌 ${s.name}` 
-                        : `点歌 ${s.name} ${s.artist}`;
+                        ? `${cmdPrefix} ${s.name}` 
+                        : `${cmdPrefix} ${s.name} ${s.artist}`;
                       handleCopy(copyText, s.name);
                     }}
                   >
