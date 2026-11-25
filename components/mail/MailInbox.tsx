@@ -5,6 +5,8 @@ import { downloadWindChimeCsv } from "@windchime/embed/client";
 import { useWindChimeInbox } from "@windchime/embed/react";
 import { mailClient } from "@/lib/windchime-client";
 import { mailAdminTheme as t } from "./mail-theme";
+import { MailConfirmDialog, type MailConfirmTone } from "./MailConfirmDialog";
+import { MailMessageImages } from "./MailMessageImages";
 import {
   Inbox,
   Mail,
@@ -14,6 +16,14 @@ import {
   CheckCheck,
   Link as LinkIcon,
 } from "lucide-react";
+
+type PendingConfirm = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  tone: MailConfirmTone;
+  run: () => Promise<unknown>;
+};
 
 /** 网站拥有全部 JSX、图标和交互文案；数据、选择、批量及刷新由风铃维护。 */
 export function MailInbox({
@@ -27,17 +37,23 @@ export function MailInbox({
 }) {
   const inbox = useWindChimeInbox(mailClient, { topicId, pollIntervalMs: 3000 });
   const [error, setError] = useState<string | null>(null);
-  const act = async (
-    operation: () => Promise<unknown>,
-    confirmation?: string,
-  ) => {
-    if (confirmation && !window.confirm(confirmation)) return;
+  const [confirmState, setConfirmState] = useState<PendingConfirm | null>(null);
+  const act = async (operation: () => Promise<unknown>) => {
     setError(null);
     try {
       await operation();
     } catch (e) {
       setError(e instanceof Error ? e.message : "操作失败");
     }
+  };
+  const requestConfirm = (next: PendingConfirm) => {
+    setConfirmState(next);
+  };
+  const executeConfirm = async () => {
+    if (!confirmState) return;
+    const task = confirmState.run;
+    setConfirmState(null);
+    await act(task);
   };
   const exportCsv = () => {
     const rows = inbox.selectedIds.size
@@ -79,10 +95,13 @@ export function MailInbox({
         className={t.button}
         disabled={inbox.pending}
         onClick={() =>
-          void act(
-            () => inbox.blockSender(m.id),
-            "屏蔽这个发送者，并删除其全部历史信件？",
-          )
+          requestConfirm({
+            title: "CONFIRM · 拉黑发送者",
+            description: "屏蔽这个发送者，并删除其全部历史信件？对应待播与展示内容会同步撤下。",
+            confirmLabel: "确认拉黑",
+            tone: "warning",
+            run: () => inbox.blockSender(m.id),
+          })
         }
       >
         <Ban className="h-3.5 w-3.5" />
@@ -93,7 +112,13 @@ export function MailInbox({
         className={`ml-auto ${t.dangerButton}`}
         disabled={inbox.pending}
         onClick={() =>
-          void act(() => inbox.deleteMessage(m.id), "删除这条留言？")
+          requestConfirm({
+            title: "CONFIRM · 删除留言",
+            description: "确认删除这条留言？对应待播和正在展示的内容会同步撤下。",
+            confirmLabel: "确认删除",
+            tone: "danger",
+            run: () => inbox.deleteMessage(m.id),
+          })
         }
       >
         <Trash2 className="h-3.5 w-3.5" />
@@ -174,10 +199,13 @@ export function MailInbox({
           className={t.dangerButton}
           disabled={!inbox.selectedIds.size || inbox.pending}
           onClick={() =>
-            void act(
-              () => inbox.batch("delete", [...inbox.selectedIds]),
-              `批量删除 ${inbox.selectedIds.size} 条留言？`,
-            )
+            requestConfirm({
+              title: "CONFIRM · 批量删除",
+              description: `确认批量删除已选的 ${inbox.selectedIds.size} 条留言？对应待播和正在展示的内容会同步撤下。`,
+              confirmLabel: "批量删除",
+              tone: "danger",
+              run: () => inbox.batch("delete", [...inbox.selectedIds]),
+            })
           }
         >
           批量删除
@@ -278,6 +306,7 @@ export function MailInbox({
                 <p className="flex-1 whitespace-pre-wrap break-words font-serif text-[15px] leading-[1.9] text-gray-100">
                   {m.text}
                 </p>
+                <MailMessageImages topicId={topicId} assets={m.assets} />
                 {m.linkUrl && (
                   <a
                     href={m.linkUrl}
@@ -305,6 +334,16 @@ export function MailInbox({
           ))}
         </div>
       )}
+      <MailConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title ?? ""}
+        description={confirmState?.description ?? ""}
+        confirmLabel={confirmState?.confirmLabel}
+        tone={confirmState?.tone}
+        busy={inbox.pending}
+        onConfirm={() => void executeConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 }

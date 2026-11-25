@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { X as CloseIcon, Sparkles } from "lucide-react";
 import type { ActiveTopicSummary } from "./mail-topic-types";
@@ -17,9 +17,36 @@ import type { ActiveTopicSummary } from "./mail-topic-types";
  * - 点 × 后不再显示；localStorage 记录当前活动集合的 "signature"（所有 slug
  *   排序后拼接），一旦主播新开活动 signature 变化就会再次显示，不会永久
  *   屏蔽新活动。
- * - 不做 sticky：banner 只出现在页面顶部，滚下去就看不见，不打扰正常浏览。
+ * - 固定吸顶（fixed top-0），滚动时保持可见；点 × 可随时收起。
  */
 const LS_KEY = "uliuli:mail:banner:dismissedSignature";
+const bannerListeners = new Set<() => void>();
+
+function subscribeBanner(listener: () => void) {
+  bannerListeners.add(listener);
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", listener);
+  }
+  return () => {
+    bannerListeners.delete(listener);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("storage", listener);
+    }
+  };
+}
+
+function getDismissedSignature(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(LS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function getServerDismissedSignature(): string | null {
+  return null;
+}
 
 function signatureOf(topics: ActiveTopicSummary[]): string {
   return topics
@@ -33,14 +60,11 @@ export function GlobalMailBanner({
 }: {
   topics?: ActiveTopicSummary[];
 }) {
-  const [dismissedSignature, setDismissedSignature] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    try {
-      return window.localStorage.getItem(LS_KEY);
-    } catch {
-      return null;
-    }
-  });
+  const dismissedSignature = useSyncExternalStore(
+    subscribeBanner,
+    getDismissedSignature,
+    getServerDismissedSignature,
+  );
   const topics = useMemo(() => topicsProp ?? [], [topicsProp]);
   const signature = useMemo(() => signatureOf(topics), [topics]);
   const dismissed = topics.length > 0 && dismissedSignature === signature;
@@ -48,12 +72,12 @@ export function GlobalMailBanner({
   if (topics.length === 0 || dismissed) return null;
 
   const onDismiss = () => {
-    setDismissedSignature(signature);
     try {
       window.localStorage.setItem(LS_KEY, signature);
     } catch {
       /* noop */
     }
+    for (const listener of bannerListeners) listener();
   };
 
   const single = topics.length === 1 ? topics[0] : null;

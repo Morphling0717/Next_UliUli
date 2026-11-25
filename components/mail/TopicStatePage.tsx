@@ -169,12 +169,35 @@ function resolveCopy(
  * 重新渲染成 `active` 状态的投信页。这样避免客户端状态分发的复杂度。
  */
 function Countdown({ targetIso }: { targetIso: string }) {
-  const [now, setNow] = useState<number>(() => Date.now());
+  const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(t);
+    const tick = () => setNow(Date.now());
+    const immediate = window.setTimeout(tick, 0);
+    const t = window.setInterval(tick, 1000);
+    return () => {
+      window.clearTimeout(immediate);
+      window.clearInterval(t);
+    };
   }, []);
+
+  if (now === null) {
+    return (
+      <div className="mt-4 grid grid-cols-4 gap-2" aria-label="倒计时加载中">
+        {["天", "时", "分", "秒"].map((unit) => (
+          <div
+            key={unit}
+            className="rounded-lg border border-cyan-400/30 bg-black/60 py-2 text-center"
+          >
+            <div className="font-['Orbitron',sans-serif] text-xl font-bold text-cyan-200 sm:text-2xl">
+              --
+            </div>
+            <div className="font-mono text-[10px] text-gray-400">{unit}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   const target = new Date(targetIso).getTime();
   const diff = Math.max(0, target - now);

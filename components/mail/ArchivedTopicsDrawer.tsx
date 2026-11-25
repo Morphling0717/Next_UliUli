@@ -33,6 +33,7 @@ export function ArchivedTopicsDrawer({
   const items = useMemo(() => resource.items.filter(t=>t.state==='archived'), [resource.items]);
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState<{id:string; action:'restore'|'delete'} | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Topic | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -66,11 +67,12 @@ export function ArchivedTopicsDrawer({
   const onRestore = useCallback(
     async (topic: Topic) => {
       setBusy({ id: topic.id, action: "restore" });
+      setRestoreError(null);
       try {
         const restored = await restore(topic.id);
         onRestored(restored);
       } catch (e) {
-        alert(e instanceof Error ? e.message : "恢复失败");
+        setRestoreError(e instanceof Error ? e.message : "恢复失败");
       } finally {
         setBusy(null);
       }
@@ -170,9 +172,9 @@ export function ArchivedTopicsDrawer({
                   LOADING…
                 </div>
               )}
-              {error && (
-                <div className="rounded border border-rose-500/50 bg-rose-500/10 px-3 py-2 font-mono text-xs text-rose-300">
-                  {error}
+              {(error || restoreError) && (
+                <div className="mb-3 rounded border border-rose-500/50 bg-rose-500/10 px-3 py-2 font-mono text-xs text-rose-300">
+                  {restoreError || error}
                 </div>
               )}
               {!loading && !error && filtered.length === 0 && (
@@ -200,10 +202,10 @@ export function ArchivedTopicsDrawer({
                           <div className="mt-1 font-mono text-[11px] text-gray-500">
                             归档于 {formatBeijing(t.archivedAt)}
                           </div>
-                          {t.startsAt && t.endsAt && (
+                          {(t.startsAt || t.endsAt) && (
                             <div className="font-mono text-[11px] text-gray-500">
-                              活动期: {formatBeijing(t.startsAt)} ~{" "}
-                              {formatBeijing(t.endsAt)}
+                              活动期: {t.startsAt ? formatBeijing(t.startsAt) : "立即开放"} ~{" "}
+                              {t.endsAt ? formatBeijing(t.endsAt) : "长期开放"}
                             </div>
                           )}
                         </div>

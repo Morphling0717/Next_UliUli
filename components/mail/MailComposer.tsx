@@ -30,12 +30,14 @@ type Props = {
 export function MailComposer(props: Props) {
   const { turnstileSiteKey, enabled = true, onSent } = props;
   const attachments = useWindChimeAttachments(props.topicSlug);
+  const resetChallengeRef = useRef<() => void>(() => {});
   const submission = useWindChimeSubmission({
     client: mailClient,
     onSubmit: async (payload) => {
       await mailClient.messages.submit(await attachments.attach(payload));
       attachments.clear();
     },
+    onTurnstileReset: () => resetChallengeRef.current(),
     topicSlug: props.topicSlug,
     enabled,
     requireTurnstile: !!turnstileSiteKey,
@@ -49,6 +51,9 @@ export function MailComposer(props: Props) {
     theme: "dark",
     onToken: submission.setTurnstileToken,
   });
+  useEffect(() => {
+    resetChallengeRef.current = challenge.reset;
+  }, [challenge.reset]);
   const { success, clearSuccess } = submission;
   useEffect(() => {
     if (!success) return;
@@ -58,7 +63,6 @@ export function MailComposer(props: Props) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (await submission.submit()) onSent?.();
-    challenge.reset();
   };
   return (
     <div className={t.root} data-mail-composer>

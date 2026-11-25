@@ -10,8 +10,12 @@ import type { PublicTopic as Topic } from "./mail-topic-types";
 
 type Props = {
   topic: Topic;
-  /** 从 `/api/config` 读到的 siteConfig.mail；传 undefined 则全部走默认。 */
+  /** 从 siteConfig.mail 传入的可编辑文案；传 undefined 则全部走默认。 */
   texts?: {
+    senderTagline?: string;
+    statusOpen?: string;
+    statusPaused?: string;
+    pausedMessage?: string;
     placeholderText?: string;
     placeholderNickname?: string;
     placeholderLink?: string;
@@ -94,10 +98,10 @@ export function TopicMailForm({ topic, texts }: Props) {
         <section className="flex-1">
           <MailComposer
             title={`MAIL · ${topic.title}`}
-            tagline="在这里匿名写下你想说的话 ~"
-            statusOpenLabel="ONLINE"
-            statusPausedLabel="OFFLINE"
-            pausedMessage="活动暂停中，稍后再来吧 ~"
+            tagline={texts?.senderTagline || "在这里匿名写下你想说的话 ~"}
+            statusOpenLabel={texts?.statusOpen || "ONLINE"}
+            statusPausedLabel={texts?.statusPaused || "OFFLINE"}
+            pausedMessage={texts?.pausedMessage || "活动暂停中，稍后再来吧 ~"}
 
 
             placeholder={

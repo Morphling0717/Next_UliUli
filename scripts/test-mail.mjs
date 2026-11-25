@@ -57,6 +57,11 @@ const created = [];
 const blocked = [];
 try {
   await desktop.settings.setBlockedTermsEnabled(true);
+  // 0.8.4: website admin cookie can also toggle blockedTermsEnabled directly via /api/mail/settings PATCH.
+  assert.equal((await admin.settings.setBlockedTermsEnabled(false)).blockedTermsEnabled, false);
+  assert.equal((await admin.settings.setBlockedTermsEnabled(true)).blockedTermsEnabled, true);
+  // 0.8.4: proxy-image rejects non-allowlisted hosts cleanly.
+  assert.equal((await fetch(`${base}/api/mail/proxy-image?src=${encodeURIComponent("https://example.com/a.png")}`)).status, 400);
   const topicA = await admin.topics.create({
     slug: `smoke-a-${suffix}`,
     title: "Smoke A",
@@ -103,18 +108,44 @@ try {
   await admin.topics.update(topicA.id, { isEnabled: true });
 
   await admin.blockedTerms.set([...termsBefore, `flag-${suffix}`]);
+  // 0.8.4: test image attachment upload + inbox exposure + flagged redaction + private control asset fetch
+  const tinyPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const uploadForTopic = async (topicSlug) => {
+    const form = new FormData();
+    form.set("topicId", topicSlug);
+    form.append("file", new Blob([tinyPng], { type: "image/png" }), "test.png");
+    const res = await fetch(`${base}/api/mail/live/upload`, { method: "POST", body: form });
+    assert.equal(res.status, 201, `upload for ${topicSlug}`);
+    const body = await res.json();
+    return body.attachments.map(({ id, receipt }) => ({ id, receipt }));
+  };
+  const normalAttachments = await uploadForTopic(topicA.slug);
+  const flaggedAttachments = await uploadForTopic(topicB.slug);
   await publicClient.messages.submit({
     topicSlug: topicA.slug,
     text: "Normal A",
     senderFingerprint: `normal-${suffix}`,
+    attachments: normalAttachments,
   });
   await publicClient.messages.submit({
     topicSlug: topicB.slug,
     text: `flag-${suffix}`,
     senderFingerprint: `flagged-${suffix}`,
+    attachments: flaggedAttachments,
   });
   const normal = (await admin.messages.list({ topicId: topicA.id })).items[0];
   assert(normal);
+  assert.equal(normal.assetCount, 1, "0.8.4 normal message reports assetCount");
+  assert.equal(normal.assets?.length, 1, "0.8.4 normal message exposes source assets");
+  assert.equal(normal.assets[0].id, normalAttachments[0].id);
+  const webAssetRes = await fetch(
+    `${base}/api/mail/live/control/assets/${encodeURIComponent(normal.assets[0].id)}?topicId=${encodeURIComponent(topicA.id)}`,
+    { headers: { cookie: cookies } },
+  );
+  assert.equal(webAssetRes.status, 200, "0.8.4 web cookie admin can fetch private inbox image");
   // Validate the actual website handler, not only an in-process mock service.
   const displayGrant = await desktop.createGrant(topicA.id, "display", "isolated-output");
   const display = createWindChimeDisplayClient({ baseUrl: `${base}/api/mail/live`, token: displayGrant.token });
@@ -200,10 +231,12 @@ try {
   ).items[0];
   assert(flagged);
   assert.equal(flagged.text, "", "flagged list redacts original");
-  assert.equal(
-    (await admin.messages.detail(flagged.id, { topicId: topicB.id })).text,
-    `flag-${suffix}`,
-  );
+  assert.deepEqual(flagged.assets, [], "0.8.4 flagged list redacts image asset IDs");
+  assert.equal(flagged.assetCount, 1, "0.8.4 flagged list still exposes assetCount");
+  const flaggedDetail = await admin.messages.detail(flagged.id, { topicId: topicB.id });
+  assert.equal(flaggedDetail.text, `flag-${suffix}`);
+  assert.equal(flaggedDetail.assets?.length, 1, "0.8.4 flagged detail reveals image assets");
+  assert.equal(flaggedDetail.assets[0].id, flaggedAttachments[0].id);
   await assert.rejects(
     admin.messages.update(normal.id, { isRead: true }, { topicId: topicB.id }),
     (error) => error.status === 404 || error.status === 409,

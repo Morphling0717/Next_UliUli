@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
+import { Image as ImageIcon } from "lucide-react";
 import { useWindChimeReview } from '@windchime/embed/react';
 import { mailClient } from '@/lib/windchime-client';
+import { MailConfirmDialog, type MailConfirmTone } from "./MailConfirmDialog";
+import { MailMessageImages } from "./MailMessageImages";
 
 /** 从 URL 里解析出 hostname 做警示展示；解析失败返回空字符串。 */
 function safeHost(raw: string | null | undefined): string {
@@ -28,29 +31,60 @@ export function FlaggedMailPanel({topicId = 'default'}: {topicId?: string}) {
   const flagged = review.items;
   const [openId, setOpenId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    tone: MailConfirmTone;
+    run: () => Promise<unknown>;
+  } | null>(null);
   const openData = review.detail;
   const openLoading = review.detailLoading;
   const openError = review.detailError?.message || actionError;
   const acting = review.pending;
   const closeModal = useCallback(() => {
-    setOpenId(null); setActionError(null); closeDetail();
+    setOpenId(null); setActionError(null); setConfirmState(null); closeDetail();
   }, [closeDetail]);
   useEffect(() => {
-    if (!openId) return;
+    if (!openId || confirmState) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openId, closeModal]);
-  const act = async (operation: () => Promise<unknown>, confirmation?: string) => {
-    if (!openId || (confirmation && !window.confirm(confirmation))) return;
+  }, [openId, confirmState, closeModal]);
+  const act = async (operation: () => Promise<unknown>) => {
+    if (!openId) return;
     setActionError(null);
     try { await operation(); closeModal(); }
     catch (error) { setActionError(error instanceof Error ? error.message : '操作失败'); }
   };
   const markRead = () => act(() => review.update(openId!, {isRead: true}));
   const approveItem = () => act(() => review.approve(openId!));
-  const deleteItem = () => act(() => review.deleteMessage(openId!), '确认删除这条留言？此操作会软删除，无法在当前界面恢复。');
-  const blockSender = () => act(() => review.blockSender(openId!), '拉黑这名发信人？其在常规信箱及所有活动主题的历史信件会被删除，之后的投稿会被静默丢弃。');
+  const deleteItem = () => {
+    if (!openId) return;
+    setConfirmState({
+      title: "CONFIRM · 删除待审核留言",
+      description: "确认删除这条留言？此操作会软删除，无法在当前界面恢复。",
+      confirmLabel: "确认删除",
+      tone: "danger",
+      run: () => review.deleteMessage(openId),
+    });
+  };
+  const blockSender = () => {
+    if (!openId) return;
+    setConfirmState({
+      title: "CONFIRM · 拉黑发信人",
+      description: "拉黑这名发信人？其在常规信箱及所有活动主题的历史信件会被删除，之后的投稿会被静默丢弃。",
+      confirmLabel: "确认拉黑",
+      tone: "warning",
+      run: () => review.blockSender(openId),
+    });
+  };
+  const executeConfirm = async () => {
+    if (!confirmState) return;
+    const task = confirmState.run;
+    setConfirmState(null);
+    await act(task);
+  };
 
   return (
     <div className="rounded-2xl border border-rose-400/40 bg-black/60 p-5 shadow-[0_0_30px_rgba(244,63,94,0.12)] backdrop-blur-xl sm:p-6">
@@ -80,9 +114,17 @@ export function FlaggedMailPanel({topicId = 'default'}: {topicId?: string}) {
               className="flex flex-wrap items-center justify-between gap-3 py-3"
             >
               <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold text-rose-200">
-                  {m.senderLabel ?? "Unknown"}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-sm font-bold text-rose-200">
+                    {m.senderLabel ?? "Unknown"}
+                  </span>
+                  {(m.assetCount ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded border border-rose-400/40 bg-rose-500/10 px-1.5 py-0.5 font-mono text-[10px] text-rose-200">
+                      <ImageIcon className="h-3 w-3" aria-hidden />
+                      含 {m.assetCount} 张图
+                    </span>
+                  )}
+                </div>
                 <span className="font-mono text-[11px] text-gray-500">
                   {new Date(m.createdAt).toLocaleString("zh-CN", {
                     timeZone: "Asia/Shanghai",
@@ -168,6 +210,7 @@ export function FlaggedMailPanel({topicId = 'default'}: {topicId?: string}) {
                         <div className="whitespace-pre-wrap break-words font-sans text-[15px] leading-relaxed text-gray-100">
                           {openData.text}
                         </div>
+                        <MailMessageImages topicId={topicId} assets={openData.assets} />
                         {openData.linkUrl && (
                           <div className="mt-2 space-y-1 font-mono text-xs">
                             <div className="text-gray-400">链接：</div>
@@ -237,6 +280,17 @@ export function FlaggedMailPanel({topicId = 'default'}: {topicId?: string}) {
           </AnimatePresence>,
           document.body,
         )}
+
+      <MailConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title ?? ""}
+        description={confirmState?.description ?? ""}
+        confirmLabel={confirmState?.confirmLabel}
+        tone={confirmState?.tone}
+        busy={acting}
+        onConfirm={() => void executeConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 }

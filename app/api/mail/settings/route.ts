@@ -3,3 +3,4 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const GET = windChimeRoutes.GET;
 export const PUT = windChimeRoutes.PUT;
+export const PATCH = windChimeRoutes.PATCH;

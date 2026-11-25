@@ -7,6 +7,7 @@ import {
   Copy as CopyIcon,
   PencilLine,
   Power,
+  ShieldAlert,
 } from "lucide-react";
 import { useWindChimeTopics, useWindChimePosterConfig, useWindChimeSettings } from '@windchime/embed/react';
 import { mailClient } from '@/lib/windchime-client';
@@ -194,8 +195,9 @@ function MailContent({
 }) {
   const settings = useWindChimeSettings(mailClient, {pollIntervalMs: 3000});
   const blockedTermsEnabled = settings.data?.blockedTermsEnabled === true;
-  const topicsApi = useWindChimeTopics(mailClient, {includeArchived: false, pollIntervalMs: 3000});
-  const topics = topicsApi.items.map(topic => blockedTermsEnabled ? topic : {...topic, flaggedCount: 0});
+  const topicsApi = useWindChimeTopics(mailClient, {includeArchived: true, pollIntervalMs: 3000});
+  const allTopics = topicsApi.items.map(topic => blockedTermsEnabled ? topic : {...topic, flaggedCount: 0});
+  const topics = allTopics.filter(t => t.state !== 'archived');
   const [selectedTopicId, setActiveTopicId] = useState('default');
   const activeTopicId = topics.length && !topics.some(t=>t.id===selectedTopicId) ? 'default' : selectedTopicId;
   const [showNewTopicModal, setShowNewTopicModal] = useState(false);
@@ -203,6 +205,7 @@ function MailContent({
   const [archiveConfirmTopic, setArchiveConfirmTopic] = useState<Topic | null>(null);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [copiedToast, setCopiedToast] = useState(false);
+  const [copyFallbackUrl, setCopyFallbackUrl] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const activeTopic = topics.find(t => t.id === activeTopicId) ?? null;
   const editingTopic = topics.find(t => t.id === editingTopicId) ?? null;
@@ -249,10 +252,11 @@ function MailContent({
       : `${origin}/m/${activeTopic.slug}`;
     try {
       await navigator.clipboard.writeText(url);
+      setCopyFallbackUrl(null);
       setCopiedToast(true);
       window.setTimeout(() => setCopiedToast(false), 1500);
     } catch {
-      alert(`请手动复制：${url}`);
+      setCopyFallbackUrl(url);
     }
   };
 
@@ -312,8 +316,8 @@ function MailContent({
       {/* 主题 Tab 栏（方案 §6.1） */}
       <section>
         <MailTopicTabs
-        showGlobalSettings={blockedTermsEnabled}
-          topics={topics}
+          showGlobalSettings={true}
+          topics={allTopics}
           activeTopicId={activeTopicId}
           onSwitch={setActiveTopicId}
           onOpenNewTopic={() => setShowNewTopicModal(true)}
@@ -352,10 +356,10 @@ function MailContent({
                 <div className="mt-1 font-mono text-xs text-gray-400">
                   {statusCaption}
                 </div>
-                {!activeTopic.isDefault && activeTopic.startsAt && activeTopic.endsAt && (
+                {!activeTopic.isDefault && (activeTopic.startsAt || activeTopic.endsAt) && (
                   <div className="mt-0.5 font-mono text-[11px] text-gray-500">
-                    活动期: {formatBeijing(activeTopic.startsAt)} ~{" "}
-                    {formatBeijing(activeTopic.endsAt)}
+                    活动期: {activeTopic.startsAt ? formatBeijing(activeTopic.startsAt) : "立即开放"} ~{" "}
+                    {activeTopic.endsAt ? formatBeijing(activeTopic.endsAt) : "长期开放"}
                   </div>
                 )}
                 {enabledError && (
@@ -422,6 +426,18 @@ function MailContent({
               </button>
             </div>
           </div>
+          {copyFallbackUrl && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cyan-500/40 bg-black/70 px-4 py-2 font-mono text-xs text-cyan-200">
+              <span className="break-all">请手动复制：{copyFallbackUrl}</span>
+              <button
+                type="button"
+                onClick={() => setCopyFallbackUrl(null)}
+                className="shrink-0 rounded border border-cyan-500/40 px-2 py-0.5 text-[11px] text-cyan-300 hover:bg-cyan-400/10"
+              >
+                关闭
+              </button>
+            </div>
+          )}
         </section>
       )}
 
@@ -488,10 +504,57 @@ function MailContent({
         </section>
       )}
 
-      {/* 全局设置：敏感词（跨主题共享，低频配置） */}
-      {blockedTermsEnabled ? <section id="global-settings">
-        <BlockedTermsPanel />
-      </section> : null}
+      {/* 全局设置：敏感词辅助审核开关 + 词表（跨主题共享） */}
+      <section id="global-settings" className="flex flex-col gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-cyan-400/40 bg-black/60 p-5 shadow-[0_0_30px_rgba(45,226,230,0.1)] backdrop-blur-xl sm:p-6">
+          <div className="flex items-start gap-3">
+            <ShieldAlert
+              className="mt-0.5 h-6 w-6 shrink-0 text-cyan-300 drop-shadow-[0_0_8px_rgba(45,226,230,0.5)]"
+              strokeWidth={2}
+              aria-hidden
+            />
+            <div>
+              <div className="font-['Orbitron',sans-serif] text-sm font-bold tracking-[0.12em] text-white">
+                GLOBAL_SETTINGS · 敏感词辅助审核
+              </div>
+              <div className="mt-1 font-mono text-xs leading-relaxed text-gray-400">
+                开启后命中敏感词的新来信会自动折叠到「待审核」区；关闭后不再标记新来信（已有历史记录保留）。
+              </div>
+              {settings.mutationError && (
+                <div className="mt-1 font-mono text-xs text-rose-300">
+                  {settings.mutationError.message}
+                </div>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-label="切换敏感词辅助审核"
+            aria-checked={blockedTermsEnabled}
+            disabled={settings.pending}
+            onClick={() =>
+              void settings
+                .setBlockedTermsEnabled(!blockedTermsEnabled)
+                .catch(() => {})
+            }
+            className={
+              "relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60 " +
+              (blockedTermsEnabled
+                ? "border-cyan-400 bg-cyan-400 shadow-[0_0_18px_rgba(45,226,230,0.6)]"
+                : "border-gray-600 bg-gray-700")
+            }
+          >
+            <span
+              className={
+                "inline-block h-6 w-6 transform rounded-full bg-black shadow transition " +
+                (blockedTermsEnabled ? "translate-x-7" : "translate-x-1")
+              }
+            />
+          </button>
+        </div>
+        {blockedTermsEnabled ? <BlockedTermsPanel /> : null}
+      </section>
 
       {/* ===== 模态 / 抽屉 ===== */}
       <NewTopicModal
@@ -543,7 +606,7 @@ function avatarSrcForCanvas(src: string | undefined | null): string {
   if (s.startsWith("/api/mail/proxy-image")) return s;
   try {
     const u = new URL(s);
-    if (u.hostname.endsWith("hdslb.com")) {
+    if (u.hostname === "hdslb.com" || u.hostname.endsWith(".hdslb.com")) {
       return `/api/mail/proxy-image?src=${encodeURIComponent(s)}`;
     }
   } catch {

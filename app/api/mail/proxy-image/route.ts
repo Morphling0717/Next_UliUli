@@ -19,6 +19,9 @@ const ALLOWED_HOSTS = new Set([
   's2.hdslb.com',
 ]);
 
+const MAX_BYTES = 5 * 1024 * 1024;
+const TIMEOUT_MS = 8000;
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -45,6 +48,8 @@ export async function GET(req: Request) {
 
     const upstream = await fetch(target.toString(), {
       cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         // 某些 B 站 CDN 对无 referer 请求会 403
         referer: 'https://www.bilibili.com/',
@@ -59,16 +64,52 @@ export async function GET(req: Request) {
       );
     }
 
-    const buf = await upstream.arrayBuffer();
-    const contentType =
-      upstream.headers.get('content-type') ?? 'application/octet-stream';
+    const rawContentType = upstream.headers.get('content-type') ?? '';
+    const contentType = rawContentType.split(';')[0]?.trim().toLowerCase() ?? '';
+    if (!contentType.startsWith('image/')) {
+      void upstream.body?.cancel().catch(() => {});
+      return NextResponse.json(
+        { error: 'upstream is not an image' },
+        { status: 502 },
+      );
+    }
+
+    const declaredLength = Number(upstream.headers.get('content-length') ?? '0');
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_BYTES) {
+      void upstream.body?.cancel().catch(() => {});
+      return NextResponse.json(
+        { error: 'image too large' },
+        { status: 413 },
+      );
+    }
+
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    const reader = upstream.body?.getReader();
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        total += value.byteLength;
+        if (total > MAX_BYTES) {
+          void reader.cancel().catch(() => {});
+          return NextResponse.json(
+            { error: 'image too large' },
+            { status: 413 },
+          );
+        }
+        chunks.push(value);
+      }
+    }
+    const buf = Buffer.concat(chunks);
 
     return new NextResponse(buf, {
       status: 200,
       headers: {
         'content-type': contentType,
         'cache-control': 'public, max-age=86400, s-maxage=86400',
-        'access-control-allow-origin': '*',
+        'x-content-type-options': 'nosniff',
       },
     });
   } catch (e) {

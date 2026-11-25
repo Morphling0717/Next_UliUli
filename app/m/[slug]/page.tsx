@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { windChime } from '@/lib/windchime';
+import { loadEditableSiteConfig } from '@/lib/site-data';
 import type { WindChimePublicTopic as Topic } from '@windchime/embed/core';
 import { TopicMailForm } from "@/components/mail/TopicMailForm";
 import { TopicStatePage } from "@/components/mail/TopicStatePage";
@@ -97,7 +98,8 @@ export default async function TopicPage({ params }: RouteProps) {
   }
 
   if (variant === "active") {
-    return <TopicMailForm topic={topic} />;
+    const siteConfig = await loadEditableSiteConfig();
+    return <TopicMailForm topic={topic} texts={siteConfig.mail} />;
   }
 
   return (

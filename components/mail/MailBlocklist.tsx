@@ -1,10 +1,13 @@
 "use client";
+import { useState } from "react";
 import { useWindChimeBlocklist } from "@windchime/embed/react";
 import { mailClient } from "@/lib/windchime-client";
 import { mailBlocklistTheme as t } from "./mail-theme";
 import { formatBeijing } from "./mail-time";
+import { MailConfirmDialog } from "./MailConfirmDialog";
 export function MailBlocklist() {
   const list = useWindChimeBlocklist(mailClient, { pollIntervalMs: 3000 });
+  const [unblockHash, setUnblockHash] = useState<string | null>(null);
   return (
     <div className={t.root}>
       <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -71,14 +74,7 @@ export function MailBlocklist() {
                       type="button"
                       className={t.button}
                       disabled={list.pending}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            "解除屏蔽这个发送者？已删除的历史信件不会恢复。",
-                          )
-                        )
-                          void list.unblock(item.hash).catch(() => {});
-                      }}
+                      onClick={() => setUnblockHash(item.hash)}
                     >
                       解除拉黑
                     </button>
@@ -89,6 +85,20 @@ export function MailBlocklist() {
           </tbody>
         </table>
       </div>
+      <MailConfirmDialog
+        open={!!unblockHash}
+        title="CONFIRM · 解除拉黑"
+        description="解除屏蔽这个发送者？已删除的历史信件不会恢复。"
+        confirmLabel="解除拉黑"
+        tone="cyan"
+        busy={list.pending}
+        onConfirm={() => {
+          const target = unblockHash;
+          setUnblockHash(null);
+          if (target) void list.unblock(target).catch(() => {});
+        }}
+        onCancel={() => setUnblockHash(null)}
+      />
     </div>
   );
 }
